@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wavegen-tool"
+version = "0.1.0"
+description = "Safe identification tooling for explicitly supported waveform generators."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyvisa>=1.14",
+    "pyvisa-py",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build",
+    "pytest>=8",
+    "ruff",
+]
+
+[project.scripts]
+wavegen-tool = "wavegen_tool_cli.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = [
+    "wavegen_tool_core*",
+    "wavegen_tool_cli*",
+    "wavegen_tool_webui*",
+]
+
+[tool.pytest.ini_options]
+addopts = "--basetemp=.tmp_pytest"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
