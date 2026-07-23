@@ -10,12 +10,12 @@ the current milestone supports read-only identification of the Keysight 33521B.
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
 - The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
-- Explicit, opt-in live VISA resource listing for one selected backend
+- Raw VISA resource listing and opt-in live-only connectivity checks
 - Human-readable and JSON CLI output
 - Hardware-free tests with injectable fake VISA sessions
 
-GPIB and all other transports are rejected. Other Trueform models are not
-treated as supported.
+The identify command rejects GPIB and all other transports outside its explicit
+scope. Other Trueform models are not treated as supported.
 
 The identify result confirms that the reported instrument is a recognized
 model. It does not claim that every live backend/transport scope or future
@@ -39,35 +39,53 @@ uv sync --all-extras --locked --link-mode=copy
 The repository contains one `wavegen-tool` distribution with Core, CLI, and
 reserved WebUI import packages.
 
-## List Live VISA Resources
+## List VISA Resources
 
-Resource listing is explicit and opt-in because `--live` accesses the selected
-real VISA backend. The command calls `ResourceManager.list_resources()` once,
-then closes the ResourceManager. It does not open any resource, send SCPI,
-identify instruments, select a resource, retry, or switch backends.
+Raw listing accesses the selected VISA backend, calls
+`ResourceManager.list_resources()` once, preserves every returned resource
+string and its order, and closes the ResourceManager. It does not open an
+instrument session or send SCPI. Results may include stale resources and
+transports or backend combinations that the identify command does not support.
 
-List resources through system VISA, which explicitly selects `@ivi`:
-
-```powershell
-uv run wavegen-tool list-resources --live --backend system
-```
-
-List resources through `pyvisa-py`, which explicitly selects `@py`:
+List raw resources through the default system backend:
 
 ```powershell
-uv run wavegen-tool list-resources --live --backend "@py"
+uv run wavegen-tool list-resources
 ```
 
-Request one JSON object:
+Select system VISA explicitly, which uses `@ivi`:
 
 ```powershell
-uv run wavegen-tool list-resources --live --backend system --json
+uv run wavegen-tool list-resources --backend system
 ```
 
-Listing preserves every resource string returned by the backend. A listed
-resource is not necessarily accepted by the identify transport/backend policy
-and is not hardware validation. After reviewing the listing, choose a resource
-and pass it explicitly to identify:
+Select `pyvisa-py`, which uses `@py`:
+
+```powershell
+uv run wavegen-tool list-resources --backend "@py"
+```
+
+Use `--live-only` to open each candidate allowed by the current
+backend/transport verification scope, apply a fixed one-second timeout, and
+send one `*IDN?` query. Only resources returning a non-empty response are
+shown:
+
+```powershell
+uv run wavegen-tool list-resources --live-only --backend system
+uv run wavegen-tool list-resources --live-only --backend "@py"
+uv run wavegen-tool list-resources --live-only --backend system --json
+```
+
+System live verification accepts USB and TCPIP/LAN candidates. `@py` live
+verification accepts TCPIP/LAN candidates only. GPIB, ASRL, PXI, VXI, unknown
+transports, and `@py` plus USB candidates remain visible in raw results but are
+skipped in live-only mode.
+
+A non-empty response confirms connectivity only. It does not establish that
+the resource is a Keysight 33521B or authorize the model for later control.
+Live-only checks do not retry, switch backends, change instrument settings, or
+enable output. After reviewing the results, choose a resource and pass it
+explicitly to identify:
 
 ```powershell
 uv run wavegen-tool identify `
@@ -124,12 +142,12 @@ written to files or artifacts.
 ## Safety Boundary
 
 The identify command opens only the resource supplied by the user, issues
-exactly one `*IDN?` query, and closes the VISA session and ResourceManager. The
-listing command accesses a selected live backend only when `--live` is present
-and never opens an instrument session or sends SCPI. Neither command retries,
-switches backends automatically, sends reset or diagnostic commands,
-configures a waveform, or controls output state. There is no automatic or
-background resource scan.
+exactly one `*IDN?` query, and closes the VISA session and ResourceManager. Raw
+listing never opens an instrument session or sends SCPI. Live-only listing
+opens only eligible candidates and sends each at most one `*IDN?` query with a
+fixed timeout. No command retries, switches backends automatically, sends
+reset or diagnostic commands, configures a waveform, or controls output state.
+There is no automatic or background resource scan.
 
 The `@py` plus USB combination is rejected before the ResourceManager is
 created or any VISA I/O occurs. USB resources remain available through the

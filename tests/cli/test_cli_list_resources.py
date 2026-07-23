@@ -7,14 +7,43 @@ from wavegen_tool_cli.cli import ExitCode, main
 from wavegen_tool_core import visa
 
 
+ASRL_RESOURCE = "ASRL6::INSTR"
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
 TCPIP_RESOURCE = "TCPIP0::192.0.2.10::inst0::INSTR"
-GPIB_RESOURCE = "GPIB0::10::INSTR"
+
+
+class FakeSession:
+    def __init__(self, response="response", *, query_error=None, close_error=None):
+        self.response = response
+        self.query_error = query_error
+        self.close_error = close_error
+        self.timeout = None
+        self.queries = []
+        self.close_calls = 0
+
+    def query(self, command):
+        self.queries.append(command)
+        if self.query_error is not None:
+            raise self.query_error
+        return self.response
+
+    def close(self):
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
 
 
 class FakeManager:
-    def __init__(self, resources=(), *, list_error=None, close_error=None):
+    def __init__(
+        self,
+        resources=(),
+        *,
+        sessions_by_resource=None,
+        list_error=None,
+        close_error=None,
+    ):
         self.resources = resources
+        self.sessions_by_resource = sessions_by_resource or {}
         self.list_error = list_error
         self.close_error = close_error
         self.list_calls = 0
@@ -29,7 +58,7 @@ class FakeManager:
 
     def open_resource(self, resource):
         self.opened_resources.append(resource)
-        raise AssertionError("listing must not open a resource")
+        return self.sessions_by_resource[resource]
 
     def close(self):
         self.close_calls += 1
@@ -56,33 +85,31 @@ def test_root_help_includes_list_resources(capsys):
     assert "list-resources" in capsys.readouterr().out
 
 
-def test_list_resources_help(capsys):
+def test_list_resources_help_uses_live_only(capsys):
     with pytest.raises(SystemExit) as error:
         main(["list-resources", "--help"])
 
     output = capsys.readouterr().out
     assert error.value.code == ExitCode.SUCCESS
-    assert "--live" in output
+    assert "--live-only" in output
+    assert "--live " not in output
     assert "--backend" in output
     assert "--json" in output
     assert "{system,@py}" not in output
 
 
-@pytest.mark.parametrize("extra_args", [[], ["--json"]])
-def test_missing_live_is_usage_error_without_creating_manager(
-    monkeypatch, capsys, extra_args
-):
+def test_old_live_option_is_unknown_argument_without_creating_manager(monkeypatch, capsys):
     manager = FakeManager()
     calls = install_fake_manager(monkeypatch, manager)
 
     with pytest.raises(SystemExit) as error:
-        main(["list-resources", *extra_args])
+        main(["list-resources", "--live"])
 
     captured = capsys.readouterr()
     assert error.value.code == ExitCode.CLI_USAGE
     assert calls == []
     assert manager.list_calls == 0
-    assert "required" in captured.err
+    assert "unrecognized arguments: --live" in captured.err
     assert "Traceback" not in captured.err
 
 
@@ -93,24 +120,24 @@ def test_missing_live_is_usage_error_without_creating_manager(
         (["--backend", "@py"], "@py", "@py"),
     ],
 )
-def test_list_resources_human_preserves_order(
+def test_raw_listing_human_preserves_all_resources(
     monkeypatch, capsys, backend_args, library, backend
 ):
-    resources = (USB_RESOURCE, TCPIP_RESOURCE, GPIB_RESOURCE)
+    resources = (ASRL_RESOURCE, TCPIP_RESOURCE, USB_RESOURCE)
     manager = FakeManager(resources)
     calls = install_fake_manager(monkeypatch, manager)
 
-    exit_code = main(["list-resources", "--live", *backend_args])
+    exit_code = main(["list-resources", *backend_args])
 
     captured = capsys.readouterr()
     assert exit_code == ExitCode.SUCCESS
     assert calls == [library]
     assert captured.out.splitlines() == [
-        "Live VISA resources:",
+        "VISA resources:",
         f"Backend: {backend}",
-        f"- {USB_RESOURCE}",
+        f"- {ASRL_RESOURCE}",
         f"- {TCPIP_RESOURCE}",
-        f"- {GPIB_RESOURCE}",
+        f"- {USB_RESOURCE}",
     ]
     assert captured.err == ""
     assert manager.list_calls == 1
@@ -118,94 +145,117 @@ def test_list_resources_human_preserves_order(
     assert manager.close_calls == 1
 
 
-def test_list_resources_empty_human_output(monkeypatch, capsys):
-    manager = FakeManager()
-    install_fake_manager(monkeypatch, manager)
+def test_raw_listing_empty_human_output(monkeypatch, capsys):
+    install_fake_manager(monkeypatch, FakeManager())
 
-    exit_code = main(["list-resources", "--live"])
+    exit_code = main(["list-resources"])
 
     captured = capsys.readouterr()
     assert exit_code == ExitCode.SUCCESS
-    assert captured.out == "No live VISA resources found.\nBackend: system\n"
+    assert captured.out == "No VISA resources found.\nBackend: system\n"
     assert captured.err == ""
 
 
-@pytest.mark.parametrize(
-    ("backend_args", "library", "backend"),
-    [
-        ([], "@ivi", "system"),
-        (["--backend", "@py"], "@py", "@py"),
-    ],
-)
-def test_list_resources_json_is_exactly_one_object(
-    monkeypatch, capsys, backend_args, library, backend
-):
-    resources = (TCPIP_RESOURCE, GPIB_RESOURCE)
+def test_raw_listing_json_is_one_object(monkeypatch, capsys):
+    resources = (ASRL_RESOURCE, TCPIP_RESOURCE)
     manager = FakeManager(resources)
     calls = install_fake_manager(monkeypatch, manager)
 
-    exit_code = main(["list-resources", "--live", *backend_args, "--json"])
+    exit_code = main(["list-resources", "--backend", "@py", "--json"])
 
     captured = capsys.readouterr()
     assert exit_code == ExitCode.SUCCESS
-    assert calls == [library]
+    assert calls == ["@py"]
     assert json.loads(captured.out) == {
         "success": True,
-        "backend": backend,
-        "resources": [TCPIP_RESOURCE, GPIB_RESOURCE],
+        "backend": "@py",
+        "resources": [ASRL_RESOURCE, TCPIP_RESOURCE],
+        "error": None,
+    }
+    assert captured.out.count("\n") == 1
+    assert captured.err == ""
+    assert manager.opened_resources == []
+
+
+def test_live_only_human_filters_candidates(monkeypatch, capsys):
+    tcpip_session = FakeSession(response="Vendor,Anything")
+    manager = FakeManager(
+        (ASRL_RESOURCE, TCPIP_RESOURCE, USB_RESOURCE),
+        sessions_by_resource={TCPIP_RESOURCE: tcpip_session},
+    )
+    calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["list-resources", "--live-only", "--backend", "@py"])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == ["@py"]
+    assert captured.out == (
+        "Live VISA resources:\n"
+        "Backend: @py\n"
+        f"- {TCPIP_RESOURCE}\n"
+    )
+    assert captured.err == ""
+    assert manager.list_calls == 1
+    assert manager.opened_resources == [TCPIP_RESOURCE]
+    assert tcpip_session.queries == ["*IDN?"]
+    assert tcpip_session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_live_only_json_filters_empty_response(monkeypatch, capsys):
+    tcpip_session = FakeSession(response="response")
+    usb_session = FakeSession(response="  ")
+    manager = FakeManager(
+        (TCPIP_RESOURCE, USB_RESOURCE),
+        sessions_by_resource={
+            TCPIP_RESOURCE: tcpip_session,
+            USB_RESOURCE: usb_session,
+        },
+    )
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["list-resources", "--live-only", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert json.loads(captured.out) == {
+        "success": True,
+        "backend": "system",
+        "resources": [TCPIP_RESOURCE],
         "error": None,
     }
     assert captured.out.count("\n") == 1
     assert captured.err == ""
 
 
-def test_list_resources_empty_json_output(monkeypatch, capsys):
+def test_live_only_empty_human_and_json_output(monkeypatch, capsys):
     install_fake_manager(monkeypatch, FakeManager())
 
-    exit_code = main(["list-resources", "--live", "--json"])
+    human_exit = main(["list-resources", "--live-only"])
+    human = capsys.readouterr()
+    json_exit = main(["list-resources", "--live-only", "--json"])
+    json_result = capsys.readouterr()
 
-    payload = json.loads(capsys.readouterr().out)
-    assert exit_code == ExitCode.SUCCESS
-    assert payload == {
+    assert human_exit == ExitCode.SUCCESS
+    assert human.out == "No live VISA resources found.\nBackend: system\n"
+    assert human.err == ""
+    assert json_exit == ExitCode.SUCCESS
+    assert json.loads(json_result.out) == {
         "success": True,
         "backend": "system",
         "resources": [],
         "error": None,
     }
+    assert json_result.err == ""
 
 
-def test_list_resources_invalid_backend_human_does_not_create_manager(
-    monkeypatch, capsys
-):
+def test_listing_invalid_backend_json_does_not_create_manager(monkeypatch, capsys):
     manager = FakeManager()
     calls = install_fake_manager(monkeypatch, manager)
 
     exit_code = main(
-        ["list-resources", "--live", "--backend", "invalid-backend"]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == ExitCode.CLI_USAGE
-    assert calls == []
-    assert manager.list_calls == 0
-    assert captured.out == ""
-    assert "Error [unsupported_backend]" in captured.err
-    assert "Traceback" not in captured.err
-    assert "usage:" not in captured.err
-
-
-def test_list_resources_invalid_backend_json_is_one_object(monkeypatch, capsys):
-    manager = FakeManager()
-    calls = install_fake_manager(monkeypatch, manager)
-
-    exit_code = main(
-        [
-            "list-resources",
-            "--live",
-            "--backend",
-            "invalid-backend",
-            "--json",
-        ]
+        ["list-resources", "--backend", "invalid-backend", "--json"]
     )
 
     captured = capsys.readouterr()
@@ -224,29 +274,27 @@ def test_list_resources_invalid_backend_json_is_one_object(monkeypatch, capsys):
     assert captured.err == ""
 
 
-def test_list_resources_manager_creation_error_uses_exit_20(monkeypatch, capsys):
+def test_listing_manager_creation_error_uses_exit_20(monkeypatch, capsys):
     def failing_factory(pyvisa_library):
         raise RuntimeError(f"private manager detail for {pyvisa_library}")
 
     monkeypatch.setattr(visa, "create_resource_manager", failing_factory)
 
-    exit_code = main(["list-resources", "--live", "--json"])
+    exit_code = main(["list-resources", "--json"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == ExitCode.RESOURCE_MANAGER_ERROR
-    assert payload["backend"] == "system"
-    assert payload["resources"] == []
     assert payload["error"].startswith("resource_manager_error:")
     assert "private manager detail" not in captured.out
     assert captured.err == ""
 
 
-def test_list_resources_discovery_error_uses_exit_26(monkeypatch, capsys):
+def test_listing_discovery_error_uses_exit_26(monkeypatch, capsys):
     manager = FakeManager(list_error=RuntimeError("private listing detail"))
     install_fake_manager(monkeypatch, manager)
 
-    exit_code = main(["list-resources", "--live", "--json"])
+    exit_code = main(["list-resources", "--json"])
 
     captured = capsys.readouterr()
     assert exit_code == ExitCode.RESOURCE_DISCOVERY_ERROR
@@ -262,22 +310,42 @@ def test_list_resources_discovery_error_uses_exit_26(monkeypatch, capsys):
     assert manager.close_calls == 1
 
 
-def test_list_resources_cleanup_only_error_uses_exit_25(monkeypatch, capsys):
-    manager = FakeManager(close_error=RuntimeError("private close detail"))
+def test_live_only_session_cleanup_error_uses_exit_25(monkeypatch, capsys):
+    session = FakeSession(close_error=RuntimeError("private close detail"))
+    manager = FakeManager(
+        (TCPIP_RESOURCE,),
+        sessions_by_resource={TCPIP_RESOURCE: session},
+    )
     install_fake_manager(monkeypatch, manager)
 
-    exit_code = main(["list-resources", "--live"])
+    exit_code = main(["list-resources", "--live-only"])
 
     captured = capsys.readouterr()
     assert exit_code == ExitCode.VISA_CLEANUP_ERROR
     assert captured.out == ""
     assert "Error [visa_cleanup_error]" in captured.err
+    assert "private close detail" not in captured.err
     assert "Traceback" not in captured.err
-    assert manager.list_calls == 1
     assert manager.close_calls == 1
 
 
-def test_list_resources_does_not_invoke_identify(monkeypatch):
+def test_listing_manager_cleanup_error_uses_exit_25(monkeypatch, capsys):
+    manager = FakeManager(close_error=RuntimeError("private manager close detail"))
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["list-resources", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.VISA_CLEANUP_ERROR
+    assert payload["resources"] == []
+    assert payload["error"].startswith("visa_cleanup_error:")
+    assert "private manager close detail" not in captured.out
+    assert captured.out.count("\n") == 1
+    assert captured.err == ""
+
+
+def test_listing_does_not_invoke_identify(monkeypatch):
     install_fake_manager(monkeypatch, FakeManager())
 
     def forbidden_identify(resource, backend):
@@ -285,4 +353,4 @@ def test_list_resources_does_not_invoke_identify(monkeypatch):
 
     monkeypatch.setattr(cli_module, "identify_instrument", forbidden_identify)
 
-    assert main(["list-resources", "--live"]) == ExitCode.SUCCESS
+    assert main(["list-resources"]) == ExitCode.SUCCESS

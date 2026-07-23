@@ -14,8 +14,9 @@ from wavegen_tool_core.errors import (
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
     IDN_QUERY,
+    LIVE_VERIFY_TIMEOUT_MS,
     identify_instrument,
-    list_live_resources,
+    list_resources,
 )
 
 
@@ -52,12 +53,16 @@ class FakeManager:
         *,
         resources=(),
         list_error=None,
+        sessions_by_resource=None,
+        open_errors=None,
         open_error=None,
         close_error=None,
     ):
         self.session = session or FakeSession()
         self.resources = resources
         self.list_error = list_error
+        self.sessions_by_resource = sessions_by_resource or {}
+        self.open_errors = open_errors or {}
         self.open_error = open_error
         self.close_error = close_error
         self.list_calls = 0
@@ -72,9 +77,11 @@ class FakeManager:
 
     def open_resource(self, resource):
         self.opened_resources.append(resource)
+        if resource in self.open_errors:
+            raise self.open_errors[resource]
         if self.open_error is not None:
             raise self.open_error
-        return self.session
+        return self.sessions_by_resource.get(resource, self.session)
 
     def close(self):
         self.close_calls += 1
@@ -99,12 +106,12 @@ class RecordingFactory:
         ("@py", "@py"),
     ],
 )
-def test_list_live_resources_uses_selected_backend_once_and_closes(backend, library):
+def test_raw_resource_listing_uses_selected_backend_once_and_closes(backend, library):
     resources = (TCPIP_RESOURCE, "GPIB0::10::INSTR", USB_RESOURCE)
     manager = FakeManager(resources=resources)
     factory = RecordingFactory(manager)
 
-    result = list_live_resources(backend, resource_manager_factory=factory)
+    result = list_resources(backend, resource_manager_factory=factory)
 
     assert factory.calls == [library]
     assert manager.list_calls == 1
@@ -115,10 +122,10 @@ def test_list_live_resources_uses_selected_backend_once_and_closes(backend, libr
     assert result.resources == resources
 
 
-def test_list_live_resources_empty_result_is_successful_and_closes():
+def test_raw_resource_listing_empty_result_is_successful_and_closes():
     manager = FakeManager(resources=())
 
-    result = list_live_resources(resource_manager_factory=RecordingFactory(manager))
+    result = list_resources(resource_manager_factory=RecordingFactory(manager))
 
     assert result.resources == ()
     assert manager.list_calls == 1
@@ -126,7 +133,7 @@ def test_list_live_resources_empty_result_is_successful_and_closes():
     assert manager.close_calls == 1
 
 
-def test_list_live_resources_manager_creation_failure_is_distinct():
+def test_resource_listing_manager_creation_failure_is_distinct():
     calls = []
 
     def failing_factory(pyvisa_library):
@@ -134,17 +141,17 @@ def test_list_live_resources_manager_creation_failure_is_distinct():
         raise RuntimeError("private manager detail")
 
     with pytest.raises(ResourceManagerError) as error:
-        list_live_resources("system", resource_manager_factory=failing_factory)
+        list_resources("system", resource_manager_factory=failing_factory)
 
     assert calls == ["@ivi"]
     assert error.value.backend == "system"
 
 
-def test_list_live_resources_failure_closes_manager_without_retry():
+def test_raw_resource_listing_failure_closes_manager_without_retry():
     manager = FakeManager(list_error=RuntimeError("private listing detail"))
 
     with pytest.raises(ResourceDiscoveryError) as error:
-        list_live_resources("@py", resource_manager_factory=RecordingFactory(manager))
+        list_resources("@py", resource_manager_factory=RecordingFactory(manager))
 
     assert error.value.backend == "@py"
     assert str(error.value) == "Could not list VISA resources."
@@ -154,32 +161,152 @@ def test_list_live_resources_failure_closes_manager_without_retry():
     assert manager.close_calls == 1
 
 
-def test_list_live_resources_failure_remains_primary_when_cleanup_fails():
+def test_resource_listing_failure_remains_primary_when_cleanup_fails():
     manager = FakeManager(
         list_error=RuntimeError("listing failed"),
         close_error=RuntimeError("close failed"),
     )
 
     with pytest.raises(ResourceDiscoveryError) as error:
-        list_live_resources(resource_manager_factory=RecordingFactory(manager))
+        list_resources(resource_manager_factory=RecordingFactory(manager))
 
     assert error.value.cleanup_errors == ("ResourceManager close failed",)
     assert manager.list_calls == 1
     assert manager.close_calls == 1
 
 
-def test_list_live_resources_cleanup_only_failure_is_reported():
+def test_resource_listing_cleanup_only_failure_is_reported():
     manager = FakeManager(
         resources=(TCPIP_RESOURCE,),
         close_error=RuntimeError("close failed"),
     )
 
     with pytest.raises(VisaCleanupError) as error:
-        list_live_resources(resource_manager_factory=RecordingFactory(manager))
+        list_resources(resource_manager_factory=RecordingFactory(manager))
 
     assert error.value.backend == "system"
     assert "ResourceManager close failed" in str(error.value)
     assert manager.list_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_system_live_only_verifies_usb_and_tcpip_and_skips_other_transports():
+    asrl = "ASRL6::INSTR"
+    gpib = "GPIB0::10::INSTR"
+    pxi = "PXI0::0::INSTR"
+    vxi = "VXI0::1::INSTR"
+    unknown = "SOME0::VALUE::INSTR"
+    resources = (asrl, TCPIP_RESOURCE, gpib, USB_RESOURCE, pxi, vxi, unknown)
+    tcpip_session = FakeSession(response="Vendor,Model,Serial,Firmware")
+    usb_session = FakeSession(response="not,a,required,identity")
+    manager = FakeManager(
+        resources=resources,
+        sessions_by_resource={
+            TCPIP_RESOURCE: tcpip_session,
+            USB_RESOURCE: usb_session,
+        },
+    )
+
+    result = list_resources(
+        "system",
+        live_only=True,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert manager.list_calls == 1
+    assert manager.opened_resources == [TCPIP_RESOURCE, USB_RESOURCE]
+    assert tcpip_session.timeout == LIVE_VERIFY_TIMEOUT_MS
+    assert usb_session.timeout == LIVE_VERIFY_TIMEOUT_MS
+    assert tcpip_session.queries == [IDN_QUERY]
+    assert usb_session.queries == [IDN_QUERY]
+    assert tcpip_session.close_calls == 1
+    assert usb_session.close_calls == 1
+    assert manager.close_calls == 1
+    assert result.resources == (TCPIP_RESOURCE, USB_RESOURCE)
+
+
+def test_pyvisa_py_live_only_verifies_tcpip_and_skips_usb():
+    tcpip_session = FakeSession(response="any non-empty response")
+    manager = FakeManager(
+        resources=(USB_RESOURCE, TCPIP_RESOURCE),
+        sessions_by_resource={TCPIP_RESOURCE: tcpip_session},
+    )
+    factory = RecordingFactory(manager)
+
+    result = list_resources(
+        "@py",
+        live_only=True,
+        resource_manager_factory=factory,
+    )
+
+    assert factory.calls == ["@py"]
+    assert manager.opened_resources == [TCPIP_RESOURCE]
+    assert tcpip_session.queries == [IDN_QUERY]
+    assert tcpip_session.close_calls == 1
+    assert result.resources == (TCPIP_RESOURCE,)
+
+
+def test_live_only_filters_failures_and_empty_responses_without_retry():
+    open_failure = "TCPIP0::192.0.2.11::inst0::INSTR"
+    query_failure = "TCPIP0::192.0.2.12::inst0::INSTR"
+    timeout = "TCPIP0::192.0.2.13::inst0::INSTR"
+    empty = "TCPIP0::192.0.2.14::inst0::INSTR"
+    live = "TCPIP0::192.0.2.15::inst0::INSTR"
+    query_failure_session = FakeSession(query_error=RuntimeError("query failed"))
+    timeout_session = FakeSession(query_error=TimeoutError("timed out"))
+    empty_session = FakeSession(response="  \r\n")
+    live_session = FakeSession(response="response")
+    manager = FakeManager(
+        resources=(open_failure, query_failure, timeout, empty, live),
+        open_errors={open_failure: RuntimeError("open failed")},
+        sessions_by_resource={
+            query_failure: query_failure_session,
+            timeout: timeout_session,
+            empty: empty_session,
+            live: live_session,
+        },
+    )
+
+    result = list_resources(
+        live_only=True,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert manager.opened_resources == [
+        open_failure,
+        query_failure,
+        timeout,
+        empty,
+        live,
+    ]
+    assert query_failure_session.queries == [IDN_QUERY]
+    assert timeout_session.queries == [IDN_QUERY]
+    assert empty_session.queries == [IDN_QUERY]
+    assert live_session.queries == [IDN_QUERY]
+    assert query_failure_session.close_calls == 1
+    assert timeout_session.close_calls == 1
+    assert empty_session.close_calls == 1
+    assert live_session.close_calls == 1
+    assert manager.close_calls == 1
+    assert result.resources == (live,)
+
+
+def test_live_only_session_cleanup_failure_raises_after_manager_cleanup():
+    session = FakeSession(response="response", close_error=RuntimeError("close failed"))
+    manager = FakeManager(
+        resources=(TCPIP_RESOURCE,),
+        sessions_by_resource={TCPIP_RESOURCE: session},
+    )
+
+    with pytest.raises(VisaCleanupError) as error:
+        list_resources(
+            live_only=True,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert "session close failed" in str(error.value)
+    assert session.queries == [IDN_QUERY]
+    assert session.close_calls == 1
     assert manager.close_calls == 1
 
 

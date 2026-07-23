@@ -21,7 +21,7 @@ from wavegen_tool_core import (
     VisaCleanupError,
     WavegenError,
     identify_instrument,
-    list_live_resources,
+    list_resources,
 )
 
 
@@ -88,13 +88,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_parser = subparsers.add_parser(
         "list-resources",
-        help="List resources from one explicitly selected live VISA backend.",
+        help="List resources from one selected VISA backend.",
+        allow_abbrev=False,
     )
     list_parser.add_argument(
-        "--live",
+        "--live-only",
         action="store_true",
-        required=True,
-        help="Acknowledge access to the selected live VISA backend.",
+        help="Keep only eligible resources that answer one bounded liveness query.",
     )
     list_parser.add_argument(
         "--backend",
@@ -144,7 +144,7 @@ def _run_identify(args: argparse.Namespace) -> int:
 
 def _run_list_resources(args: argparse.Namespace) -> int:
     try:
-        result = list_live_resources(args.backend)
+        result = list_resources(args.backend, live_only=args.live_only)
     except WavegenError as exc:
         if args.json_output:
             print(json.dumps(_resource_list_error_payload(exc), separators=(",", ":")))
@@ -161,7 +161,7 @@ def _run_list_resources(args: argparse.Namespace) -> int:
     if args.json_output:
         print(json.dumps(_resource_list_success_payload(result), separators=(",", ":")))
     else:
-        print(_human_resource_list_success(result))
+        print(_human_resource_list_success(result, live_only=args.live_only))
     return int(ExitCode.SUCCESS)
 
 
@@ -255,10 +255,12 @@ def _human_success(result: Any) -> str:
     return "\n".join(lines)
 
 
-def _human_resource_list_success(result: Any) -> str:
+def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
     if not result.resources:
-        return f"No live VISA resources found.\nBackend: {result.backend}"
-    lines = ["Live VISA resources:", f"Backend: {result.backend}"]
+        label = "No live VISA resources found." if live_only else "No VISA resources found."
+        return f"{label}\nBackend: {result.backend}"
+    label = "Live VISA resources:" if live_only else "VISA resources:"
+    lines = [label, f"Backend: {result.backend}"]
     lines.extend(f"- {resource}" for resource in result.resources)
     return "\n".join(lines)
 

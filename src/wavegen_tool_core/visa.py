@@ -6,12 +6,18 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Protocol
 
-from wavegen_tool_core.backends import normalize_backend, validate_backend_transport
+from wavegen_tool_core.backends import (
+    VisaBackend,
+    normalize_backend,
+    validate_backend_transport,
+)
 from wavegen_tool_core.errors import (
     IdnQueryError,
     ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
+    UnsupportedConnectionScopeError,
+    UnsupportedTransportError,
     VisaCleanupError,
     WavegenError,
 )
@@ -25,6 +31,7 @@ from wavegen_tool_core.transport import classify_transport, normalize_resource
 
 IDN_QUERY = "*IDN?"
 DEFAULT_TIMEOUT_MS = 5000
+LIVE_VERIFY_TIMEOUT_MS = 1000
 
 
 class VisaSession(Protocol):
@@ -81,12 +88,13 @@ def create_resource_manager(pyvisa_library: str) -> VisaResourceManager:
     return pyvisa.ResourceManager(pyvisa_library)
 
 
-def list_live_resources(
+def list_resources(
     backend: str | None = None,
     *,
+    live_only: bool = False,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> ResourceListResult:
-    """List resources once through one explicit backend and close its manager."""
+    """List raw resources or retain candidates that answer one bounded *IDN? query."""
 
     backend_selection = normalize_backend(backend)
     factory = resource_manager_factory or create_resource_manager
@@ -102,6 +110,7 @@ def list_live_resources(
     result: ResourceListResult | None = None
     primary_error: ResourceDiscoveryError | None = None
     primary_cause: Exception | None = None
+    session_cleanup_errors: tuple[str, ...] = ()
     try:
         try:
             resources = tuple(manager.list_resources())
@@ -112,12 +121,18 @@ def list_live_resources(
             )
             primary_cause = exc
         else:
+            if live_only:
+                resources, session_cleanup_errors = _filter_live_resources(
+                    manager,
+                    backend_selection,
+                    resources,
+                )
             result = ResourceListResult(
                 backend=backend_selection.name,
                 resources=resources,
             )
     finally:
-        cleanup_errors = _close_resource_manager(manager)
+        cleanup_errors = session_cleanup_errors + _close_resource_manager(manager)
 
     if primary_error is not None:
         primary_error.attach_cleanup_errors(cleanup_errors)
@@ -130,6 +145,40 @@ def list_live_resources(
     if result is None:  # pragma: no cover - defensive invariant
         raise RuntimeError("resource listing completed without a result or error")
     return result
+
+
+def _filter_live_resources(
+    manager: VisaResourceManager,
+    backend_selection: VisaBackend,
+    resources: tuple[str, ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    live_resources: list[str] = []
+    cleanup_errors: list[str] = []
+
+    for resource in resources:
+        try:
+            transport = classify_transport(resource)
+            validate_backend_transport(backend_selection, transport)
+        except (UnsupportedTransportError, UnsupportedConnectionScopeError):
+            continue
+
+        session: VisaSession | None = None
+        try:
+            session = manager.open_resource(resource)
+            session.timeout = LIVE_VERIFY_TIMEOUT_MS
+            response = session.query(IDN_QUERY)
+            if isinstance(response, str) and response.strip():
+                live_resources.append(resource)
+        except Exception:
+            continue
+        finally:
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    cleanup_errors.append("session close failed")
+
+    return tuple(live_resources), tuple(cleanup_errors)
 
 
 def identify_instrument(

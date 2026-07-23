@@ -31,10 +31,11 @@ from wavegen_tool_core.identity import (
 from wavegen_tool_core.transport import classify_transport
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
+    LIVE_VERIFY_TIMEOUT_MS,
     IdentificationResult,
     ResourceListResult,
     identify_instrument,
-    list_live_resources,
+    list_resources,
 )
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "CANONICAL_MODEL",
     "CANONICAL_MODEL_ID",
     "DEFAULT_TIMEOUT_MS",
+    "LIVE_VERIFY_TIMEOUT_MS",
     "PYVISA_PY_BACKEND",
     "SYSTEM_BACKEND",
     "IdentificationResult",
@@ -61,7 +63,7 @@ __all__ = [
     "WavegenError",
     "classify_transport",
     "identify_instrument",
-    "list_live_resources",
+    "list_resources",
     "normalize_backend",
     "parse_idn",
     "resolve_supported_identity",
