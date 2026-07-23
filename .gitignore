@@ -1,0 +1,58 @@
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Virtual environments
+venv/
+.venv/
+.env
+.env.local
+*.env.*
+
+# Test coverage
+.coverage
+coverage/
+htmlcov/
+pytest-cache-files-*/
+.tmp_pytest/
+.tmp_pytest_run/
+PATH/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# Logs
+*.log
+logs/
+artifacts/
+reports/
+captures/
+*.jsonl
+*.csv
+
+# Build/dist directories
+dist/
+build/
+release/
+target/
+*.egg-info/
+
+# Dependency cache
+.mypy_cache/
+.pytest_cache/
+.pytest_tmp_cli_core_split/
+.pytest_tmp_cli_core_review/
+.tmp_tests/
+
+#NoteBook file
+.obsidian
+
+# Data files
+data/
+
+# Local/private project notes
+Local/
