@@ -25,17 +25,22 @@ from wavegen_tool_core.identity import (
     CANONICAL_MODEL,
     CANONICAL_MODEL_ID,
     InstrumentIdentity,
+    RECOGNIZED_MANUFACTURERS,
     parse_idn,
     resolve_supported_identity,
 )
-from wavegen_tool_core.transport import classify_transport
+from wavegen_tool_core.transport import classify_transport, detect_resource_transport
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
     LIVE_VERIFY_TIMEOUT_MS,
+    SERIAL_TERMINATIONS,
     IdentificationResult,
+    ResourceListEntry,
     ResourceListResult,
     identify_instrument,
     list_resources,
+    normalize_serial_baud_rate,
+    normalize_serial_termination,
 )
 
 __all__ = [
@@ -51,9 +56,12 @@ __all__ = [
     "InstrumentIdentity",
     "MalformedIdnError",
     "ResourceDiscoveryError",
+    "RECOGNIZED_MANUFACTURERS",
+    "ResourceListEntry",
     "ResourceListResult",
     "ResourceManagerError",
     "ResourceOpenError",
+    "SERIAL_TERMINATIONS",
     "UnsupportedBackendError",
     "UnsupportedConnectionScopeError",
     "UnsupportedInstrumentError",
@@ -62,9 +70,12 @@ __all__ = [
     "VisaCleanupError",
     "WavegenError",
     "classify_transport",
+    "detect_resource_transport",
     "identify_instrument",
     "list_resources",
     "normalize_backend",
+    "normalize_serial_baud_rate",
+    "normalize_serial_termination",
     "parse_idn",
     "resolve_supported_identity",
     "validate_backend_transport",

@@ -9,7 +9,7 @@ from wavegen_tool_core import visa
 
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
 TCPIP_RESOURCE = "TCPIP0::192.0.2.10::inst0::INSTR"
-VALID_IDN = "KEYSIGHT TECHNOLOGIES,33521B,MY00000000,1.00-0.00-0.00"
+VALID_IDN = "Keysight Technologies,33521B,MY00000000,1.00-0.00-0.00"
 
 
 class FakeSession:
@@ -75,15 +75,23 @@ def test_identify_help(capsys):
     assert "--resource" in output
     assert "--backend" in output
     assert "--json" in output
+    assert "--serial-baud-rate" not in output
+    assert "--serial-read-termination" not in output
+    assert "--serial-write-termination" not in output
     assert "{system,@py}" not in output
 
 
-def test_missing_resource_is_usage_error_without_traceback(capsys):
+def test_missing_resource_is_usage_error_without_traceback(monkeypatch, capsys):
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
     with pytest.raises(SystemExit) as error:
         main(["identify"])
 
     captured = capsys.readouterr()
     assert error.value.code == ExitCode.CLI_USAGE
+    assert calls == []
+    assert manager.opened_resources == []
     assert "required" in captured.err
     assert "Traceback" not in captured.err
 
@@ -107,6 +115,23 @@ def test_valid_fake_identify_human_output(monkeypatch, capsys):
     assert manager.session.queries == ["*IDN?"]
     assert manager.session.closed is True
     assert manager.closed is True
+
+
+def test_agilent_identify_human_output_preserves_reported_manufacturer(
+    monkeypatch, capsys
+):
+    response = "Agilent Technologies,33521B,MY00000000,1.00-0.00-0.00"
+    manager = FakeManager(FakeSession(response))
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["identify", "--resource", USB_RESOURCE])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert "Manufacturer: Agilent Technologies" in captured.out
+    assert "Canonical model ID: keysight-33521b" in captured.out
+    assert "Model recognized: yes" in captured.out
+    assert captured.err == ""
 
 
 def test_valid_fake_identify_json_stdout_is_one_object(monkeypatch, capsys):

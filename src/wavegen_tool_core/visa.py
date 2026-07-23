@@ -7,16 +7,18 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from wavegen_tool_core.backends import (
+    PYVISA_PY_BACKEND,
+    SYSTEM_BACKEND,
     VisaBackend,
     normalize_backend,
     validate_backend_transport,
 )
 from wavegen_tool_core.errors import (
     IdnQueryError,
+    MalformedIdnError,
     ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
-    UnsupportedConnectionScopeError,
     UnsupportedTransportError,
     VisaCleanupError,
     WavegenError,
@@ -26,18 +28,35 @@ from wavegen_tool_core.identity import (
     parse_idn,
     resolve_supported_identity,
 )
-from wavegen_tool_core.transport import classify_transport, normalize_resource
+from wavegen_tool_core.transport import (
+    ASRL_TRANSPORT,
+    TCPIP_TRANSPORT,
+    USB_TRANSPORT,
+    classify_transport,
+    detect_resource_transport,
+    normalize_resource,
+)
 
 
 IDN_QUERY = "*IDN?"
 DEFAULT_TIMEOUT_MS = 5000
 LIVE_VERIFY_TIMEOUT_MS = 1000
+SERIAL_TERMINATIONS = ("CR", "LF", "CRLF", "NONE")
+_SERIAL_TERMINATION_VALUES = {
+    "CR": "\r",
+    "LF": "\n",
+    "CRLF": "\r\n",
+    "NONE": None,
+}
 
 
 class VisaSession(Protocol):
     """Minimum VISA session behavior required for identification."""
 
     timeout: int
+    baud_rate: int
+    read_termination: str | None
+    write_termination: str | None
 
     def query(self, command: str) -> str:
         """Return one query response."""
@@ -52,7 +71,7 @@ class VisaResourceManager(Protocol):
     def list_resources(self) -> Iterable[str]:
         """List resource strings without opening instrument sessions."""
 
-    def open_resource(self, resource_name: str) -> VisaSession:
+    def open_resource(self, resource_name: str, **kwargs: object) -> VisaSession:
         """Open one explicit VISA resource."""
 
     def close(self) -> None:
@@ -73,11 +92,45 @@ class IdentificationResult:
 
 
 @dataclass(frozen=True)
+class ResourceListEntry:
+    """One raw resource with an optional parsed identity summary."""
+
+    resource: str
+    manufacturer: str | None = None
+    model: str | None = None
+
+
+@dataclass(frozen=True)
 class ResourceListResult:
     """A successful resource listing from one selected VISA backend."""
 
     backend: str
-    resources: tuple[str, ...]
+    resources: tuple[ResourceListEntry, ...]
+
+
+def normalize_serial_baud_rate(value: int | str) -> int:
+    """Return a positive serial baud rate."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError("serial baud rate must be a positive integer")
+    try:
+        baud_rate = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("serial baud rate must be a positive integer") from exc
+    if baud_rate <= 0:
+        raise ValueError("serial baud rate must be a positive integer")
+    return baud_rate
+
+
+def normalize_serial_termination(value: str) -> str | None:
+    """Map one explicit serial termination token to its Python value."""
+
+    if not isinstance(value, str):
+        raise ValueError("serial termination must be CR, LF, CRLF, or NONE")
+    try:
+        return _SERIAL_TERMINATION_VALUES[value.strip().upper()]
+    except KeyError as exc:
+        raise ValueError("serial termination must be CR, LF, CRLF, or NONE") from exc
 
 
 def create_resource_manager(pyvisa_library: str) -> VisaResourceManager:
@@ -92,11 +145,31 @@ def list_resources(
     backend: str | None = None,
     *,
     live_only: bool = False,
+    serial_baud_rate: int | str | None = None,
+    serial_read_termination: str | None = None,
+    serial_write_termination: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> ResourceListResult:
     """List raw resources or retain candidates that answer one bounded *IDN? query."""
 
     backend_selection = normalize_backend(backend)
+    normalized_baud_rate = (
+        normalize_serial_baud_rate(serial_baud_rate)
+        if serial_baud_rate is not None
+        else None
+    )
+    read_termination_provided = serial_read_termination is not None
+    normalized_read_termination = (
+        normalize_serial_termination(serial_read_termination)
+        if read_termination_provided
+        else None
+    )
+    write_termination_provided = serial_write_termination is not None
+    normalized_write_termination = (
+        normalize_serial_termination(serial_write_termination)
+        if write_termination_provided
+        else None
+    )
     factory = resource_manager_factory or create_resource_manager
     try:
         manager = factory(backend_selection.pyvisa_library)
@@ -113,7 +186,7 @@ def list_resources(
     session_cleanup_errors: tuple[str, ...] = ()
     try:
         try:
-            resources = tuple(manager.list_resources())
+            resource_names = tuple(manager.list_resources())
         except Exception as exc:
             primary_error = ResourceDiscoveryError(
                 "Could not list VISA resources.",
@@ -125,7 +198,16 @@ def list_resources(
                 resources, session_cleanup_errors = _filter_live_resources(
                     manager,
                     backend_selection,
-                    resources,
+                    resource_names,
+                    serial_baud_rate=normalized_baud_rate,
+                    serial_read_termination=normalized_read_termination,
+                    serial_read_termination_provided=read_termination_provided,
+                    serial_write_termination=normalized_write_termination,
+                    serial_write_termination_provided=write_termination_provided,
+                )
+            else:
+                resources = tuple(
+                    ResourceListEntry(resource=resource) for resource in resource_names
                 )
             result = ResourceListResult(
                 backend=backend_selection.name,
@@ -151,24 +233,55 @@ def _filter_live_resources(
     manager: VisaResourceManager,
     backend_selection: VisaBackend,
     resources: tuple[str, ...],
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    live_resources: list[str] = []
+    *,
+    serial_baud_rate: int | None,
+    serial_read_termination: str | None,
+    serial_read_termination_provided: bool,
+    serial_write_termination: str | None,
+    serial_write_termination_provided: bool,
+) -> tuple[tuple[ResourceListEntry, ...], tuple[str, ...]]:
+    live_resources: list[ResourceListEntry] = []
     cleanup_errors: list[str] = []
 
     for resource in resources:
         try:
-            transport = classify_transport(resource)
-            validate_backend_transport(backend_selection, transport)
-        except (UnsupportedTransportError, UnsupportedConnectionScopeError):
+            transport = detect_resource_transport(resource)
+        except UnsupportedTransportError:
+            continue
+        if not _is_live_discovery_candidate(backend_selection, transport):
             continue
 
         session: VisaSession | None = None
         try:
-            session = manager.open_resource(resource)
+            if transport == ASRL_TRANSPORT:
+                session = manager.open_resource(
+                    resource,
+                    open_timeout=LIVE_VERIFY_TIMEOUT_MS,
+                )
+            else:
+                session = manager.open_resource(resource)
             session.timeout = LIVE_VERIFY_TIMEOUT_MS
+            if transport == ASRL_TRANSPORT:
+                if serial_baud_rate is not None:
+                    session.baud_rate = serial_baud_rate
+                if serial_read_termination_provided:
+                    session.read_termination = serial_read_termination
+                if serial_write_termination_provided:
+                    session.write_termination = serial_write_termination
             response = session.query(IDN_QUERY)
             if isinstance(response, str) and response.strip():
-                live_resources.append(resource)
+                try:
+                    identity = parse_idn(response)
+                except MalformedIdnError:
+                    live_resources.append(ResourceListEntry(resource=resource))
+                else:
+                    live_resources.append(
+                        ResourceListEntry(
+                            resource=resource,
+                            manufacturer=identity.manufacturer,
+                            model=identity.model,
+                        )
+                    )
         except Exception:
             continue
         finally:
@@ -179,6 +292,18 @@ def _filter_live_resources(
                     cleanup_errors.append("session close failed")
 
     return tuple(live_resources), tuple(cleanup_errors)
+
+
+def _is_live_discovery_candidate(
+    backend_selection: VisaBackend,
+    transport: str,
+) -> bool:
+    if backend_selection.name == SYSTEM_BACKEND:
+        return transport in {USB_TRANSPORT, TCPIP_TRANSPORT, ASRL_TRANSPORT}
+    return (
+        backend_selection.name == PYVISA_PY_BACKEND
+        and transport == TCPIP_TRANSPORT
+    )
 
 
 def identify_instrument(

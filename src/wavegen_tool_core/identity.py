@@ -8,6 +8,10 @@ from wavegen_tool_core.errors import MalformedIdnError, UnsupportedInstrumentErr
 
 
 CANONICAL_MANUFACTURER = "Keysight Technologies"
+RECOGNIZED_MANUFACTURERS = (
+    "Keysight Technologies",
+    "Agilent Technologies",
+)
 CANONICAL_MODEL = "33521B"
 CANONICAL_MODEL_ID = "keysight-33521b"
 
@@ -63,11 +67,11 @@ def normalize_model(value: str) -> str:
 
 
 def resolve_supported_identity(identity: InstrumentIdentity) -> InstrumentIdentity:
-    """Resolve only the documented, recognized Keysight Technologies 33521B identity."""
+    """Resolve only the documented, exact manufacturer and 33521B identities."""
 
-    manufacturer_matches = (
-        normalize_manufacturer(identity.manufacturer)
-        == normalize_manufacturer(CANONICAL_MANUFACTURER)
+    manufacturer_matches = normalize_manufacturer(identity.manufacturer) in (
+        normalize_manufacturer(manufacturer)
+        for manufacturer in RECOGNIZED_MANUFACTURERS
     )
     model_matches = normalize_model(identity.model) == normalize_model(CANONICAL_MODEL)
     if not manufacturer_matches or not model_matches:
@@ -79,7 +83,6 @@ def resolve_supported_identity(identity: InstrumentIdentity) -> InstrumentIdenti
 
     return replace(
         identity,
-        manufacturer=CANONICAL_MANUFACTURER,
         model=CANONICAL_MODEL,
         canonical_model_id=CANONICAL_MODEL_ID,
         model_supported=True,

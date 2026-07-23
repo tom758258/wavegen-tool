@@ -1,7 +1,7 @@
 import pytest
 
 from wavegen_tool_core.errors import UnsupportedTransportError
-from wavegen_tool_core.transport import classify_transport
+from wavegen_tool_core.transport import classify_transport, detect_resource_transport
 
 
 def test_usb_resource_is_accepted():
@@ -14,6 +14,22 @@ def test_tcpip_resource_is_accepted():
     resource = "TCPIP0::192.0.2.10::inst0::INSTR"
 
     assert classify_transport(resource) == "tcpip"
+
+
+@pytest.mark.parametrize(
+    ("resource", "transport"),
+    [
+        ("USB0::VALUE::INSTR", "usb"),
+        ("TCPIP0::192.0.2.10::INSTR", "tcpip"),
+        ("ASRL6::INSTR", "asrl"),
+        ("GPIB0::10::INSTR", "gpib"),
+        ("PXI0::1::INSTR", "pxi"),
+        ("VXI0::1::INSTR", "vxi"),
+        ("SOME0::VALUE::INSTR", "unknown"),
+    ],
+)
+def test_transport_detection_does_not_apply_identify_admission(resource, transport):
+    assert detect_resource_transport(resource) == transport
 
 
 @pytest.mark.parametrize(

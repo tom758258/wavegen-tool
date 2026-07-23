@@ -14,6 +14,7 @@ from wavegen_tool_core import (
     ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
+    SERIAL_TERMINATIONS,
     UnsupportedBackendError,
     UnsupportedConnectionScopeError,
     UnsupportedInstrumentError,
@@ -22,6 +23,7 @@ from wavegen_tool_core import (
     WavegenError,
     identify_instrument,
     list_resources,
+    normalize_serial_baud_rate,
 )
 
 
@@ -102,6 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="VISA backend name validated by Core (default: system).",
     )
     list_parser.add_argument(
+        "--serial-baud-rate",
+        type=normalize_serial_baud_rate,
+        help="Positive baud rate applied only to system ASRL live verification.",
+    )
+    list_parser.add_argument(
+        "--serial-read-termination",
+        choices=SERIAL_TERMINATIONS,
+        help="ASRL read termination: CR, LF, CRLF, or NONE.",
+    )
+    list_parser.add_argument(
+        "--serial-write-termination",
+        choices=SERIAL_TERMINATIONS,
+        help="ASRL write termination: CR, LF, CRLF, or NONE.",
+    )
+    list_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -144,7 +161,13 @@ def _run_identify(args: argparse.Namespace) -> int:
 
 def _run_list_resources(args: argparse.Namespace) -> int:
     try:
-        result = list_resources(args.backend, live_only=args.live_only)
+        result = list_resources(
+            args.backend,
+            live_only=args.live_only,
+            serial_baud_rate=args.serial_baud_rate,
+            serial_read_termination=args.serial_read_termination,
+            serial_write_termination=args.serial_write_termination,
+        )
     except WavegenError as exc:
         if args.json_output:
             print(json.dumps(_resource_list_error_payload(exc), separators=(",", ":")))
@@ -216,7 +239,14 @@ def _resource_list_success_payload(result: Any) -> dict[str, object]:
     return {
         "success": True,
         "backend": result.backend,
-        "resources": list(result.resources),
+        "resources": [
+            {
+                "resource": entry.resource,
+                "manufacturer": entry.manufacturer,
+                "model": entry.model,
+            }
+            for entry in result.resources
+        ],
         "error": None,
     }
 
@@ -261,7 +291,16 @@ def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
         return f"{label}\nBackend: {result.backend}"
     label = "Live VISA resources:" if live_only else "VISA resources:"
     lines = [label, f"Backend: {result.backend}"]
-    lines.extend(f"- {resource}" for resource in result.resources)
+    if not live_only:
+        lines.extend(f"- {entry.resource}" for entry in result.resources)
+        return "\n".join(lines)
+    for entry in result.resources:
+        identity = (
+            f"{entry.manufacturer} {entry.model}"
+            if entry.manufacturer is not None and entry.model is not None
+            else "Unknown instrument"
+        )
+        lines.extend((f"- {identity}", f"  Resource: {entry.resource}"))
     return "\n".join(lines)
 
 

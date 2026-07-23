@@ -7,6 +7,7 @@ the current milestone supports read-only identification of the Keysight 33521B.
 ## Current Scope
 
 - Exact manufacturer-and-model recognition for Keysight Technologies 33521B
+  and Agilent Technologies 33521B
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
 - The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
@@ -17,10 +18,13 @@ the current milestone supports read-only identification of the Keysight 33521B.
 The identify command rejects GPIB and all other transports outside its explicit
 scope. Other Trueform models are not treated as supported.
 
-The identify result confirms that the reported instrument is a recognized
-model. It does not claim that every live backend/transport scope or future
-control feature is hardware-validated. This milestone has not been validated
-against real hardware.
+These are the only recognized manufacturer/model pairs. Matching ignores case
+and ordinary whitespace differences but does not use prefix, substring, or
+fuzzy matching. A successful identify result preserves the manufacturer
+reported by the instrument while normalizing the model to `33521B`. It does not
+claim that every live backend/transport scope or future control feature is
+hardware-validated. This milestone has not been validated against real
+hardware.
 
 Waveform configuration, output control, automatic resource scanning, WebUI
 features, and release executables are not implemented. Identification sends
@@ -47,13 +51,7 @@ string and its order, and closes the ResourceManager. It does not open an
 instrument session or send SCPI. Results may include stale resources and
 transports or backend combinations that the identify command does not support.
 
-List raw resources through the default system backend:
-
-```powershell
-uv run wavegen-tool list-resources
-```
-
-Select system VISA explicitly, which uses `@ivi`:
+List raw resources through the system backend, which uses `@ivi`:
 
 ```powershell
 uv run wavegen-tool list-resources --backend system
@@ -68,7 +66,9 @@ uv run wavegen-tool list-resources --backend "@py"
 Use `--live-only` to open each candidate allowed by the current
 backend/transport verification scope, apply a fixed one-second timeout, and
 send one `*IDN?` query. Only resources returning a non-empty response are
-shown:
+shown. When the response is a standard four-field identity, the output shows
+its manufacturer, model, and resource. A non-standard but non-empty response
+is shown as `Unknown instrument`:
 
 ```powershell
 uv run wavegen-tool list-resources --live-only --backend system
@@ -76,20 +76,38 @@ uv run wavegen-tool list-resources --live-only --backend "@py"
 uv run wavegen-tool list-resources --live-only --backend system --json
 ```
 
-System live verification accepts USB and TCPIP/LAN candidates. `@py` live
-verification accepts TCPIP/LAN candidates only. GPIB, ASRL, PXI, VXI, unknown
-transports, and `@py` plus USB candidates remain visible in raw results but are
-skipped in live-only mode.
+System live verification accepts USB, TCPIP/LAN, and ASRL/RS-232 candidates.
+`@py` live verification accepts TCPIP/LAN candidates only. GPIB, PXI, VXI,
+unknown transports, and unsupported backend/transport combinations remain
+visible in raw results but are skipped in live-only mode.
+
+Provide serial settings explicitly when an ASRL candidate requires them. These
+settings apply only to system-backend ASRL candidates; omitted settings leave
+the VISA session defaults unchanged:
+
+```powershell
+uv run wavegen-tool list-resources `
+  --live-only `
+  --backend system `
+  --serial-baud-rate 9600 `
+  --serial-read-termination LF `
+  --serial-write-termination LF
+```
+
+Termination values are `CR`, `LF`, `CRLF`, and `NONE`; `NONE` means Python
+`None`. Live ASRL discovery does not add ASRL support to identify. Identify
+continues to accept only system USB, system TCPIP/LAN, and `@py` TCPIP/LAN.
 
 A non-empty response confirms connectivity only. It does not establish that
-the resource is a Keysight 33521B or authorize the model for later control.
-Live-only checks do not retry, switch backends, change instrument settings, or
-enable output. After reviewing the results, choose a resource and pass it
-explicitly to identify:
+the resource is a recognized 33521B or authorize the model for later control.
+Live-only output does not display or save serial numbers, firmware, or raw IDN
+responses. Checks do not retry or switch backends. They do not send cleanup,
+remote/local, reset, or any command other than the single `*IDN?`. After
+reviewing the results, choose a resource and pass it explicitly to identify:
 
 ```powershell
 uv run wavegen-tool identify `
-  --resource "<EXPLICIT_RESOURCE>" `
+  --resource "<EXPLICIT_USB_OR_TCPIP_RESOURCE>" `
   --backend system
 ```
 
@@ -143,11 +161,13 @@ written to files or artifacts.
 
 The identify command opens only the resource supplied by the user, issues
 exactly one `*IDN?` query, and closes the VISA session and ResourceManager. Raw
-listing never opens an instrument session or sends SCPI. Live-only listing
-opens only eligible candidates and sends each at most one `*IDN?` query with a
-fixed timeout. No command retries, switches backends automatically, sends
-reset or diagnostic commands, configures a waveform, or controls output state.
-There is no automatic or background resource scan.
+listing only returns the backend-reported resource strings; it never opens an
+instrument session or sends SCPI. Live-only listing opens only eligible
+candidates and sends each at most one `*IDN?` query with fixed open/session
+timeouts where applicable. It closes the session without clear, remote/local,
+reset, cleanup, diagnostic, or other commands. No command retries, switches
+backends automatically, configures a waveform, or controls output state. There
+is no automatic or background resource scan.
 
 The `@py` plus USB combination is rejected before the ResourceManager is
 created or any VISA I/O occurs. USB resources remain available through the

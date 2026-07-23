@@ -9,12 +9,13 @@ from wavegen_tool_core.identity import (
 
 
 VALID_IDN = "KEYSIGHT TECHNOLOGIES,33521B,MY00000000,1.00-0.00-0.00"
+AGILENT_IDN = "Agilent Technologies,33521B,MY00000001,1.00-0.00-0.00"
 
 
 def test_valid_keysight_33521b_idn_resolves_exact_support():
     identity = resolve_supported_identity(parse_idn(VALID_IDN))
 
-    assert identity.manufacturer == "Keysight Technologies"
+    assert identity.manufacturer == "KEYSIGHT TECHNOLOGIES"
     assert identity.model == "33521B"
     assert identity.serial == "MY00000000"
     assert identity.firmware == "1.00-0.00-0.00"
@@ -24,16 +25,42 @@ def test_valid_keysight_33521b_idn_resolves_exact_support():
     assert identity.raw_response == VALID_IDN
 
 
-def test_leading_trailing_and_field_whitespace_is_normalized():
+def test_matching_normalizes_case_and_ordinary_whitespace_but_preserves_reported_value():
     raw_idn = "  keysight   technologies , 33521b , MY00000000 , 1.00-0.00-0.00  \n"
 
     identity = resolve_supported_identity(parse_idn(raw_idn))
 
-    assert identity.manufacturer == "Keysight Technologies"
+    assert identity.manufacturer == "keysight   technologies"
     assert identity.model == "33521B"
     assert identity.serial == "MY00000000"
     assert identity.firmware == "1.00-0.00-0.00"
     assert identity.raw_response == raw_idn
+
+
+def test_agilent_technologies_33521b_resolves_and_preserves_manufacturer():
+    identity = resolve_supported_identity(parse_idn(AGILENT_IDN))
+
+    assert identity.manufacturer == "Agilent Technologies"
+    assert identity.model == "33521B"
+    assert identity.canonical_model_id == CANONICAL_MODEL_ID
+    assert identity.model_supported is True
+
+
+@pytest.mark.parametrize(
+    "manufacturer",
+    [
+        "Agilent",
+        "HP",
+        "Hewlett-Packard",
+        "Agilent Technologies Extra",
+        "Prefix Agilent Technologies",
+    ],
+)
+def test_manufacturer_aliases_are_exact_not_prefix_substring_or_fuzzy(manufacturer):
+    identity = parse_idn(f"{manufacturer},33521B,MY00000000,1.00")
+
+    with pytest.raises(UnsupportedInstrumentError):
+        resolve_supported_identity(identity)
 
 
 def test_manufacturer_mismatch_fails_closed():
@@ -47,6 +74,13 @@ def test_manufacturer_mismatch_fails_closed():
 
 def test_model_mismatch_fails_closed_even_for_keysight():
     identity = parse_idn("Keysight Technologies,33522B,MY00000000,1.00")
+
+    with pytest.raises(UnsupportedInstrumentError):
+        resolve_supported_identity(identity)
+
+
+def test_agilent_other_model_fails_closed():
+    identity = parse_idn("Agilent Technologies,33520B,MY00000000,1.00")
 
     with pytest.raises(UnsupportedInstrumentError):
         resolve_supported_identity(identity)

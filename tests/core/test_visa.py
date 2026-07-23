@@ -15,13 +15,17 @@ from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
+    ResourceListEntry,
     identify_instrument,
     list_resources,
+    normalize_serial_baud_rate,
+    normalize_serial_termination,
 )
 
 
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
 TCPIP_RESOURCE = "TCPIP0::192.0.2.10::inst0::INSTR"
+ASRL_RESOURCE = "ASRL6::INSTR"
 VALID_IDN = "KEYSIGHT TECHNOLOGIES,33521B,MY00000000,1.00-0.00-0.00"
 
 
@@ -31,6 +35,9 @@ class FakeSession:
         self.query_error = query_error
         self.close_error = close_error
         self.timeout = None
+        self.baud_rate = 4800
+        self.read_termination = "existing read"
+        self.write_termination = "existing write"
         self.queries = []
         self.close_calls = 0
 
@@ -44,6 +51,18 @@ class FakeSession:
         self.close_calls += 1
         if self.close_error is not None:
             raise self.close_error
+
+    def write(self, command):
+        raise AssertionError(f"write must not be called: {command}")
+
+    def clear(self):
+        raise AssertionError("clear must not be called")
+
+    def control_ren(self, mode):
+        raise AssertionError(f"control_ren must not be called: {mode}")
+
+    def read_stb(self):
+        raise AssertionError("read_stb must not be called")
 
 
 class FakeManager:
@@ -67,6 +86,7 @@ class FakeManager:
         self.close_error = close_error
         self.list_calls = 0
         self.opened_resources = []
+        self.open_calls = []
         self.close_calls = 0
 
     def list_resources(self):
@@ -75,8 +95,9 @@ class FakeManager:
             raise self.list_error
         return self.resources
 
-    def open_resource(self, resource):
+    def open_resource(self, resource, **kwargs):
         self.opened_resources.append(resource)
+        self.open_calls.append((resource, kwargs))
         if resource in self.open_errors:
             raise self.open_errors[resource]
         if self.open_error is not None:
@@ -107,7 +128,7 @@ class RecordingFactory:
     ],
 )
 def test_raw_resource_listing_uses_selected_backend_once_and_closes(backend, library):
-    resources = (TCPIP_RESOURCE, "GPIB0::10::INSTR", USB_RESOURCE)
+    resources = (ASRL_RESOURCE, TCPIP_RESOURCE, "GPIB0::10::INSTR", USB_RESOURCE)
     manager = FakeManager(resources=resources)
     factory = RecordingFactory(manager)
 
@@ -119,7 +140,7 @@ def test_raw_resource_listing_uses_selected_backend_once_and_closes(backend, lib
     assert manager.session.queries == []
     assert manager.close_calls == 1
     assert result.backend == backend
-    assert result.resources == resources
+    assert result.resources == tuple(ResourceListEntry(resource=item) for item in resources)
 
 
 def test_raw_resource_listing_empty_result_is_successful_and_closes():
@@ -190,18 +211,19 @@ def test_resource_listing_cleanup_only_failure_is_reported():
     assert manager.close_calls == 1
 
 
-def test_system_live_only_verifies_usb_and_tcpip_and_skips_other_transports():
-    asrl = "ASRL6::INSTR"
+def test_system_live_only_verifies_usb_tcpip_and_asrl_and_skips_other_transports():
     gpib = "GPIB0::10::INSTR"
     pxi = "PXI0::0::INSTR"
     vxi = "VXI0::1::INSTR"
     unknown = "SOME0::VALUE::INSTR"
-    resources = (asrl, TCPIP_RESOURCE, gpib, USB_RESOURCE, pxi, vxi, unknown)
+    resources = (ASRL_RESOURCE, TCPIP_RESOURCE, gpib, USB_RESOURCE, pxi, vxi, unknown)
+    asrl_session = FakeSession(response="Agilent Technologies,33521B,SERIAL,FIRMWARE")
     tcpip_session = FakeSession(response="Vendor,Model,Serial,Firmware")
     usb_session = FakeSession(response="not,a,required,identity")
     manager = FakeManager(
         resources=resources,
         sessions_by_resource={
+            ASRL_RESOURCE: asrl_session,
             TCPIP_RESOURCE: tcpip_session,
             USB_RESOURCE: usb_session,
         },
@@ -214,21 +236,33 @@ def test_system_live_only_verifies_usb_and_tcpip_and_skips_other_transports():
     )
 
     assert manager.list_calls == 1
-    assert manager.opened_resources == [TCPIP_RESOURCE, USB_RESOURCE]
+    assert manager.opened_resources == [ASRL_RESOURCE, TCPIP_RESOURCE, USB_RESOURCE]
+    assert manager.open_calls[0] == (
+        ASRL_RESOURCE,
+        {"open_timeout": LIVE_VERIFY_TIMEOUT_MS},
+    )
+    assert manager.open_calls[1:] == [(TCPIP_RESOURCE, {}), (USB_RESOURCE, {})]
+    assert asrl_session.timeout == LIVE_VERIFY_TIMEOUT_MS
     assert tcpip_session.timeout == LIVE_VERIFY_TIMEOUT_MS
     assert usb_session.timeout == LIVE_VERIFY_TIMEOUT_MS
+    assert asrl_session.queries == [IDN_QUERY]
     assert tcpip_session.queries == [IDN_QUERY]
     assert usb_session.queries == [IDN_QUERY]
+    assert asrl_session.close_calls == 1
     assert tcpip_session.close_calls == 1
     assert usb_session.close_calls == 1
     assert manager.close_calls == 1
-    assert result.resources == (TCPIP_RESOURCE, USB_RESOURCE)
+    assert result.resources == (
+        ResourceListEntry(ASRL_RESOURCE, "Agilent Technologies", "33521B"),
+        ResourceListEntry(TCPIP_RESOURCE, "Vendor", "Model"),
+        ResourceListEntry(USB_RESOURCE, "not", "a"),
+    )
 
 
 def test_pyvisa_py_live_only_verifies_tcpip_and_skips_usb():
     tcpip_session = FakeSession(response="any non-empty response")
     manager = FakeManager(
-        resources=(USB_RESOURCE, TCPIP_RESOURCE),
+        resources=(USB_RESOURCE, ASRL_RESOURCE, TCPIP_RESOURCE),
         sessions_by_resource={TCPIP_RESOURCE: tcpip_session},
     )
     factory = RecordingFactory(manager)
@@ -243,7 +277,152 @@ def test_pyvisa_py_live_only_verifies_tcpip_and_skips_usb():
     assert manager.opened_resources == [TCPIP_RESOURCE]
     assert tcpip_session.queries == [IDN_QUERY]
     assert tcpip_session.close_calls == 1
-    assert result.resources == (TCPIP_RESOURCE,)
+    assert result.resources == (ResourceListEntry(TCPIP_RESOURCE),)
+
+
+def test_live_only_keeps_parsed_identity_for_any_instrument_and_unknown_for_malformed():
+    unsupported = "USB0::0x0000::0x0000::MY00000001::INSTR"
+    malformed = "TCPIP0::192.0.2.11::inst0::INSTR"
+    unsupported_session = FakeSession(
+        response="Keysight Technologies,34465A,SERIAL,FIRMWARE"
+    )
+    malformed_session = FakeSession(response="non-standard response")
+    manager = FakeManager(
+        resources=(unsupported, malformed),
+        sessions_by_resource={
+            unsupported: unsupported_session,
+            malformed: malformed_session,
+        },
+    )
+
+    result = list_resources(
+        live_only=True,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.resources == (
+        ResourceListEntry(unsupported, "Keysight Technologies", "34465A"),
+        ResourceListEntry(malformed),
+    )
+    assert unsupported_session.queries == [IDN_QUERY]
+    assert malformed_session.queries == [IDN_QUERY]
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("CR", "\r"),
+        ("LF", "\n"),
+        ("CRLF", "\r\n"),
+        ("NONE", None),
+        (" cr ", "\r"),
+    ],
+)
+def test_serial_termination_normalization(token, expected):
+    assert normalize_serial_termination(token) == expected
+
+
+@pytest.mark.parametrize("value", [9600, "9600"])
+def test_positive_serial_baud_rate_normalization(value):
+    assert normalize_serial_baud_rate(value) == 9600
+
+
+@pytest.mark.parametrize("value", [0, -1, "not-an-integer", 9600.5, True])
+def test_invalid_serial_baud_rate_is_rejected(value):
+    with pytest.raises(ValueError):
+        normalize_serial_baud_rate(value)
+
+
+def test_explicit_serial_settings_apply_only_to_asrl():
+    asrl_session = FakeSession()
+    usb_session = FakeSession()
+    manager = FakeManager(
+        resources=(ASRL_RESOURCE, USB_RESOURCE),
+        sessions_by_resource={
+            ASRL_RESOURCE: asrl_session,
+            USB_RESOURCE: usb_session,
+        },
+    )
+
+    list_resources(
+        live_only=True,
+        serial_baud_rate=9600,
+        serial_read_termination="LF",
+        serial_write_termination="NONE",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert asrl_session.baud_rate == 9600
+    assert asrl_session.read_termination == "\n"
+    assert asrl_session.write_termination is None
+    assert usb_session.baud_rate == 4800
+    assert usb_session.read_termination == "existing read"
+    assert usb_session.write_termination == "existing write"
+
+
+def test_omitted_serial_settings_do_not_overwrite_asrl_session():
+    session = FakeSession()
+    manager = FakeManager(
+        resources=(ASRL_RESOURCE,),
+        sessions_by_resource={ASRL_RESOURCE: session},
+    )
+
+    list_resources(
+        live_only=True,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.baud_rate == 4800
+    assert session.read_termination == "existing read"
+    assert session.write_termination == "existing write"
+
+
+def test_asrl_query_timeout_is_filtered_closed_and_next_candidate_continues():
+    timeout_session = FakeSession(query_error=TimeoutError("private timeout"))
+    live_session = FakeSession(response="Vendor,Model,Serial,Firmware")
+    manager = FakeManager(
+        resources=(ASRL_RESOURCE, TCPIP_RESOURCE),
+        sessions_by_resource={
+            ASRL_RESOURCE: timeout_session,
+            TCPIP_RESOURCE: live_session,
+        },
+    )
+
+    result = list_resources(
+        live_only=True,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert manager.opened_resources == [ASRL_RESOURCE, TCPIP_RESOURCE]
+    assert timeout_session.queries == [IDN_QUERY]
+    assert timeout_session.close_calls == 1
+    assert live_session.queries == [IDN_QUERY]
+    assert result.resources == (
+        ResourceListEntry(TCPIP_RESOURCE, "Vendor", "Model"),
+    )
+
+
+def test_asrl_open_failure_is_filtered_without_retry_and_next_candidate_continues():
+    live_asrl = "ASRL7::INSTR"
+    live_session = FakeSession(response="Vendor,Model,Serial,Firmware")
+    manager = FakeManager(
+        resources=(ASRL_RESOURCE, live_asrl),
+        open_errors={ASRL_RESOURCE: TimeoutError("private open timeout")},
+        sessions_by_resource={live_asrl: live_session},
+    )
+
+    result = list_resources(
+        live_only=True,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert manager.open_calls == [
+        (ASRL_RESOURCE, {"open_timeout": LIVE_VERIFY_TIMEOUT_MS}),
+        (live_asrl, {"open_timeout": LIVE_VERIFY_TIMEOUT_MS}),
+    ]
+    assert live_session.queries == [IDN_QUERY]
+    assert live_session.close_calls == 1
+    assert result.resources == (ResourceListEntry(live_asrl, "Vendor", "Model"),)
 
 
 def test_live_only_filters_failures_and_empty_responses_without_retry():
@@ -288,7 +467,7 @@ def test_live_only_filters_failures_and_empty_responses_without_retry():
     assert empty_session.close_calls == 1
     assert live_session.close_calls == 1
     assert manager.close_calls == 1
-    assert result.resources == (live,)
+    assert result.resources == (ResourceListEntry(live),)
 
 
 def test_live_only_session_cleanup_failure_raises_after_manager_cleanup():

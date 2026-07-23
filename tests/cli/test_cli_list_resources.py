@@ -18,6 +18,9 @@ class FakeSession:
         self.query_error = query_error
         self.close_error = close_error
         self.timeout = None
+        self.baud_rate = 4800
+        self.read_termination = "existing read"
+        self.write_termination = "existing write"
         self.queries = []
         self.close_calls = 0
 
@@ -31,6 +34,18 @@ class FakeSession:
         self.close_calls += 1
         if self.close_error is not None:
             raise self.close_error
+
+    def write(self, command):
+        raise AssertionError(f"write must not be called: {command}")
+
+    def clear(self):
+        raise AssertionError("clear must not be called")
+
+    def control_ren(self, mode):
+        raise AssertionError(f"control_ren must not be called: {mode}")
+
+    def read_stb(self):
+        raise AssertionError("read_stb must not be called")
 
 
 class FakeManager:
@@ -48,6 +63,7 @@ class FakeManager:
         self.close_error = close_error
         self.list_calls = 0
         self.opened_resources = []
+        self.open_calls = []
         self.close_calls = 0
 
     def list_resources(self):
@@ -56,8 +72,9 @@ class FakeManager:
             raise self.list_error
         return self.resources
 
-    def open_resource(self, resource):
+    def open_resource(self, resource, **kwargs):
         self.opened_resources.append(resource)
+        self.open_calls.append((resource, kwargs))
         return self.sessions_by_resource[resource]
 
     def close(self):
@@ -95,6 +112,9 @@ def test_list_resources_help_uses_live_only(capsys):
     assert "--live " not in output
     assert "--backend" in output
     assert "--json" in output
+    assert "--serial-baud-rate" in output
+    assert "--serial-read-termination" in output
+    assert "--serial-write-termination" in output
     assert "{system,@py}" not in output
 
 
@@ -110,6 +130,32 @@ def test_old_live_option_is_unknown_argument_without_creating_manager(monkeypatc
     assert calls == []
     assert manager.list_calls == 0
     assert "unrecognized arguments: --live" in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--serial-baud-rate", "0"],
+        ["--serial-baud-rate", "invalid"],
+        ["--serial-read-termination", "TAB"],
+        ["--serial-write-termination", "newline"],
+    ],
+)
+def test_invalid_serial_option_is_usage_error_without_creating_manager(
+    monkeypatch, capsys, arguments
+):
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(["list-resources", *arguments])
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert calls == []
+    assert manager.list_calls == 0
+    assert manager.opened_resources == []
     assert "Traceback" not in captured.err
 
 
@@ -169,7 +215,18 @@ def test_raw_listing_json_is_one_object(monkeypatch, capsys):
     assert json.loads(captured.out) == {
         "success": True,
         "backend": "@py",
-        "resources": [ASRL_RESOURCE, TCPIP_RESOURCE],
+        "resources": [
+            {
+                "resource": ASRL_RESOURCE,
+                "manufacturer": None,
+                "model": None,
+            },
+            {
+                "resource": TCPIP_RESOURCE,
+                "manufacturer": None,
+                "model": None,
+            },
+        ],
         "error": None,
     }
     assert captured.out.count("\n") == 1
@@ -177,7 +234,7 @@ def test_raw_listing_json_is_one_object(monkeypatch, capsys):
     assert manager.opened_resources == []
 
 
-def test_live_only_human_filters_candidates(monkeypatch, capsys):
+def test_live_only_human_shows_parsed_identity_and_resource(monkeypatch, capsys):
     tcpip_session = FakeSession(response="Vendor,Anything")
     manager = FakeManager(
         (ASRL_RESOURCE, TCPIP_RESOURCE, USB_RESOURCE),
@@ -193,7 +250,8 @@ def test_live_only_human_filters_candidates(monkeypatch, capsys):
     assert captured.out == (
         "Live VISA resources:\n"
         "Backend: @py\n"
-        f"- {TCPIP_RESOURCE}\n"
+        "- Unknown instrument\n"
+        f"  Resource: {TCPIP_RESOURCE}\n"
     )
     assert captured.err == ""
     assert manager.list_calls == 1
@@ -203,8 +261,77 @@ def test_live_only_human_filters_candidates(monkeypatch, capsys):
     assert manager.close_calls == 1
 
 
+def test_live_only_human_shows_any_parsed_model_without_serial_firmware_or_raw_idn(
+    monkeypatch, capsys
+):
+    response = "Keysight Technologies,34465A,SECRET-SERIAL,SECRET-FIRMWARE"
+    session = FakeSession(response=response)
+    manager = FakeManager(
+        (USB_RESOURCE,),
+        sessions_by_resource={USB_RESOURCE: session},
+    )
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["list-resources", "--live-only"])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert captured.out == (
+        "Live VISA resources:\n"
+        "Backend: system\n"
+        "- Keysight Technologies 34465A\n"
+        f"  Resource: {USB_RESOURCE}\n"
+    )
+    assert "SECRET-SERIAL" not in captured.out
+    assert "SECRET-FIRMWARE" not in captured.out
+    assert response not in captured.out
+    assert captured.err == ""
+
+
+def test_serial_cli_options_apply_to_system_asrl_only(monkeypatch, capsys):
+    asrl_session = FakeSession(response="Agilent Technologies,33521B,SERIAL,FIRMWARE")
+    tcpip_session = FakeSession(response="Vendor,Model,Serial,Firmware")
+    manager = FakeManager(
+        (ASRL_RESOURCE, TCPIP_RESOURCE),
+        sessions_by_resource={
+            ASRL_RESOURCE: asrl_session,
+            TCPIP_RESOURCE: tcpip_session,
+        },
+    )
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "list-resources",
+            "--live-only",
+            "--serial-baud-rate",
+            "9600",
+            "--serial-read-termination",
+            "CRLF",
+            "--serial-write-termination",
+            "NONE",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert manager.open_calls == [
+        (ASRL_RESOURCE, {"open_timeout": 1000}),
+        (TCPIP_RESOURCE, {}),
+    ]
+    assert asrl_session.baud_rate == 9600
+    assert asrl_session.read_termination == "\r\n"
+    assert asrl_session.write_termination is None
+    assert tcpip_session.baud_rate == 4800
+    assert tcpip_session.read_termination == "existing read"
+    assert tcpip_session.write_termination == "existing write"
+    assert captured.err == ""
+
+
 def test_live_only_json_filters_empty_response(monkeypatch, capsys):
-    tcpip_session = FakeSession(response="response")
+    tcpip_session = FakeSession(
+        response="Agilent Technologies,33521B,SERIAL,FIRMWARE"
+    )
     usb_session = FakeSession(response="  ")
     manager = FakeManager(
         (TCPIP_RESOURCE, USB_RESOURCE),
@@ -222,11 +349,20 @@ def test_live_only_json_filters_empty_response(monkeypatch, capsys):
     assert json.loads(captured.out) == {
         "success": True,
         "backend": "system",
-        "resources": [TCPIP_RESOURCE],
+        "resources": [
+            {
+                "resource": TCPIP_RESOURCE,
+                "manufacturer": "Agilent Technologies",
+                "model": "33521B",
+            }
+        ],
         "error": None,
     }
     assert captured.out.count("\n") == 1
     assert captured.err == ""
+    assert "SERIAL" not in captured.out
+    assert "FIRMWARE" not in captured.out
+    assert "Agilent Technologies,33521B,SERIAL,FIRMWARE" not in captured.out
 
 
 def test_live_only_empty_human_and_json_output(monkeypatch, capsys):
