@@ -10,6 +10,7 @@ from wavegen_tool_core.backends import (
 from wavegen_tool_core.errors import (
     IdnQueryError,
     MalformedIdnError,
+    ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
     UnsupportedBackendError,
@@ -31,7 +32,9 @@ from wavegen_tool_core.transport import classify_transport
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
     IdentificationResult,
+    ResourceListResult,
     identify_instrument,
+    list_live_resources,
 )
 
 __all__ = [
@@ -45,6 +48,8 @@ __all__ = [
     "IdnQueryError",
     "InstrumentIdentity",
     "MalformedIdnError",
+    "ResourceDiscoveryError",
+    "ResourceListResult",
     "ResourceManagerError",
     "ResourceOpenError",
     "UnsupportedBackendError",
@@ -56,6 +61,7 @@ __all__ = [
     "WavegenError",
     "classify_transport",
     "identify_instrument",
+    "list_live_resources",
     "normalize_backend",
     "parse_idn",
     "resolve_supported_identity",

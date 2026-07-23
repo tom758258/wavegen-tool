@@ -350,3 +350,4 @@ def test_exit_code_contract_is_centralized():
     assert ExitCode.MALFORMED_IDN == 23
     assert ExitCode.UNSUPPORTED_INSTRUMENT == 24
     assert ExitCode.VISA_CLEANUP_ERROR == 25
+    assert ExitCode.RESOURCE_DISCOVERY_ERROR == 26

@@ -3,6 +3,7 @@ import pytest
 from wavegen_tool_core.errors import (
     IdnQueryError,
     MalformedIdnError,
+    ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
     UnsupportedConnectionScopeError,
@@ -10,7 +11,12 @@ from wavegen_tool_core.errors import (
     UnsupportedTransportError,
     VisaCleanupError,
 )
-from wavegen_tool_core.visa import DEFAULT_TIMEOUT_MS, IDN_QUERY, identify_instrument
+from wavegen_tool_core.visa import (
+    DEFAULT_TIMEOUT_MS,
+    IDN_QUERY,
+    identify_instrument,
+    list_live_resources,
+)
 
 
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
@@ -40,12 +46,29 @@ class FakeSession:
 
 
 class FakeManager:
-    def __init__(self, session=None, *, open_error=None, close_error=None):
+    def __init__(
+        self,
+        session=None,
+        *,
+        resources=(),
+        list_error=None,
+        open_error=None,
+        close_error=None,
+    ):
         self.session = session or FakeSession()
+        self.resources = resources
+        self.list_error = list_error
         self.open_error = open_error
         self.close_error = close_error
+        self.list_calls = 0
         self.opened_resources = []
         self.close_calls = 0
+
+    def list_resources(self):
+        self.list_calls += 1
+        if self.list_error is not None:
+            raise self.list_error
+        return self.resources
 
     def open_resource(self, resource):
         self.opened_resources.append(resource)
@@ -67,6 +90,97 @@ class RecordingFactory:
     def __call__(self, pyvisa_library):
         self.calls.append(pyvisa_library)
         return self.manager
+
+
+@pytest.mark.parametrize(
+    ("backend", "library"),
+    [
+        ("system", "@ivi"),
+        ("@py", "@py"),
+    ],
+)
+def test_list_live_resources_uses_selected_backend_once_and_closes(backend, library):
+    resources = (TCPIP_RESOURCE, "GPIB0::10::INSTR", USB_RESOURCE)
+    manager = FakeManager(resources=resources)
+    factory = RecordingFactory(manager)
+
+    result = list_live_resources(backend, resource_manager_factory=factory)
+
+    assert factory.calls == [library]
+    assert manager.list_calls == 1
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.close_calls == 1
+    assert result.backend == backend
+    assert result.resources == resources
+
+
+def test_list_live_resources_empty_result_is_successful_and_closes():
+    manager = FakeManager(resources=())
+
+    result = list_live_resources(resource_manager_factory=RecordingFactory(manager))
+
+    assert result.resources == ()
+    assert manager.list_calls == 1
+    assert manager.opened_resources == []
+    assert manager.close_calls == 1
+
+
+def test_list_live_resources_manager_creation_failure_is_distinct():
+    calls = []
+
+    def failing_factory(pyvisa_library):
+        calls.append(pyvisa_library)
+        raise RuntimeError("private manager detail")
+
+    with pytest.raises(ResourceManagerError) as error:
+        list_live_resources("system", resource_manager_factory=failing_factory)
+
+    assert calls == ["@ivi"]
+    assert error.value.backend == "system"
+
+
+def test_list_live_resources_failure_closes_manager_without_retry():
+    manager = FakeManager(list_error=RuntimeError("private listing detail"))
+
+    with pytest.raises(ResourceDiscoveryError) as error:
+        list_live_resources("@py", resource_manager_factory=RecordingFactory(manager))
+
+    assert error.value.backend == "@py"
+    assert str(error.value) == "Could not list VISA resources."
+    assert manager.list_calls == 1
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.close_calls == 1
+
+
+def test_list_live_resources_failure_remains_primary_when_cleanup_fails():
+    manager = FakeManager(
+        list_error=RuntimeError("listing failed"),
+        close_error=RuntimeError("close failed"),
+    )
+
+    with pytest.raises(ResourceDiscoveryError) as error:
+        list_live_resources(resource_manager_factory=RecordingFactory(manager))
+
+    assert error.value.cleanup_errors == ("ResourceManager close failed",)
+    assert manager.list_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_list_live_resources_cleanup_only_failure_is_reported():
+    manager = FakeManager(
+        resources=(TCPIP_RESOURCE,),
+        close_error=RuntimeError("close failed"),
+    )
+
+    with pytest.raises(VisaCleanupError) as error:
+        list_live_resources(resource_manager_factory=RecordingFactory(manager))
+
+    assert error.value.backend == "system"
+    assert "ResourceManager close failed" in str(error.value)
+    assert manager.list_calls == 1
+    assert manager.close_calls == 1
 
 
 def test_system_backend_lifecycle_queries_once_and_closes():

@@ -72,6 +72,12 @@ class ResourceManagerError(WavegenError):
     code = "resource_manager_error"
 
 
+class ResourceDiscoveryError(WavegenError):
+    """The selected ResourceManager could not list VISA resources."""
+
+    code = "resource_discovery_error"
+
+
 class ResourceOpenError(WavegenError):
     """The explicit VISA resource could not be opened."""
 

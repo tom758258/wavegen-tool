@@ -1,4 +1,4 @@
-"""Console entry point for the read-only identify milestone."""
+"""Console entry point for live VISA listing and read-only identification."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any, Sequence
 from wavegen_tool_core import (
     IdnQueryError,
     MalformedIdnError,
+    ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
     UnsupportedBackendError,
@@ -20,6 +21,7 @@ from wavegen_tool_core import (
     VisaCleanupError,
     WavegenError,
     identify_instrument,
+    list_live_resources,
 )
 
 
@@ -36,6 +38,7 @@ class ExitCode(IntEnum):
     MALFORMED_IDN = 23
     UNSUPPORTED_INSTRUMENT = 24
     VISA_CLEANUP_ERROR = 25
+    RESOURCE_DISCOVERY_ERROR = 26
     INTERNAL_ERROR = 70
 
 
@@ -44,6 +47,7 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (UnsupportedTransportError, ExitCode.UNSUPPORTED_TRANSPORT),
     (UnsupportedConnectionScopeError, ExitCode.UNSUPPORTED_CONNECTION_SCOPE),
     (ResourceManagerError, ExitCode.RESOURCE_MANAGER_ERROR),
+    (ResourceDiscoveryError, ExitCode.RESOURCE_DISCOVERY_ERROR),
     (ResourceOpenError, ExitCode.RESOURCE_OPEN_ERROR),
     (IdnQueryError, ExitCode.IDN_QUERY_ERROR),
     (MalformedIdnError, ExitCode.MALFORMED_IDN),
@@ -81,6 +85,28 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit exactly one JSON object.",
     )
+
+    list_parser = subparsers.add_parser(
+        "list-resources",
+        help="List resources from one explicitly selected live VISA backend.",
+    )
+    list_parser.add_argument(
+        "--live",
+        action="store_true",
+        required=True,
+        help="Acknowledge access to the selected live VISA backend.",
+    )
+    list_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
     return parser
 
 
@@ -88,6 +114,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return a stable process exit code."""
 
     args = build_parser().parse_args(argv)
+    if args.command == "list-resources":
+        return _run_list_resources(args)
+    return _run_identify(args)
+
+
+def _run_identify(args: argparse.Namespace) -> int:
     try:
         result = identify_instrument(args.resource, args.backend)
     except WavegenError as exc:
@@ -107,6 +139,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(_success_payload(result), separators=(",", ":")))
     else:
         print(_human_success(result))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_list_resources(args: argparse.Namespace) -> int:
+    try:
+        result = list_live_resources(args.backend)
+    except WavegenError as exc:
+        if args.json_output:
+            print(json.dumps(_resource_list_error_payload(exc), separators=(",", ":")))
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(json.dumps(_resource_list_internal_error_payload(), separators=(",", ":")))
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(json.dumps(_resource_list_success_payload(result), separators=(",", ":")))
+    else:
+        print(_human_resource_list_success(result))
     return int(ExitCode.SUCCESS)
 
 
@@ -157,6 +212,33 @@ def _internal_error_payload() -> dict[str, object]:
     }
 
 
+def _resource_list_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "backend": result.backend,
+        "resources": list(result.resources),
+        "error": None,
+    }
+
+
+def _resource_list_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "backend": error.backend,
+        "resources": [],
+        "error": _error_text(error),
+    }
+
+
+def _resource_list_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "backend": None,
+        "resources": [],
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
 def _human_success(result: Any) -> str:
     identity = result.identity
     lines = (
@@ -170,6 +252,14 @@ def _human_success(result: Any) -> str:
         f"Canonical model ID: {identity.canonical_model_id}",
         "Model recognized: yes",
     )
+    return "\n".join(lines)
+
+
+def _human_resource_list_success(result: Any) -> str:
+    if not result.resources:
+        return f"No live VISA resources found.\nBackend: {result.backend}"
+    lines = ["Live VISA resources:", f"Backend: {result.backend}"]
+    lines.extend(f"- {resource}" for resource in result.resources)
     return "\n".join(lines)
 
 
