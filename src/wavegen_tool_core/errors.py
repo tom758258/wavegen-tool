@@ -60,6 +60,12 @@ class UnsupportedTransportError(WavegenError):
     code = "unsupported_transport"
 
 
+class UnsupportedConnectionScopeError(WavegenError):
+    """The selected backend and transport combination is unsupported."""
+
+    code = "unsupported_connection_scope"
+
+
 class ResourceManagerError(WavegenError):
     """PyVISA could not create a ResourceManager."""
 

@@ -5,13 +5,16 @@ from wavegen_tool_core.errors import (
     MalformedIdnError,
     ResourceManagerError,
     ResourceOpenError,
+    UnsupportedConnectionScopeError,
     UnsupportedInstrumentError,
+    UnsupportedTransportError,
     VisaCleanupError,
 )
 from wavegen_tool_core.visa import DEFAULT_TIMEOUT_MS, IDN_QUERY, identify_instrument
 
 
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
+TCPIP_RESOURCE = "TCPIP0::192.0.2.10::inst0::INSTR"
 VALID_IDN = "KEYSIGHT TECHNOLOGIES,33521B,MY00000000,1.00-0.00-0.00"
 
 
@@ -73,7 +76,7 @@ def test_system_backend_lifecycle_queries_once_and_closes():
 
     result = identify_instrument(USB_RESOURCE, "system", resource_manager_factory=factory)
 
-    assert factory.calls == [None]
+    assert factory.calls == ["@ivi"]
     assert manager.opened_resources == [USB_RESOURCE]
     assert session.timeout == DEFAULT_TIMEOUT_MS
     assert session.queries == [IDN_QUERY]
@@ -84,14 +87,62 @@ def test_system_backend_lifecycle_queries_once_and_closes():
     assert result.identity.canonical_model_id == "keysight-33521b"
 
 
-def test_pyvisa_py_backend_is_passed_exactly_without_fallback():
+def test_system_backend_accepts_tcpip():
     manager = FakeManager()
     factory = RecordingFactory(manager)
 
-    result = identify_instrument(USB_RESOURCE, "@py", resource_manager_factory=factory)
+    result = identify_instrument(TCPIP_RESOURCE, "system", resource_manager_factory=factory)
+
+    assert factory.calls == ["@ivi"]
+    assert manager.opened_resources == [TCPIP_RESOURCE]
+    assert result.backend == "system"
+    assert result.transport == "tcpip"
+
+
+def test_pyvisa_py_backend_accepts_tcpip_without_fallback():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    result = identify_instrument(TCPIP_RESOURCE, "@py", resource_manager_factory=factory)
 
     assert factory.calls == ["@py"]
+    assert manager.opened_resources == [TCPIP_RESOURCE]
     assert result.backend == "@py"
+    assert result.transport == "tcpip"
+
+
+def test_pyvisa_py_usb_is_rejected_before_resource_manager_creation():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(UnsupportedConnectionScopeError) as error:
+        identify_instrument(USB_RESOURCE, "@py", resource_manager_factory=factory)
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert error.value.backend == "@py"
+    assert error.value.transport == "usb"
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "GPIB0::10::INSTR",
+        "ASRL1::INSTR",
+        "SOME0::VALUE::INSTR",
+    ],
+)
+def test_unsupported_transport_is_rejected_before_resource_manager_creation(resource):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(UnsupportedTransportError):
+        identify_instrument(resource, "system", resource_manager_factory=factory)
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
 
 
 def test_resource_manager_creation_failure_is_distinct():
@@ -104,7 +155,7 @@ def test_resource_manager_creation_failure_is_distinct():
     with pytest.raises(ResourceManagerError) as error:
         identify_instrument(USB_RESOURCE, "system", resource_manager_factory=failing_factory)
 
-    assert calls == [None]
+    assert calls == ["@ivi"]
     assert error.value.backend == "system"
 
 

@@ -22,7 +22,7 @@ class InstrumentIdentity:
     firmware: str
     raw_response: str
     canonical_model_id: str | None = None
-    supported: bool = False
+    model_supported: bool = False
 
 
 def parse_idn(response: str) -> InstrumentIdentity:
@@ -63,7 +63,7 @@ def normalize_model(value: str) -> str:
 
 
 def resolve_supported_identity(identity: InstrumentIdentity) -> InstrumentIdentity:
-    """Resolve only the documented Keysight Technologies 33521B identity."""
+    """Resolve only the documented, recognized Keysight Technologies 33521B identity."""
 
     manufacturer_matches = (
         normalize_manufacturer(identity.manufacturer)
@@ -82,5 +82,5 @@ def resolve_supported_identity(identity: InstrumentIdentity) -> InstrumentIdenti
         manufacturer=CANONICAL_MANUFACTURER,
         model=CANONICAL_MODEL,
         canonical_model_id=CANONICAL_MODEL_ID,
-        supported=True,
+        model_supported=True,
     )

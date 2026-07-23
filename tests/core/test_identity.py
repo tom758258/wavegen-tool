@@ -19,7 +19,8 @@ def test_valid_keysight_33521b_idn_resolves_exact_support():
     assert identity.serial == "MY00000000"
     assert identity.firmware == "1.00-0.00-0.00"
     assert identity.canonical_model_id == CANONICAL_MODEL_ID
-    assert identity.supported is True
+    assert identity.model_supported is True
+    assert not hasattr(identity, "supported")
     assert identity.raw_response == VALID_IDN
 
 

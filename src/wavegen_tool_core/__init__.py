@@ -5,6 +5,7 @@ from wavegen_tool_core.backends import (
     SYSTEM_BACKEND,
     VisaBackend,
     normalize_backend,
+    validate_backend_transport,
 )
 from wavegen_tool_core.errors import (
     IdnQueryError,
@@ -12,6 +13,7 @@ from wavegen_tool_core.errors import (
     ResourceManagerError,
     ResourceOpenError,
     UnsupportedBackendError,
+    UnsupportedConnectionScopeError,
     UnsupportedInstrumentError,
     UnsupportedTransportError,
     VisaCleanupError,
@@ -46,6 +48,7 @@ __all__ = [
     "ResourceManagerError",
     "ResourceOpenError",
     "UnsupportedBackendError",
+    "UnsupportedConnectionScopeError",
     "UnsupportedInstrumentError",
     "UnsupportedTransportError",
     "VisaBackend",
@@ -56,4 +59,5 @@ __all__ = [
     "normalize_backend",
     "parse_idn",
     "resolve_supported_identity",
+    "validate_backend_transport",
 ]

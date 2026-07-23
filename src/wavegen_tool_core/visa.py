@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from wavegen_tool_core.backends import normalize_backend
+from wavegen_tool_core.backends import normalize_backend, validate_backend_transport
 from wavegen_tool_core.errors import (
     IdnQueryError,
     ResourceManagerError,
@@ -48,12 +48,12 @@ class VisaResourceManager(Protocol):
         """Close the ResourceManager."""
 
 
-ResourceManagerFactory = Callable[[str | None], VisaResourceManager]
+ResourceManagerFactory = Callable[[str], VisaResourceManager]
 
 
 @dataclass(frozen=True)
 class IdentificationResult:
-    """A successful exact supported-instrument identification."""
+    """A successful recognized-model identification."""
 
     resource: str
     backend: str
@@ -61,13 +61,11 @@ class IdentificationResult:
     identity: InstrumentIdentity
 
 
-def create_resource_manager(pyvisa_library: str | None) -> VisaResourceManager:
+def create_resource_manager(pyvisa_library: str) -> VisaResourceManager:
     """Create a system or pyvisa-py ResourceManager without fallback."""
 
     import pyvisa
 
-    if pyvisa_library is None:
-        return pyvisa.ResourceManager()
     return pyvisa.ResourceManager(pyvisa_library)
 
 
@@ -77,7 +75,7 @@ def identify_instrument(
     *,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> IdentificationResult:
-    """Open one resource, send only *IDN?, resolve exact support, and close."""
+    """Open one resource, send only *IDN?, resolve exact model recognition, and close."""
 
     backend_selection = normalize_backend(backend)
     resource_name = normalize_resource(resource)
@@ -85,6 +83,7 @@ def identify_instrument(
         transport = classify_transport(resource_name)
     except WavegenError as exc:
         raise exc.attach_context(backend=backend_selection.name)
+    validate_backend_transport(backend_selection, transport)
 
     factory = resource_manager_factory or create_resource_manager
     try:

@@ -14,6 +14,7 @@ from wavegen_tool_core import (
     ResourceManagerError,
     ResourceOpenError,
     UnsupportedBackendError,
+    UnsupportedConnectionScopeError,
     UnsupportedInstrumentError,
     UnsupportedTransportError,
     VisaCleanupError,
@@ -28,6 +29,7 @@ class ExitCode(IntEnum):
     SUCCESS = 0
     CLI_USAGE = 2
     UNSUPPORTED_TRANSPORT = 10
+    UNSUPPORTED_CONNECTION_SCOPE = 11
     RESOURCE_MANAGER_ERROR = 20
     RESOURCE_OPEN_ERROR = 21
     IDN_QUERY_ERROR = 22
@@ -40,6 +42,7 @@ class ExitCode(IntEnum):
 _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (UnsupportedBackendError, ExitCode.CLI_USAGE),
     (UnsupportedTransportError, ExitCode.UNSUPPORTED_TRANSPORT),
+    (UnsupportedConnectionScopeError, ExitCode.UNSUPPORTED_CONNECTION_SCOPE),
     (ResourceManagerError, ExitCode.RESOURCE_MANAGER_ERROR),
     (ResourceOpenError, ExitCode.RESOURCE_OPEN_ERROR),
     (IdnQueryError, ExitCode.IDN_QUERY_ERROR),
@@ -60,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     identify_parser = subparsers.add_parser(
         "identify",
-        help="Query and validate one explicit VISA resource.",
+        help="Query and identify one explicit VISA resource.",
     )
     identify_parser.add_argument(
         "--resource",
@@ -69,9 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     identify_parser.add_argument(
         "--backend",
-        choices=("system", "@py"),
         default="system",
-        help="VISA backend scope (default: system).",
+        help="VISA backend name validated by Core (default: system).",
     )
     identify_parser.add_argument(
         "--json",
@@ -119,7 +121,7 @@ def _success_payload(result: Any) -> dict[str, object]:
         "serial": identity.serial,
         "firmware": identity.firmware,
         "canonical_model_id": identity.canonical_model_id,
-        "supported": identity.supported,
+        "model_supported": identity.model_supported,
         "error": None,
     }
 
@@ -135,7 +137,7 @@ def _error_payload(error: WavegenError) -> dict[str, object]:
         "serial": None,
         "firmware": None,
         "canonical_model_id": getattr(identity, "canonical_model_id", None),
-        "supported": False,
+        "model_supported": False,
         "error": _error_text(error),
     }
 
@@ -150,7 +152,7 @@ def _internal_error_payload() -> dict[str, object]:
         "serial": None,
         "firmware": None,
         "canonical_model_id": None,
-        "supported": False,
+        "model_supported": False,
         "error": "internal_error: unexpected internal failure",
     }
 
@@ -158,7 +160,7 @@ def _internal_error_payload() -> dict[str, object]:
 def _human_success(result: Any) -> str:
     identity = result.identity
     lines = (
-        "Instrument identified and supported.",
+        "Instrument identified as a recognized model.",
         f"Backend: {result.backend}",
         f"Transport: {result.transport}",
         f"Manufacturer: {identity.manufacturer}",
@@ -166,7 +168,7 @@ def _human_success(result: Any) -> str:
         f"Serial: {identity.serial}",
         f"Firmware: {identity.firmware}",
         f"Canonical model ID: {identity.canonical_model_id}",
-        "Supported: yes",
+        "Model recognized: yes",
     )
     return "\n".join(lines)
 
