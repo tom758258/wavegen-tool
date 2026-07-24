@@ -102,12 +102,21 @@ A non-empty response confirms connectivity only. It does not establish that
 the resource is a recognized 33521B or authorize the model for later control.
 Live-only output does not display or save serial numbers, firmware, or raw IDN
 responses. Checks do not retry or switch backends. They do not send cleanup,
-remote/local, reset, or any command other than the single `*IDN?`. After
-reviewing the results, choose a resource and pass it explicitly to identify:
+remote/local, reset, or any command other than the single `*IDN?`.
+
+Copy the selected USB or TCPIP resource into a PowerShell environment variable
+for the current session:
+
+```powershell
+$env:WAVEGEN_TOOL_RESOURCE = "USB0::...::INSTR"
+```
+
+This variable is only a documentation convenience; it is not a hidden CLI
+default. The identify command still receives the selected resource explicitly:
 
 ```powershell
 uv run wavegen-tool identify `
-  --resource "<EXPLICIT_USB_OR_TCPIP_RESOURCE>"
+  --resource "$env:WAVEGEN_TOOL_RESOURCE"
 ```
 
 Neither listing nor identification falls back to another backend.
@@ -120,22 +129,28 @@ the default and explicitly selects the IVI VISA backend.
 System VISA with USB:
 
 ```powershell
+$env:WAVEGEN_TOOL_RESOURCE = "USB0::...::INSTR"
+
 uv run wavegen-tool identify `
-  --resource "USB0::0x0000::0x0000::MY00000000::INSTR"
+  --resource "$env:WAVEGEN_TOOL_RESOURCE"
 ```
 
 System VISA with TCPIP/LAN:
 
 ```powershell
+$env:WAVEGEN_TOOL_RESOURCE = "TCPIP0::...::INSTR"
+
 uv run wavegen-tool identify `
-  --resource "TCPIP0::192.0.2.10::inst0::INSTR"
+  --resource "$env:WAVEGEN_TOOL_RESOURCE"
 ```
 
 Select `pyvisa-py` explicitly for TCPIP/LAN:
 
 ```powershell
+$env:WAVEGEN_TOOL_RESOURCE = "TCPIP0::...::INSTR"
+
 uv run wavegen-tool identify `
-  --resource "TCPIP0::192.0.2.10::inst0::INSTR" `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
   --backend "@py"
 ```
 
@@ -143,7 +158,7 @@ Request one JSON object:
 
 ```powershell
 uv run wavegen-tool identify `
-  --resource "TCPIP0::192.0.2.10::inst0::INSTR" `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
   --backend "@py" `
   --json
 ```
@@ -152,9 +167,8 @@ JSON identify outcomes use `model_supported` to report recognized-model
 resolution. JSON output applies to command outcomes after successful argument
 parsing; argument usage errors retain argparse's standard format.
 
-The resource strings, serial number, and documentation-only IP address above
-are fictional. Raw IDN data remains local to the running process and is not
-written to files or artifacts.
+The placeholder resource values above are fictional. Raw IDN data remains local
+to the running process and is not written to files or artifacts.
 
 ## Safety Boundary
 
