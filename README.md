@@ -23,8 +23,9 @@ and ordinary whitespace differences but does not use prefix, substring, or
 fuzzy matching. A successful identify result preserves the manufacturer
 reported by the instrument while normalizing the model to `33521B`. It does not
 claim that every live backend/transport scope or future control feature is
-hardware-validated. This milestone has not been validated against real
-hardware.
+hardware-validated. This milestone has been validated against an Agilent
+Technologies 33521B through system VISA over USB. Live-only discovery has also
+been validated with USB and ASRL resources.
 
 Waveform configuration, output control, automatic resource scanning, WebUI
 features, and release executables are not implemented. Identification sends
@@ -51,16 +52,11 @@ string and its order, and closes the ResourceManager. It does not open an
 instrument session or send SCPI. Results may include stale resources and
 transports or backend combinations that the identify command does not support.
 
-List raw resources through the system backend, which uses `@ivi`:
+For normal use, omit `--backend`. Wavegen Tool uses the system VISA runtime,
+which selects `@ivi`, by default:
 
 ```powershell
-uv run wavegen-tool list-resources --backend system
-```
-
-Select `pyvisa-py`, which uses `@py`:
-
-```powershell
-uv run wavegen-tool list-resources --backend "@py"
+uv run wavegen-tool list-resources
 ```
 
 Use `--live-only` to open each candidate allowed by the current
@@ -71,9 +67,8 @@ its manufacturer, model, and resource. A non-standard but non-empty response
 is shown as `Unknown instrument`:
 
 ```powershell
-uv run wavegen-tool list-resources --live-only --backend system
-uv run wavegen-tool list-resources --live-only --backend "@py"
-uv run wavegen-tool list-resources --live-only --backend system --json
+uv run wavegen-tool list-resources --live-only
+uv run wavegen-tool list-resources --live-only --json
 ```
 
 System live verification accepts USB, TCPIP/LAN, and ASRL/RS-232 candidates.
@@ -88,7 +83,6 @@ the VISA session defaults unchanged:
 ```powershell
 uv run wavegen-tool list-resources `
   --live-only `
-  --backend system `
   --serial-baud-rate 9600 `
   --serial-read-termination LF `
   --serial-write-termination LF
@@ -97,6 +91,12 @@ uv run wavegen-tool list-resources `
 Termination values are `CR`, `LF`, `CRLF`, and `NONE`; `NONE` means Python
 `None`. Live ASRL discovery does not add ASRL support to identify. Identify
 continues to accept only system USB, system TCPIP/LAN, and `@py` TCPIP/LAN.
+
+For advanced LAN/TCPIP diagnostics, select `pyvisa-py` explicitly:
+
+```powershell
+uv run wavegen-tool list-resources --live-only --backend "@py"
+```
 
 A non-empty response confirms connectivity only. It does not establish that
 the resource is a recognized 33521B or authorize the model for later control.
@@ -107,8 +107,7 @@ reviewing the results, choose a resource and pass it explicitly to identify:
 
 ```powershell
 uv run wavegen-tool identify `
-  --resource "<EXPLICIT_USB_OR_TCPIP_RESOURCE>" `
-  --backend system
+  --resource "<EXPLICIT_USB_OR_TCPIP_RESOURCE>"
 ```
 
 Neither listing nor identification falls back to another backend.
@@ -169,9 +168,9 @@ reset, cleanup, diagnostic, or other commands. No command retries, switches
 backends automatically, configures a waveform, or controls output state. There
 is no automatic or background resource scan.
 
-The `@py` plus USB combination is rejected before the ResourceManager is
-created or any VISA I/O occurs. USB resources remain available through the
-system backend. There is no automatic backend fallback.
+For identify, the `@py` plus USB combination is rejected before the
+ResourceManager is created or any VISA I/O occurs. USB resources remain
+available through the system backend. There is no automatic backend fallback.
 
 Do not run live identification until the resource, backend, and read-only scope
 have been reviewed for the target setup.
