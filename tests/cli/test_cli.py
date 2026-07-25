@@ -635,6 +635,55 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
     }
 
 
+def test_configure_dc_cli_parses_arguments_calls_core_and_emits_json(
+    monkeypatch, capsys
+):
+    calls = []
+
+    def fake_configure_dc(*args):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Agilent Technologies",
+                model="33521B",
+            ),
+            voltage_v=1.5,
+            load="50",
+            output_state="off",
+        )
+
+    monkeypatch.setattr(cli_module, "configure_dc", fake_configure_dc)
+
+    exit_code = main(
+        [
+            "configure-dc",
+            "--resource",
+            USB_RESOURCE,
+            "--voltage-v",
+            "1.5",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [(USB_RESOURCE, "1.5", "50", "system")]
+    assert payload == {
+        "success": True,
+        "action": "configure-dc",
+        "backend": "system",
+        "transport": "usb",
+        "manufacturer": "Agilent Technologies",
+        "model": "33521B",
+        "voltage_v": 1.5,
+        "load": "50",
+        "output_state": "off",
+        "error": None,
+    }
+
+
 @pytest.mark.parametrize("state", ["on", "off"])
 def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
     calls = []

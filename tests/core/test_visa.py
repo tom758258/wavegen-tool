@@ -19,6 +19,7 @@ from wavegen_tool_core.visa import (
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
+    configure_dc,
     configure_pulse,
     configure_ramp,
     configure_sine,
@@ -985,6 +986,67 @@ def test_invalid_pulse_parameters_fail_before_visa_io(
             0,
             edge_time,
             50,
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
+
+
+def test_configure_dc_identifies_then_writes_safe_channel_one_sequence():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_dc(
+        USB_RESOURCE,
+        1.5,
+        50,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:FUNCtion DC",
+        "SOURce1:VOLTage:OFFSet 1.5",
+    ]
+    assert not any(
+        command.startswith(
+            (
+                "SOURce1:FREQuency",
+                "SOURce1:VOLTage ",
+                "SOURce1:VOLTage:UNIT",
+            )
+        )
+        for command in session.writes
+    )
+    assert "OUTPut1 ON" not in session.writes
+    assert result.voltage_v == 1.5
+    assert result.load == "50"
+    assert result.output_state == "off"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("voltage", "load"),
+    [
+        (5.1, 50),
+        (-10.1, "high-z"),
+    ],
+)
+def test_invalid_dc_parameters_fail_before_visa_io(voltage, load):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError):
+        configure_dc(
+            USB_RESOURCE,
+            voltage,
+            load,
             resource_manager_factory=factory,
         )
 

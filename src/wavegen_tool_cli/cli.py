@@ -24,6 +24,7 @@ from wavegen_tool_core import (
     VisaWriteError,
     WaveformParameterError,
     WavegenError,
+    configure_dc,
     configure_pulse,
     configure_ramp,
     configure_sine,
@@ -307,6 +308,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    dc_parser = subparsers.add_parser(
+        "configure-dc",
+        help="Configure a validated Channel 1 DC voltage with output off.",
+    )
+    dc_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    dc_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    dc_parser.add_argument(
+        "--voltage-v",
+        required=True,
+        help="DC output voltage in volts.",
+    )
+    dc_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    dc_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set Channel 1 output on or off.",
@@ -387,6 +420,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_ramp(args)
     if args.command == "configure-pulse":
         return _run_configure_pulse(args)
+    if args.command == "configure-dc":
+        return _run_configure_dc(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "status":
@@ -500,6 +535,18 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.pulse_width_s,
             args.offset_v,
             args.edge_time_s,
+            args.load,
+            args.backend,
+        ),
+    )
+
+
+def _run_configure_dc(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: configure_dc(
+            args.resource,
+            args.voltage_v,
             args.load,
             args.backend,
         ),
@@ -687,6 +734,11 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             pulse_width_s=result.pulse_width_s,
             edge_time_s=result.edge_time_s,
         )
+    if action == "configure-dc":
+        payload.update(
+            voltage_v=result.voltage_v,
+            load=result.load,
+        )
     return payload
 
 
@@ -819,6 +871,8 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 ramp waveform configured with output off."
     elif action == "configure-pulse":
         heading = "Channel 1 pulse waveform configured with output off."
+    elif action == "configure-dc":
+        heading = "Channel 1 DC voltage configured with output off."
     else:
         heading = f"Channel 1 output set to {result.output_state}."
     return "\n".join(

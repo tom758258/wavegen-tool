@@ -189,6 +189,19 @@ class PulseConfigurationResult:
 
 
 @dataclass(frozen=True)
+class DcConfigurationResult:
+    """A successful Channel 1 DC voltage configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    voltage_v: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class OutputResult:
     """A successful explicit Channel 1 output-state change."""
 
@@ -1011,6 +1024,49 @@ def configure_pulse(
         offset_v=offset,
         pulse_width_s=pulse_width,
         edge_time_s=edge_time,
+        load=normalized_load,
+    )
+
+
+def configure_dc(
+    resource: str,
+    voltage_v: object,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> DcConfigurationResult:
+    """Validate and configure a Channel 1 DC voltage while keeping output off."""
+
+    voltage = _normalize_finite_number(voltage_v, "voltage", waveform="DC")
+    normalized_load = _normalize_load(load, waveform="DC")
+    voltage_limit = 5.0 if normalized_load == "50" else 10.0
+    if not -voltage_limit <= voltage <= voltage_limit:
+        raise WaveformParameterError(
+            f"DC voltage for {normalized_load} load must be between "
+            f"{-voltage_limit:g} V and {voltage_limit:g} V."
+        )
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:FUNCtion DC",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(voltage)}",
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return DcConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        voltage_v=voltage,
         load=normalized_load,
     )
 
