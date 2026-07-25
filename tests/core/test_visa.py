@@ -765,10 +765,10 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
 
     result = configure_square(
         USB_RESOURCE,
-        1000,
+        30_000_000,
         0.1,
         0,
-        50,
+        48,
         50,
         resource_manager_factory=RecordingFactory(manager),
     )
@@ -779,16 +779,16 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SQUare",
-        "SOURce1:FREQuency 1000",
-        "SOURce1:FUNCtion:SQUare:DCYCle 50",
+        "SOURce1:FREQuency 30000000",
+        "SOURce1:FUNCtion:SQUare:DCYCle 48",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
     ]
     assert "OUTPut1 ON" not in session.writes
-    assert result.frequency_hz == 1000.0
+    assert result.frequency_hz == 30_000_000.0
     assert result.amplitude_vpp == 0.1
     assert result.offset_v == 0.0
-    assert result.duty_cycle_percent == 50.0
+    assert result.duty_cycle_percent == 48.0
     assert result.load == "50"
     assert result.output_state == "off"
     assert session.close_calls == 1

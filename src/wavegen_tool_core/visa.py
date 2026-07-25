@@ -738,7 +738,19 @@ def configure_square(
 
     minimum_duty = max(0.01, 100 * 16e-9 * frequency)
     maximum_duty = min(99.99, 100 * (1 - 16e-9 * frequency))
-    if not minimum_duty <= duty_cycle <= maximum_duty:
+    below_minimum = duty_cycle < minimum_duty and not math.isclose(
+        duty_cycle,
+        minimum_duty,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+    above_maximum = duty_cycle > maximum_duty and not math.isclose(
+        duty_cycle,
+        maximum_duty,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+    if below_minimum or above_maximum:
         raise WaveformParameterError(
             "Square duty cycle must be between "
             f"{_format_scpi_number(minimum_duty)}% and "
