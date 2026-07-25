@@ -172,6 +172,23 @@ class RampConfigurationResult:
 
 
 @dataclass(frozen=True)
+class PulseConfigurationResult:
+    """A successful Channel 1 pulse configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    pulse_width_s: float
+    edge_time_s: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class OutputResult:
     """A successful explicit Channel 1 output-state change."""
 
@@ -875,6 +892,116 @@ def configure_ramp(
         amplitude_vpp=amplitude,
         offset_v=offset,
         symmetry_percent=symmetry,
+        load=normalized_load,
+    )
+
+
+def configure_pulse(
+    resource: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    pulse_width_s: object,
+    offset_v: object = 0,
+    edge_time_s: object = 10e-9,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> PulseConfigurationResult:
+    """Validate and configure a Channel 1 pulse wave while keeping output off."""
+
+    frequency = _normalize_finite_number(
+        frequency_hz,
+        "frequency",
+        waveform="Pulse",
+    )
+    amplitude = _normalize_finite_number(
+        amplitude_vpp,
+        "amplitude",
+        waveform="Pulse",
+    )
+    pulse_width = _normalize_finite_number(
+        pulse_width_s,
+        "width",
+        waveform="Pulse",
+    )
+    offset = _normalize_finite_number(offset_v, "offset", waveform="Pulse")
+    edge_time = _normalize_finite_number(
+        edge_time_s,
+        "edge time",
+        waveform="Pulse",
+    )
+    normalized_load = _normalize_load(load, waveform="Pulse")
+
+    if not 0.000001 <= frequency <= 30_000_000:
+        raise WaveformParameterError(
+            "Pulse frequency must be between 0.000001 Hz and 30000000 Hz."
+        )
+    if not 8.4e-9 <= edge_time <= 1e-6:
+        raise WaveformParameterError(
+            "Pulse edge time must be between 0.0000000084 s and 0.000001 s."
+        )
+    _validate_vpp_levels(amplitude, offset, normalized_load, "Pulse")
+
+    period = 1 / frequency
+    edge_margin = 1.25 * edge_time
+    minimum_width = max(16e-9, edge_margin)
+    maximum_width = period - max(16e-9, edge_margin)
+    if minimum_width > maximum_width:
+        raise WaveformParameterError(
+            "Pulse frequency and edge time do not allow a valid pulse width."
+        )
+    below_minimum = pulse_width < minimum_width and not math.isclose(
+        pulse_width,
+        minimum_width,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+    above_maximum = pulse_width > maximum_width and not math.isclose(
+        pulse_width,
+        maximum_width,
+        rel_tol=0.0,
+        abs_tol=1e-12,
+    )
+    if below_minimum or above_maximum:
+        raise WaveformParameterError(
+            "Pulse width must be between "
+            f"{_format_scpi_number(minimum_width)} s and "
+            f"{_format_scpi_number(maximum_width)} s at "
+            f"{_format_scpi_number(frequency)} Hz."
+        )
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion PULSe",
+        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
+        "SOURce1:FUNCtion:PULSe:WIDTh "
+        f"{_format_scpi_number(pulse_width)}",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH "
+        f"{_format_scpi_number(edge_time)}",
+        f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return PulseConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        pulse_width_s=pulse_width,
+        edge_time_s=edge_time,
         load=normalized_load,
     )
 

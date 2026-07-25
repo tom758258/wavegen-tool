@@ -24,6 +24,7 @@ from wavegen_tool_core import (
     VisaWriteError,
     WaveformParameterError,
     WavegenError,
+    configure_pulse,
     configure_ramp,
     configure_sine,
     configure_square,
@@ -254,6 +255,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    pulse_parser = subparsers.add_parser(
+        "configure-pulse",
+        help="Configure a validated Channel 1 pulse waveform with output off.",
+    )
+    pulse_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    pulse_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    pulse_parser.add_argument(
+        "--frequency-hz",
+        required=True,
+        help="Pulse frequency in Hz.",
+    )
+    pulse_parser.add_argument(
+        "--amplitude-vpp",
+        required=True,
+        help="Pulse amplitude in Vpp.",
+    )
+    pulse_parser.add_argument(
+        "--pulse-width-s",
+        required=True,
+        help="Pulse width in seconds.",
+    )
+    pulse_parser.add_argument(
+        "--offset-v",
+        default="0",
+        help="DC offset in volts (default: 0).",
+    )
+    pulse_parser.add_argument(
+        "--edge-time-s",
+        default="0.00000001",
+        help="Leading and trailing edge time in seconds (default: 0.00000001).",
+    )
+    pulse_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    pulse_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set Channel 1 output on or off.",
@@ -332,6 +385,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_square(args)
     if args.command == "configure-ramp":
         return _run_configure_ramp(args)
+    if args.command == "configure-pulse":
+        return _run_configure_pulse(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "status":
@@ -429,6 +484,22 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             args.amplitude_vpp,
             args.offset_v,
             args.symmetry_percent,
+            args.load,
+            args.backend,
+        ),
+    )
+
+
+def _run_configure_pulse(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: configure_pulse(
+            args.resource,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.pulse_width_s,
+            args.offset_v,
+            args.edge_time_s,
             args.load,
             args.backend,
         ),
@@ -595,7 +666,12 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "output_state": result.output_state,
         "error": None,
     }
-    if action in {"configure-sine", "configure-square", "configure-ramp"}:
+    if action in {
+        "configure-sine",
+        "configure-square",
+        "configure-ramp",
+        "configure-pulse",
+    }:
         payload.update(
             frequency_hz=result.frequency_hz,
             amplitude_vpp=result.amplitude_vpp,
@@ -606,6 +682,11 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         payload["duty_cycle_percent"] = result.duty_cycle_percent
     if action == "configure-ramp":
         payload["symmetry_percent"] = result.symmetry_percent
+    if action == "configure-pulse":
+        payload.update(
+            pulse_width_s=result.pulse_width_s,
+            edge_time_s=result.edge_time_s,
+        )
     return payload
 
 
@@ -736,6 +817,8 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 square waveform configured with output off."
     elif action == "configure-ramp":
         heading = "Channel 1 ramp waveform configured with output off."
+    elif action == "configure-pulse":
+        heading = "Channel 1 pulse waveform configured with output off."
     else:
         heading = f"Channel 1 output set to {result.output_state}."
     return "\n".join(

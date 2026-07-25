@@ -19,6 +19,7 @@ from wavegen_tool_core.visa import (
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
+    configure_pulse,
     configure_ramp,
     configure_sine,
     configure_square,
@@ -885,6 +886,78 @@ def test_invalid_ramp_parameters_fail_before_visa_io(
             amplitude,
             offset,
             symmetry,
+            50,
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
+
+
+def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_pulse(
+        USB_RESOURCE,
+        1000,
+        0.1,
+        0.0001,
+        0,
+        0.00000001,
+        50,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion PULSe",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:FUNCtion:PULSe:WIDTh 0.0001",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    ]
+    assert "OUTPut1 ON" not in session.writes
+    assert result.frequency_hz == 1000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.pulse_width_s == 0.0001
+    assert result.offset_v == 0.0
+    assert result.edge_time_s == 1e-8
+    assert result.load == "50"
+    assert result.output_state == "off"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("frequency", "pulse_width", "edge_time"),
+    [
+        (30_000_001, 0.0001, 1e-8),
+        (1_000_000, 15e-9, 10e-9),
+        (1000, 0.0001, 8e-9),
+        (1_000_000, 100e-9, 100e-9),
+    ],
+)
+def test_invalid_pulse_parameters_fail_before_visa_io(
+    frequency, pulse_width, edge_time
+):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError):
+        configure_pulse(
+            USB_RESOURCE,
+            frequency,
+            0.1,
+            pulse_width,
+            0,
+            edge_time,
             50,
             resource_manager_factory=factory,
         )

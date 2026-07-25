@@ -3,8 +3,8 @@
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. The
 current milestone supports identification, read-only Channel 1 status, and
-basic Channel 1 sine/square/ramp/output control for the Keysight or Agilent
-33521B.
+basic Channel 1 sine/square/ramp/pulse/output control for the Keysight or
+Agilent 33521B.
 
 ## Current Scope
 
@@ -14,6 +14,7 @@ basic Channel 1 sine/square/ramp/output control for the Keysight or Agilent
   amplitude, and offset
 - Hardware-unvalidated, parameter-validated Channel 1 square configuration
 - Hardware-unvalidated, parameter-validated Channel 1 ramp configuration
+- Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
 - Explicit Channel 1 output on/off control
 - Hardware-unvalidated, read-only Channel 1 status query
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
@@ -33,8 +34,8 @@ reported by the instrument while normalizing the model to `33521B`. It does not
 claim that every live backend/transport scope or control feature is
 hardware-validated. Identification has been hardware-validated against an
 Agilent Technologies 33521B through system VISA over USB. Live-only discovery
-has also been validated with USB and ASRL resources. Sine, square, and ramp
-configuration, output control, and status readback have not yet been
+has also been validated with USB and ASRL resources. Sine, square, ramp, and
+pulse configuration, output control, and status readback have not yet been
 hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
@@ -284,6 +285,35 @@ The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Ramp configuration has not yet been
 hardware-validated.
 
+## Configure a Channel 1 Pulse Wave
+
+Configure a 1 kHz, 0.1 Vpp pulse with a 100 µs width, zero offset, equal 10 ns
+leading and trailing edge times, and a 50-ohm instrument output-load setting:
+
+```powershell
+uv run wavegen-tool configure-pulse `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --pulse-width-s 0.0001 `
+  --offset-v 0 `
+  --edge-time-s 0.00000001 `
+  --load 50
+```
+
+Pulse frequency must be from 0.000001 Hz to 30000000 Hz, pulse width is at
+least 16 ns, and edge time must be from 8.4 ns to 1 µs. This command applies
+the same edge time to the leading and trailing edges. Width must also fit
+within the waveform period and the selected edge-time constraints. The
+amplitude, offset, and output-load setting limits are the same as for the
+other waveform configuration commands.
+
+The command first turns Channel 1 output off and leaves it off. Configuration
+never enables output; only an explicit `output --state on` command can do that.
+The load value is the instrument output-load setting and does not detect or
+verify the physically connected load. Pulse configuration has not yet been
+hardware-validated.
+
 ## Control Channel 1 Output
 
 Output state changes are always explicit. Turn Channel 1 on only after
@@ -325,10 +355,10 @@ The `status` command resolves the exact manufacturer/model identity before its
 read-only Channel 1 queries. It does not write, reset, clear, inspect the error
 queue, or change output state.
 
-`configure-sine`, `configure-square`, and `configure-ramp` first turn Channel 1
-off and leave it off after configuration. They cannot enable output. The
-`output` command changes only the Channel 1 output state and does not
-reconfigure or reset the instrument.
+`configure-sine`, `configure-square`, `configure-ramp`, and `configure-pulse`
+first turn Channel 1 off and leave it off after configuration. They cannot
+enable output. The `output` command changes only the Channel 1 output state and
+does not reconfigure or reset the instrument.
 
 For identify, the `@py` plus USB combination is rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain
@@ -353,5 +383,6 @@ uv run wavegen-tool status --help
 uv run wavegen-tool configure-sine --help
 uv run wavegen-tool configure-square --help
 uv run wavegen-tool configure-ramp --help
+uv run wavegen-tool configure-pulse --help
 uv run wavegen-tool output --help
 ```
