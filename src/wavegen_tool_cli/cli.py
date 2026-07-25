@@ -1,4 +1,4 @@
-"""Console entry point for live VISA listing and read-only identification."""
+"""Console entry point for explicit VISA identification and control."""
 
 from __future__ import annotations
 
@@ -20,10 +20,14 @@ from wavegen_tool_core import (
     UnsupportedInstrumentError,
     UnsupportedTransportError,
     VisaCleanupError,
+    VisaWriteError,
+    WaveformParameterError,
     WavegenError,
+    configure_sine,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
+    set_output,
 )
 
 
@@ -41,6 +45,7 @@ class ExitCode(IntEnum):
     UNSUPPORTED_INSTRUMENT = 24
     VISA_CLEANUP_ERROR = 25
     RESOURCE_DISCOVERY_ERROR = 26
+    VISA_WRITE_ERROR = 27
     INTERNAL_ERROR = 70
 
 
@@ -51,10 +56,12 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (ResourceManagerError, ExitCode.RESOURCE_MANAGER_ERROR),
     (ResourceDiscoveryError, ExitCode.RESOURCE_DISCOVERY_ERROR),
     (ResourceOpenError, ExitCode.RESOURCE_OPEN_ERROR),
+    (WaveformParameterError, ExitCode.CLI_USAGE),
     (IdnQueryError, ExitCode.IDN_QUERY_ERROR),
     (MalformedIdnError, ExitCode.MALFORMED_IDN),
     (UnsupportedInstrumentError, ExitCode.UNSUPPORTED_INSTRUMENT),
     (VisaCleanupError, ExitCode.VISA_CLEANUP_ERROR),
+    (VisaWriteError, ExitCode.VISA_WRITE_ERROR),
 )
 
 
@@ -63,7 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="wavegen-tool",
-        description="Safely identify an explicitly selected waveform generator.",
+        description="Safely identify and control an explicitly selected waveform generator.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -82,6 +89,71 @@ def build_parser() -> argparse.ArgumentParser:
         help="VISA backend name validated by Core (default: system).",
     )
     identify_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    sine_parser = subparsers.add_parser(
+        "configure-sine",
+        help="Configure a validated Channel 1 sine waveform with output off.",
+    )
+    sine_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    sine_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    sine_parser.add_argument("--frequency-hz", required=True, help="Sine frequency in Hz.")
+    sine_parser.add_argument(
+        "--amplitude-vpp",
+        required=True,
+        help="Sine amplitude in Vpp.",
+    )
+    sine_parser.add_argument(
+        "--offset-v",
+        default="0",
+        help="DC offset in volts (default: 0).",
+    )
+    sine_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    sine_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    output_parser = subparsers.add_parser(
+        "output",
+        help="Explicitly set Channel 1 output on or off.",
+    )
+    output_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    output_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    output_parser.add_argument(
+        "--state",
+        choices=("on", "off"),
+        required=True,
+        help="Explicit output state.",
+    )
+    output_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -133,6 +205,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "list-resources":
         return _run_list_resources(args)
+    if args.command == "configure-sine":
+        return _run_configure_sine(args)
+    if args.command == "output":
+        return _run_output(args)
     return _run_identify(args)
 
 
@@ -185,6 +261,65 @@ def _run_list_resources(args: argparse.Namespace) -> int:
         print(json.dumps(_resource_list_success_payload(result), separators=(",", ":")))
     else:
         print(_human_resource_list_success(result, live_only=args.live_only))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_configure_sine(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: configure_sine(
+            args.resource,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.offset_v,
+            args.load,
+            args.backend,
+        ),
+    )
+
+
+def _run_output(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: set_output(args.resource, args.state, args.backend),
+    )
+
+
+def _run_control(args: argparse.Namespace, operation: Any) -> int:
+    try:
+        result = operation()
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _control_error_payload(args.command, exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _control_internal_error_payload(args.command),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _control_success_payload(args.command, result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_control_success(args.command, result))
     return int(ExitCode.SUCCESS)
 
 
@@ -269,6 +404,54 @@ def _resource_list_internal_error_payload() -> dict[str, object]:
     }
 
 
+def _control_success_payload(action: str, result: Any) -> dict[str, object]:
+    payload = {
+        "success": True,
+        "action": action,
+        "backend": result.backend,
+        "transport": result.transport,
+        "manufacturer": result.identity.manufacturer,
+        "model": result.identity.model,
+        "output_state": result.output_state,
+        "error": None,
+    }
+    if action == "configure-sine":
+        payload.update(
+            frequency_hz=result.frequency_hz,
+            amplitude_vpp=result.amplitude_vpp,
+            offset_v=result.offset_v,
+            load=result.load,
+        )
+    return payload
+
+
+def _control_error_payload(action: str, error: WavegenError) -> dict[str, object]:
+    identity = error.identity
+    return {
+        "success": False,
+        "action": action,
+        "backend": error.backend,
+        "transport": error.transport,
+        "manufacturer": getattr(identity, "manufacturer", None),
+        "model": getattr(identity, "model", None),
+        "output_state": None,
+        "error": _error_text(error),
+    }
+
+
+def _control_internal_error_payload(action: str) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": action,
+        "backend": None,
+        "transport": None,
+        "manufacturer": None,
+        "model": None,
+        "output_state": None,
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
 def _human_success(result: Any) -> str:
     identity = result.identity
     lines = (
@@ -302,6 +485,23 @@ def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
         )
         lines.extend((f"- {identity}", f"  Resource: {entry.resource}"))
     return "\n".join(lines)
+
+
+def _human_control_success(action: str, result: Any) -> str:
+    if action == "configure-sine":
+        heading = "Channel 1 sine waveform configured with output off."
+    else:
+        heading = f"Channel 1 output set to {result.output_state}."
+    return "\n".join(
+        (
+            heading,
+            f"Backend: {result.backend}",
+            f"Transport: {result.transport}",
+            f"Manufacturer: {result.identity.manufacturer}",
+            f"Model: {result.identity.model}",
+            f"Output state: {result.output_state}",
+        )
+    )
 
 
 def _human_error(error: WavegenError) -> str:

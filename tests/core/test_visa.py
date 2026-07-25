@@ -10,16 +10,20 @@ from wavegen_tool_core.errors import (
     UnsupportedInstrumentError,
     UnsupportedTransportError,
     VisaCleanupError,
+    VisaWriteError,
+    WaveformParameterError,
 )
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
+    configure_sine,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
     normalize_serial_termination,
+    set_output,
 )
 
 
@@ -30,15 +34,24 @@ VALID_IDN = "KEYSIGHT TECHNOLOGIES,33521B,MY00000000,1.00-0.00-0.00"
 
 
 class FakeSession:
-    def __init__(self, response=VALID_IDN, *, query_error=None, close_error=None):
+    def __init__(
+        self,
+        response=VALID_IDN,
+        *,
+        query_error=None,
+        write_error=None,
+        close_error=None,
+    ):
         self.response = response
         self.query_error = query_error
+        self.write_error = write_error
         self.close_error = close_error
         self.timeout = None
         self.baud_rate = 4800
         self.read_termination = "existing read"
         self.write_termination = "existing write"
         self.queries = []
+        self.writes = []
         self.close_calls = 0
 
     def query(self, command):
@@ -53,7 +66,9 @@ class FakeSession:
             raise self.close_error
 
     def write(self, command):
-        raise AssertionError(f"write must not be called: {command}")
+        self.writes.append(command)
+        if self.write_error is not None:
+            raise self.write_error
 
     def clear(self):
         raise AssertionError("clear must not be called")
@@ -657,3 +672,121 @@ def test_cleanup_only_failure_is_reported(session_close_error, manager_close_err
         identify_instrument(USB_RESOURCE, resource_manager_factory=RecordingFactory(manager))
 
     assert all(item in str(error.value) for item in expected)
+
+
+def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_sine(
+        USB_RESOURCE,
+        1000,
+        0.1,
+        0,
+        50,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion SIN",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    ]
+    assert "OUTPut1 ON" not in session.writes
+    assert result.output_state == "off"
+    assert result.load == "50"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("frequency", "amplitude", "offset", "load"),
+    [
+        (0, 0.1, 0, 50),
+        (30_000_001, 0.1, 0, 50),
+        (1000, 0.0009, 0, 50),
+        (1000, 10.1, 0, 50),
+        (1000, 10, 0.001, 50),
+        (True, 0.1, 0, 50),
+        (float("nan"), 0.1, 0, 50),
+        (float("inf"), 0.1, 0, 50),
+        (float("-inf"), 0.1, 0, 50),
+        ("not-a-number", 0.1, 0, 50),
+    ],
+)
+def test_invalid_sine_parameters_fail_before_visa_io(
+    frequency, amplitude, offset, load
+):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError):
+        configure_sine(
+            USB_RESOURCE,
+            frequency,
+            amplitude,
+            offset,
+            load,
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
+
+
+@pytest.mark.parametrize("state", ["on", "off"])
+def test_output_identifies_then_writes_only_requested_state(state):
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = set_output(
+        USB_RESOURCE,
+        state,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [f"OUTPut1 {state.upper()}"]
+    assert result.output_state == state
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_control_rejects_unsupported_model_before_any_write():
+    session = FakeSession(response="Keysight Technologies,33522B,SERIAL,FIRMWARE")
+    manager = FakeManager(session)
+
+    with pytest.raises(UnsupportedInstrumentError):
+        set_output(
+            USB_RESOURCE,
+            "on",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_control_write_failure_is_domain_error_and_resources_are_closed():
+    session = FakeSession(write_error=RuntimeError("private write detail"))
+    manager = FakeManager(session)
+
+    with pytest.raises(VisaWriteError):
+        set_output(
+            USB_RESOURCE,
+            "off",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.writes == ["OUTPut1 OFF"]
+    assert session.close_calls == 1
+    assert manager.close_calls == 1

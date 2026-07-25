@@ -1,13 +1,17 @@
 # Wavegen Tool
 
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
-selected waveform generators through VISA. The project is in early development;
-the current milestone supports read-only identification of the Keysight 33521B.
+selected waveform generators and performing bounded control through VISA. The
+current milestone supports identification and basic Channel 1 sine/output
+control for the Keysight or Agilent 33521B.
 
 ## Current Scope
 
 - Exact manufacturer-and-model recognition for Keysight Technologies 33521B
   and Agilent Technologies 33521B
+- Validated Channel 1 sine configuration with explicit load, frequency,
+  amplitude, and offset
+- Explicit Channel 1 output on/off control
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
 - The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
@@ -27,10 +31,9 @@ hardware-validated. This milestone has been validated against an Agilent
 Technologies 33521B through system VISA over USB. Live-only discovery has also
 been validated with USB and ASRL resources.
 
-Waveform configuration, output control, automatic resource scanning, WebUI
-features, and release executables are not implemented. Identification sends
-only `*IDN?`; it does not reset the instrument, change settings, or enable an
-output.
+Other waveform types, automatic resource scanning, WebUI features, and release
+executables are not implemented. Identification sends only `*IDN?`; it does
+not reset the instrument, change settings, or enable an output.
 
 ## Requirements and Installation
 
@@ -170,6 +173,56 @@ parsing; argument usage errors retain argparse's standard format.
 The placeholder resource values above are fictional. Raw IDN data remains local
 to the running process and is not written to files or artifacts.
 
+## Configure a Channel 1 Sine Wave
+
+Configure a 1 kHz, 0.1 Vpp sine wave with zero offset into 50 ohms:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --load 50
+```
+
+Use `--load high-z` for a high-impedance load and `--json` for one JSON
+object. The command validates all waveform parameters before opening VISA. It
+then identifies the instrument in the same session, rejects anything except an
+exactly recognized 33521B, turns Channel 1 output off, and applies the settings.
+It never turns the output on.
+
+The supported 33521B sine limits are:
+
+- Frequency: 0.000001 Hz to 30000000 Hz
+- 50-ohm load: 0.001 Vpp to 10 Vpp, with
+  `abs(offset) + amplitude / 2 <= 5 V`
+- High-impedance load: 0.002 Vpp to 20 Vpp, with
+  `abs(offset) + amplitude / 2 <= 10 V`
+
+## Control Channel 1 Output
+
+Output state changes are always explicit. Turn Channel 1 on only after
+reviewing the configured signal and connected load:
+
+```powershell
+uv run wavegen-tool output `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --state on
+```
+
+Turn Channel 1 off:
+
+```powershell
+uv run wavegen-tool output `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --state off
+```
+
+The `output` command identifies the instrument in the same session and writes
+only the requested Channel 1 output state. Only an explicit
+`output --state on` command enables the output.
+
 ## Safety Boundary
 
 The identify command opens only the resource supplied by the user, issues
@@ -178,9 +231,15 @@ listing only returns the backend-reported resource strings; it never opens an
 instrument session or sends SCPI. Live-only listing opens only eligible
 candidates and sends each at most one `*IDN?` query with fixed open/session
 timeouts where applicable. It closes the session without clear, remote/local,
-reset, cleanup, diagnostic, or other commands. No command retries, switches
-backends automatically, configures a waveform, or controls output state. There
-is no automatic or background resource scan.
+reset, cleanup, diagnostic, or other commands. Control commands validate the
+backend and transport, open only the explicit resource, and resolve the exact
+manufacturer/model identity before any write. They use the same session for
+identification and control, do not retry or switch backends, and never send
+`*RST`. There is no automatic or background resource scan.
+
+`configure-sine` first turns Channel 1 off and leaves it off after
+configuration. It cannot enable output. The `output` command changes only the
+Channel 1 output state and does not reconfigure or reset the instrument.
 
 For identify, the `@py` plus USB combination is rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain
@@ -201,4 +260,6 @@ uv run python -c "import wavegen_tool_core; import wavegen_tool_cli; import wave
 uv run wavegen-tool --help
 uv run wavegen-tool list-resources --help
 uv run wavegen-tool identify --help
+uv run wavegen-tool configure-sine --help
+uv run wavegen-tool output --help
 ```

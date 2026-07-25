@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -376,3 +377,90 @@ def test_exit_code_contract_is_centralized():
     assert ExitCode.UNSUPPORTED_INSTRUMENT == 24
     assert ExitCode.VISA_CLEANUP_ERROR == 25
     assert ExitCode.RESOURCE_DISCOVERY_ERROR == 26
+    assert ExitCode.VISA_WRITE_ERROR == 27
+
+
+def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
+    monkeypatch, capsys
+):
+    calls = []
+
+    def fake_configure_sine(*args):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Keysight Technologies",
+                model="33521B",
+            ),
+            frequency_hz=1000.0,
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            load="50",
+            output_state="off",
+        )
+
+    monkeypatch.setattr(cli_module, "configure_sine", fake_configure_sine)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--resource",
+            USB_RESOURCE,
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [(USB_RESOURCE, "1000", "0.1", "0", "50", "system")]
+    assert payload == {
+        "success": True,
+        "action": "configure-sine",
+        "backend": "system",
+        "transport": "usb",
+        "manufacturer": "Keysight Technologies",
+        "model": "33521B",
+        "frequency_hz": 1000.0,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.0,
+        "load": "50",
+        "output_state": "off",
+        "error": None,
+    }
+
+
+@pytest.mark.parametrize("state", ["on", "off"])
+def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
+    calls = []
+
+    def fake_set_output(*args):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Agilent Technologies",
+                model="33521B",
+            ),
+            output_state=state,
+        )
+
+    monkeypatch.setattr(cli_module, "set_output", fake_set_output)
+
+    exit_code = main(
+        ["output", "--resource", USB_RESOURCE, "--state", state, "--json"]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [(USB_RESOURCE, state, "system")]
+    assert payload["action"] == "output"
+    assert payload["manufacturer"] == "Agilent Technologies"
+    assert payload["output_state"] == state
+    assert payload["error"] is None

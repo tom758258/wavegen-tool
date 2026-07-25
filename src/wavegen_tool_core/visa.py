@@ -1,9 +1,10 @@
-"""Safe VISA lifecycles for live resource listing and read-only identification."""
+"""Safe VISA lifecycles for explicit live resource access."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+import math
 from typing import Protocol
 
 from wavegen_tool_core.backends import (
@@ -21,6 +22,8 @@ from wavegen_tool_core.errors import (
     ResourceOpenError,
     UnsupportedTransportError,
     VisaCleanupError,
+    VisaWriteError,
+    WaveformParameterError,
     WavegenError,
 )
 from wavegen_tool_core.identity import (
@@ -51,7 +54,7 @@ _SERIAL_TERMINATION_VALUES = {
 
 
 class VisaSession(Protocol):
-    """Minimum VISA session behavior required for identification."""
+    """Minimum VISA session behavior required by the live VISA paths."""
 
     timeout: int
     baud_rate: int
@@ -60,6 +63,9 @@ class VisaSession(Protocol):
 
     def query(self, command: str) -> str:
         """Return one query response."""
+
+    def write(self, command: str) -> object:
+        """Send one state-changing command."""
 
     def close(self) -> None:
         """Close the session."""
@@ -89,6 +95,32 @@ class IdentificationResult:
     backend: str
     transport: str
     identity: InstrumentIdentity
+
+
+@dataclass(frozen=True)
+class SineConfigurationResult:
+    """A successful Channel 1 sine configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
+class OutputResult:
+    """A successful explicit Channel 1 output-state change."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    output_state: str
 
 
 @dataclass(frozen=True)
@@ -392,6 +424,223 @@ def identify_instrument(
     if result is None:  # pragma: no cover - defensive invariant
         raise RuntimeError("identification completed without a result or error")
     return result
+
+
+def configure_sine(
+    resource: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> SineConfigurationResult:
+    """Validate and configure a Channel 1 sine wave while keeping output off."""
+
+    frequency = _normalize_finite_number(frequency_hz, "frequency")
+    amplitude = _normalize_finite_number(amplitude_vpp, "amplitude")
+    offset = _normalize_finite_number(offset_v, "offset")
+    normalized_load = _normalize_load(load)
+
+    if not 0.000001 <= frequency <= 30_000_000:
+        raise WaveformParameterError(
+            "Sine frequency must be between 0.000001 Hz and 30000000 Hz."
+        )
+
+    if normalized_load == "50":
+        amplitude_min, amplitude_max, voltage_limit = 0.001, 10.0, 5.0
+    else:
+        amplitude_min, amplitude_max, voltage_limit = 0.002, 20.0, 10.0
+    if not amplitude_min <= amplitude <= amplitude_max:
+        raise WaveformParameterError(
+            f"Sine amplitude for {normalized_load} load must be between "
+            f"{amplitude_min:g} Vpp and {amplitude_max:g} Vpp."
+        )
+    if abs(offset) + amplitude / 2 > voltage_limit:
+        raise WaveformParameterError(
+            f"Sine amplitude and offset exceed the {voltage_limit:g} V peak limit "
+            f"for {normalized_load} load."
+        )
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion SIN",
+        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
+        f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        resource_manager_factory=resource_manager_factory,
+    )
+    return SineConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        load=normalized_load,
+    )
+
+
+def set_output(
+    resource: str,
+    state: str,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> OutputResult:
+    """Explicitly set the recognized 33521B Channel 1 output state."""
+
+    if not isinstance(state, str) or state.strip().casefold() not in {"on", "off"}:
+        raise ValueError("output state must be 'on' or 'off'")
+    normalized_state = state.strip().casefold()
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        (f"OUTPut1 {normalized_state.upper()}",),
+        resource_manager_factory=resource_manager_factory,
+    )
+    return OutputResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        output_state=normalized_state,
+    )
+
+
+def _normalize_finite_number(value: object, label: str) -> float:
+    if isinstance(value, bool):
+        raise WaveformParameterError(f"Sine {label} must be a finite number.")
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise WaveformParameterError(
+            f"Sine {label} must be a finite number."
+        ) from exc
+    if not math.isfinite(normalized):
+        raise WaveformParameterError(f"Sine {label} must be a finite number.")
+    return normalized
+
+
+def _normalize_load(value: object) -> str:
+    if isinstance(value, bool):
+        raise WaveformParameterError("Sine load must be 50 or high-z.")
+    if isinstance(value, str):
+        normalized = value.strip().casefold()
+        if normalized in {"50", "high-z"}:
+            return normalized
+    elif value == 50:
+        return "50"
+    raise WaveformParameterError("Sine load must be 50 or high-z.")
+
+
+def _format_scpi_number(value: float) -> str:
+    return format(value, ".15g")
+
+
+def _write_to_supported_33521b(
+    resource: str,
+    backend: str | None,
+    commands: tuple[str, ...],
+    *,
+    resource_manager_factory: ResourceManagerFactory | None,
+) -> IdentificationResult:
+    backend_selection = normalize_backend(backend)
+    resource_name = normalize_resource(resource)
+    try:
+        transport = classify_transport(resource_name)
+    except WavegenError as exc:
+        raise exc.attach_context(backend=backend_selection.name)
+    validate_backend_transport(backend_selection, transport)
+
+    factory = resource_manager_factory or create_resource_manager
+    try:
+        manager = factory(backend_selection.pyvisa_library)
+    except Exception as exc:
+        raise ResourceManagerError(
+            "Could not create the requested VISA ResourceManager.",
+            backend=backend_selection.name,
+            transport=transport,
+        ) from exc
+
+    session: VisaSession | None = None
+    identity: InstrumentIdentity | None = None
+    primary_error: WavegenError | None = None
+    primary_cause: Exception | None = None
+    try:
+        try:
+            session = manager.open_resource(resource_name)
+            session.timeout = DEFAULT_TIMEOUT_MS
+        except Exception as exc:
+            primary_error = ResourceOpenError(
+                "Could not open the explicit VISA resource.",
+                backend=backend_selection.name,
+                transport=transport,
+            )
+            primary_cause = exc
+        else:
+            try:
+                raw_idn = session.query(IDN_QUERY)
+            except Exception as exc:
+                primary_error = IdnQueryError(
+                    "The instrument identification query failed or timed out.",
+                    backend=backend_selection.name,
+                    transport=transport,
+                )
+                primary_cause = exc
+            else:
+                try:
+                    identity = resolve_supported_identity(parse_idn(raw_idn))
+                except WavegenError as exc:
+                    primary_error = exc.attach_context(
+                        backend=backend_selection.name,
+                        transport=transport,
+                    )
+                else:
+                    try:
+                        for command in commands:
+                            session.write(command)
+                    except Exception as exc:
+                        primary_error = VisaWriteError(
+                            "Could not apply the requested instrument control write.",
+                            backend=backend_selection.name,
+                            transport=transport,
+                            identity=identity,
+                        )
+                        primary_cause = exc
+    finally:
+        cleanup_errors = _close_visa_resources(session, manager)
+
+    if primary_error is not None:
+        primary_error.attach_cleanup_errors(cleanup_errors)
+        if primary_cause is not None:
+            raise primary_error from primary_cause
+        raise primary_error
+    if cleanup_errors:
+        raise VisaCleanupError(
+            "VISA cleanup failed: " + "; ".join(cleanup_errors) + ".",
+            backend=backend_selection.name,
+            transport=transport,
+            identity=identity,
+        )
+    if identity is None:  # pragma: no cover - defensive invariant
+        raise RuntimeError("instrument control completed without an identity or error")
+    return IdentificationResult(
+        resource=resource_name,
+        backend=backend_selection.name,
+        transport=transport,
+        identity=identity,
+    )
 
 
 def _close_visa_resources(

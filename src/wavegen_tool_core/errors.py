@@ -90,6 +90,18 @@ class IdnQueryError(WavegenError):
     code = "idn_query_error"
 
 
+class WaveformParameterError(WavegenError):
+    """A waveform parameter cannot be safely applied."""
+
+    code = "waveform_parameter_error"
+
+
+class VisaWriteError(WavegenError):
+    """A validated control write failed."""
+
+    code = "visa_write_error"
+
+
 class MalformedIdnError(WavegenError):
     """The identification response is not exactly four usable fields."""
 
