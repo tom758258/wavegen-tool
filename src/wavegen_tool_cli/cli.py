@@ -15,6 +15,7 @@ from wavegen_tool_core import (
     ResourceManagerError,
     ResourceOpenError,
     SERIAL_TERMINATIONS,
+    StatusQueryError,
     UnsupportedBackendError,
     UnsupportedConnectionScopeError,
     UnsupportedInstrumentError,
@@ -27,6 +28,7 @@ from wavegen_tool_core import (
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
+    query_status,
     set_output,
 )
 
@@ -46,6 +48,7 @@ class ExitCode(IntEnum):
     VISA_CLEANUP_ERROR = 25
     RESOURCE_DISCOVERY_ERROR = 26
     VISA_WRITE_ERROR = 27
+    STATUS_QUERY_ERROR = 28
     INTERNAL_ERROR = 70
 
 
@@ -62,6 +65,7 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (UnsupportedInstrumentError, ExitCode.UNSUPPORTED_INSTRUMENT),
     (VisaCleanupError, ExitCode.VISA_CLEANUP_ERROR),
     (VisaWriteError, ExitCode.VISA_WRITE_ERROR),
+    (StatusQueryError, ExitCode.STATUS_QUERY_ERROR),
 )
 
 
@@ -89,6 +93,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="VISA backend name validated by Core (default: system).",
     )
     identify_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    status_parser = subparsers.add_parser(
+        "status",
+        help="Read Channel 1 status without changing the instrument.",
+    )
+    status_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    status_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    status_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -209,6 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_sine(args)
     if args.command == "output":
         return _run_output(args)
+    if args.command == "status":
+        return _run_status(args)
     return _run_identify(args)
 
 
@@ -283,6 +310,29 @@ def _run_output(args: argparse.Namespace) -> int:
         args,
         lambda: set_output(args.resource, args.state, args.backend),
     )
+
+
+def _run_status(args: argparse.Namespace) -> int:
+    try:
+        result = query_status(args.resource, args.backend)
+    except WavegenError as exc:
+        if args.json_output:
+            print(json.dumps(_status_error_payload(exc), separators=(",", ":")))
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(json.dumps(_status_internal_error_payload(), separators=(",", ":")))
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(json.dumps(_status_success_payload(result), separators=(",", ":")))
+    else:
+        print(_human_status_success(result))
+    return int(ExitCode.SUCCESS)
 
 
 def _run_control(args: argparse.Namespace, operation: Any) -> int:
@@ -452,6 +502,64 @@ def _control_internal_error_payload(action: str) -> dict[str, object]:
     }
 
 
+def _status_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "status",
+        "backend": result.backend,
+        "transport": result.transport,
+        "manufacturer": result.identity.manufacturer,
+        "model": result.identity.model,
+        "output_state": result.output_state,
+        "function": result.function,
+        "frequency_hz": result.frequency_hz,
+        "amplitude": result.amplitude,
+        "amplitude_unit": result.amplitude_unit,
+        "offset_v": result.offset_v,
+        "load": result.load,
+        "error": None,
+    }
+
+
+def _status_error_payload(error: WavegenError) -> dict[str, object]:
+    identity = error.identity
+    return {
+        "success": False,
+        "action": "status",
+        "backend": error.backend,
+        "transport": error.transport,
+        "manufacturer": getattr(identity, "manufacturer", None),
+        "model": getattr(identity, "model", None),
+        "output_state": None,
+        "function": None,
+        "frequency_hz": None,
+        "amplitude": None,
+        "amplitude_unit": None,
+        "offset_v": None,
+        "load": None,
+        "error": _error_text(error),
+    }
+
+
+def _status_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "status",
+        "backend": None,
+        "transport": None,
+        "manufacturer": None,
+        "model": None,
+        "output_state": None,
+        "function": None,
+        "frequency_hz": None,
+        "amplitude": None,
+        "amplitude_unit": None,
+        "offset_v": None,
+        "load": None,
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
 def _human_success(result: Any) -> str:
     identity = result.identity
     lines = (
@@ -500,6 +608,22 @@ def _human_control_success(action: str, result: Any) -> str:
             f"Manufacturer: {result.identity.manufacturer}",
             f"Model: {result.identity.model}",
             f"Output state: {result.output_state}",
+        )
+    )
+
+
+def _human_status_success(result: Any) -> str:
+    return "\n".join(
+        (
+            f"Instrument: {result.identity.manufacturer} {result.identity.model}",
+            f"Backend: {result.backend}",
+            f"Transport: {result.transport}",
+            f"Channel 1 output: {result.output_state}",
+            f"Function: {result.function}",
+            f"Frequency: {result.frequency_hz:g} Hz",
+            f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
+            f"Offset: {result.offset_v:g} V",
+            f"Output-load setting: {result.load}",
         )
     )
 

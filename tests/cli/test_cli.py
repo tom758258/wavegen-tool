@@ -385,6 +385,7 @@ def test_exit_code_contract_is_centralized():
     assert ExitCode.VISA_CLEANUP_ERROR == 25
     assert ExitCode.RESOURCE_DISCOVERY_ERROR == 26
     assert ExitCode.VISA_WRITE_ERROR == 27
+    assert ExitCode.STATUS_QUERY_ERROR == 28
 
 
 def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
@@ -497,3 +498,51 @@ def test_output_on_cleanup_failure_json_preserves_possible_output_state(
     assert payload["output_state"] == "on"
     assert "Channel 1 output may remain on" in payload["error"]
     assert session.writes == ["OUTPut1 ON"]
+
+
+def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, capsys):
+    calls = []
+
+    def fake_query_status(*args):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Agilent Technologies",
+                model="33521B",
+            ),
+            output_state="off",
+            function="SIN",
+            frequency_hz=1000.0,
+            amplitude=0.1,
+            amplitude_unit="VPP",
+            offset_v=0.0,
+            load="50",
+        )
+
+    monkeypatch.setattr(cli_module, "query_status", fake_query_status)
+
+    exit_code = main(
+        ["status", "--resource", USB_RESOURCE, "--json"]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [(USB_RESOURCE, "system")]
+    assert payload == {
+        "success": True,
+        "action": "status",
+        "backend": "system",
+        "transport": "usb",
+        "manufacturer": "Agilent Technologies",
+        "model": "33521B",
+        "output_state": "off",
+        "function": "SIN",
+        "frequency_hz": 1000.0,
+        "amplitude": 0.1,
+        "amplitude_unit": "VPP",
+        "offset_v": 0.0,
+        "load": "50",
+        "error": None,
+    }

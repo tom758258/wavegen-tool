@@ -95,6 +95,12 @@ class IdnQueryError(WavegenError):
     code = "idn_query_error"
 
 
+class StatusQueryError(WavegenError):
+    """A status query failed or returned a malformed response."""
+
+    code = "status_query_error"
+
+
 class WaveformParameterError(WavegenError):
     """A waveform parameter cannot be safely applied."""
 

@@ -20,6 +20,7 @@ from wavegen_tool_core.errors import (
     ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
+    StatusQueryError,
     UnsupportedTransportError,
     VisaCleanupError,
     VisaWriteError,
@@ -42,6 +43,15 @@ from wavegen_tool_core.transport import (
 
 
 IDN_QUERY = "*IDN?"
+STATUS_QUERIES = (
+    "OUTPut1?",
+    "SOURce1:FUNCtion?",
+    "SOURce1:FREQuency?",
+    "SOURce1:VOLTage:UNIT?",
+    "SOURce1:VOLTage?",
+    "SOURce1:VOLTage:OFFSet?",
+    "OUTPut1:LOAD?",
+)
 DEFAULT_TIMEOUT_MS = 5000
 LIVE_VERIFY_TIMEOUT_MS = 1000
 SERIAL_TERMINATIONS = ("CR", "LF", "CRLF", "NONE")
@@ -95,6 +105,23 @@ class IdentificationResult:
     backend: str
     transport: str
     identity: InstrumentIdentity
+
+
+@dataclass(frozen=True)
+class StatusResult:
+    """A successful read-only Channel 1 status readback."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    output_state: str
+    function: str
+    frequency_hz: float
+    amplitude: float
+    amplitude_unit: str
+    offset_v: float
+    load: str
 
 
 @dataclass(frozen=True)
@@ -424,6 +451,183 @@ def identify_instrument(
     if result is None:  # pragma: no cover - defensive invariant
         raise RuntimeError("identification completed without a result or error")
     return result
+
+
+def query_status(
+    resource: str,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> StatusResult:
+    """Read Channel 1 status from one exactly recognized 33521B."""
+
+    backend_selection = normalize_backend(backend)
+    resource_name = normalize_resource(resource)
+    try:
+        transport = classify_transport(resource_name)
+    except WavegenError as exc:
+        raise exc.attach_context(backend=backend_selection.name)
+    validate_backend_transport(backend_selection, transport)
+
+    factory = resource_manager_factory or create_resource_manager
+    try:
+        manager = factory(backend_selection.pyvisa_library)
+    except Exception as exc:
+        raise ResourceManagerError(
+            "Could not create the requested VISA ResourceManager.",
+            backend=backend_selection.name,
+            transport=transport,
+        ) from exc
+
+    session: VisaSession | None = None
+    identity: InstrumentIdentity | None = None
+    result: StatusResult | None = None
+    primary_error: WavegenError | None = None
+    primary_cause: Exception | None = None
+    try:
+        try:
+            session = manager.open_resource(resource_name)
+            session.timeout = DEFAULT_TIMEOUT_MS
+        except Exception as exc:
+            primary_error = ResourceOpenError(
+                "Could not open the explicit VISA resource.",
+                backend=backend_selection.name,
+                transport=transport,
+            )
+            primary_cause = exc
+        else:
+            try:
+                raw_idn = session.query(IDN_QUERY)
+            except Exception as exc:
+                primary_error = IdnQueryError(
+                    "The instrument identification query failed or timed out.",
+                    backend=backend_selection.name,
+                    transport=transport,
+                )
+                primary_cause = exc
+            else:
+                try:
+                    identity = resolve_supported_identity(parse_idn(raw_idn))
+                except WavegenError as exc:
+                    primary_error = exc.attach_context(
+                        backend=backend_selection.name,
+                        transport=transport,
+                    )
+                else:
+                    responses: dict[str, str] = {}
+                    for command in STATUS_QUERIES:
+                        try:
+                            responses[command] = session.query(command)
+                        except Exception as exc:
+                            primary_error = StatusQueryError(
+                                f"Status query {command} failed or timed out.",
+                                backend=backend_selection.name,
+                                transport=transport,
+                                identity=identity,
+                            )
+                            primary_cause = exc
+                            break
+                    if primary_error is None:
+                        try:
+                            result = StatusResult(
+                                resource=resource_name,
+                                backend=backend_selection.name,
+                                transport=transport,
+                                identity=identity,
+                                output_state=_parse_status_output(
+                                    responses["OUTPut1?"]
+                                ),
+                                function=_parse_status_function(
+                                    responses["SOURce1:FUNCtion?"]
+                                ),
+                                frequency_hz=_parse_status_number(
+                                    responses["SOURce1:FREQuency?"],
+                                    "frequency",
+                                ),
+                                amplitude_unit=_parse_status_unit(
+                                    responses["SOURce1:VOLTage:UNIT?"]
+                                ),
+                                amplitude=_parse_status_number(
+                                    responses["SOURce1:VOLTage?"],
+                                    "amplitude",
+                                ),
+                                offset_v=_parse_status_number(
+                                    responses["SOURce1:VOLTage:OFFSet?"],
+                                    "offset",
+                                ),
+                                load=_parse_status_load(
+                                    responses["OUTPut1:LOAD?"]
+                                ),
+                            )
+                        except StatusQueryError as exc:
+                            primary_error = exc.attach_context(
+                                backend=backend_selection.name,
+                                transport=transport,
+                                identity=identity,
+                            )
+    finally:
+        cleanup_errors = _close_visa_resources(session, manager)
+
+    if primary_error is not None:
+        primary_error.attach_cleanup_errors(cleanup_errors)
+        if primary_cause is not None:
+            raise primary_error from primary_cause
+        raise primary_error
+    if cleanup_errors:
+        raise VisaCleanupError(
+            "VISA cleanup failed: " + "; ".join(cleanup_errors) + ".",
+            backend=backend_selection.name,
+            transport=transport,
+            identity=identity,
+        )
+    if result is None:  # pragma: no cover - defensive invariant
+        raise RuntimeError("status query completed without a result or error")
+    return result
+
+
+def _parse_status_text(response: object, field: str) -> str:
+    if not isinstance(response, str) or not response.strip():
+        raise StatusQueryError(f"Malformed status response for {field}.")
+    return response.strip()
+
+
+def _parse_status_output(response: object) -> str:
+    value = _parse_status_text(response, "output state")
+    try:
+        return {"0": "off", "1": "on"}[value]
+    except KeyError as exc:
+        raise StatusQueryError(
+            "Malformed status response for output state."
+        ) from exc
+
+
+def _parse_status_function(response: object) -> str:
+    return _parse_status_text(response, "function").upper()
+
+
+def _parse_status_number(response: object, field: str) -> float:
+    value = _parse_status_text(response, field)
+    try:
+        number = float(value)
+    except (ValueError, OverflowError) as exc:
+        raise StatusQueryError(f"Malformed status response for {field}.") from exc
+    if not math.isfinite(number):
+        raise StatusQueryError(f"Malformed status response for {field}.")
+    return number
+
+
+def _parse_status_unit(response: object) -> str:
+    unit = _parse_status_text(response, "amplitude unit").upper()
+    if unit not in {"VPP", "VRMS", "DBM"}:
+        raise StatusQueryError("Malformed status response for amplitude unit.")
+    return unit
+
+
+def _parse_status_load(response: object) -> str:
+    load = _parse_status_number(response, "output-load setting")
+    if load >= 9e37:
+        return "high-z"
+    return _format_scpi_number(load)
 
 
 def configure_sine(

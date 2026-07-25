@@ -2,8 +2,8 @@
 
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. The
-current milestone supports identification and basic Channel 1 sine/output
-control for the Keysight or Agilent 33521B.
+current milestone supports identification, read-only Channel 1 status, and
+basic Channel 1 sine/output control for the Keysight or Agilent 33521B.
 
 ## Current Scope
 
@@ -12,6 +12,7 @@ control for the Keysight or Agilent 33521B.
 - Parameter-validated Channel 1 sine configuration with explicit load, frequency,
   amplitude, and offset
 - Explicit Channel 1 output on/off control
+- Hardware-unvalidated, read-only Channel 1 status query
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
 - The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
@@ -29,8 +30,8 @@ reported by the instrument while normalizing the model to `33521B`. It does not
 claim that every live backend/transport scope or control feature is
 hardware-validated. Identification has been hardware-validated against an
 Agilent Technologies 33521B through system VISA over USB. Live-only discovery
-has also been validated with USB and ASRL resources. Sine configuration and
-output control have not yet been hardware-validated.
+has also been validated with USB and ASRL resources. Sine configuration,
+output control, and status readback have not yet been hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -174,6 +175,29 @@ parsing; argument usage errors retain argparse's standard format.
 The placeholder resource values above are fictional. Raw IDN data remains local
 to the running process and is not written to files or artifacts.
 
+## Read Channel 1 Status
+
+Read the current Channel 1 status without changing the instrument:
+
+```powershell
+uv run wavegen-tool status `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE"
+```
+
+Add `--json` to request one JSON object:
+
+```powershell
+uv run wavegen-tool status `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --json
+```
+
+Status reports the Channel 1 output state, function, frequency, amplitude and
+current amplitude unit, offset, and instrument output-load setting. It does not
+modify settings or turn the output on or off. The output-load setting does not
+detect or verify the physically connected load. Status readback has not yet
+been hardware-validated.
+
 ## Configure a Channel 1 Sine Wave
 
 Configure a 1 kHz, 0.1 Vpp sine wave with zero offset and set the instrument's
@@ -240,6 +264,10 @@ manufacturer/model identity before any write. They use the same session for
 identification and control, do not retry or switch backends, and never send
 `*RST`. There is no automatic or background resource scan.
 
+The `status` command resolves the exact manufacturer/model identity before its
+read-only Channel 1 queries. It does not write, reset, clear, inspect the error
+queue, or change output state.
+
 `configure-sine` first turns Channel 1 off and leaves it off after
 configuration. It cannot enable output. The `output` command changes only the
 Channel 1 output state and does not reconfigure or reset the instrument.
@@ -263,6 +291,7 @@ uv run python -c "import wavegen_tool_core; import wavegen_tool_cli; import wave
 uv run wavegen-tool --help
 uv run wavegen-tool list-resources --help
 uv run wavegen-tool identify --help
+uv run wavegen-tool status --help
 uv run wavegen-tool configure-sine --help
 uv run wavegen-tool output --help
 ```

@@ -6,6 +6,7 @@ from wavegen_tool_core.errors import (
     ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
+    StatusQueryError,
     UnsupportedConnectionScopeError,
     UnsupportedInstrumentError,
     UnsupportedTransportError,
@@ -23,6 +24,7 @@ from wavegen_tool_core.visa import (
     list_resources,
     normalize_serial_baud_rate,
     normalize_serial_termination,
+    query_status,
     set_output,
 )
 
@@ -31,6 +33,15 @@ USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
 TCPIP_RESOURCE = "TCPIP0::192.0.2.10::inst0::INSTR"
 ASRL_RESOURCE = "ASRL6::INSTR"
 VALID_IDN = "KEYSIGHT TECHNOLOGIES,33521B,MY00000000,1.00-0.00-0.00"
+STATUS_RESPONSES = {
+    "OUTPut1?": " 0 ",
+    "SOURce1:FUNCtion?": " sin ",
+    "SOURce1:FREQuency?": "1.000000000000000E+03",
+    "SOURce1:VOLTage:UNIT?": " vpp ",
+    "SOURce1:VOLTage?": "1.000000000000000E-01",
+    "SOURce1:VOLTage:OFFSet?": "0.000000000000000E+00",
+    "OUTPut1:LOAD?": "9.900000000000000E+37",
+}
 
 
 class FakeSession:
@@ -39,11 +50,15 @@ class FakeSession:
         response=VALID_IDN,
         *,
         query_error=None,
+        responses_by_command=None,
+        query_errors_by_command=None,
         write_error=None,
         close_error=None,
     ):
         self.response = response
         self.query_error = query_error
+        self.responses_by_command = responses_by_command or {}
+        self.query_errors_by_command = query_errors_by_command or {}
         self.write_error = write_error
         self.close_error = close_error
         self.timeout = None
@@ -56,9 +71,11 @@ class FakeSession:
 
     def query(self, command):
         self.queries.append(command)
+        if command in self.query_errors_by_command:
+            raise self.query_errors_by_command[command]
         if self.query_error is not None:
             raise self.query_error
-        return self.response
+        return self.responses_by_command.get(command, self.response)
 
     def close(self):
         self.close_calls += 1
@@ -825,3 +842,94 @@ def test_invalid_output_state_is_domain_error_before_visa_io():
     assert manager.opened_resources == []
     assert manager.session.queries == []
     assert manager.session.writes == []
+
+
+def test_status_uses_one_session_and_parses_read_only_channel_one_state():
+    session = FakeSession(
+        response="Agilent Technologies,33521B,SERIAL,FIRMWARE",
+        responses_by_command=STATUS_RESPONSES,
+    )
+    manager = FakeManager(session)
+    factory = RecordingFactory(manager)
+
+    result = query_status(
+        USB_RESOURCE,
+        resource_manager_factory=factory,
+    )
+
+    assert factory.calls == ["@ivi"]
+    assert manager.opened_resources == [USB_RESOURCE]
+    assert session.queries == [
+        IDN_QUERY,
+        "OUTPut1?",
+        "SOURce1:FUNCtion?",
+        "SOURce1:FREQuency?",
+        "SOURce1:VOLTage:UNIT?",
+        "SOURce1:VOLTage?",
+        "SOURce1:VOLTage:OFFSet?",
+        "OUTPut1:LOAD?",
+    ]
+    assert session.writes == []
+    assert result.identity.manufacturer == "Agilent Technologies"
+    assert result.output_state == "off"
+    assert result.function == "SIN"
+    assert result.frequency_hz == 1000.0
+    assert result.amplitude == 0.1
+    assert result.amplitude_unit == "VPP"
+    assert result.offset_v == 0.0
+    assert result.load == "high-z"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("frequency_response", "query_error"),
+    [
+        ("not-a-number", None),
+        ("1000", TimeoutError("private status timeout")),
+    ],
+)
+def test_status_query_or_numeric_parse_failure_is_domain_error_and_closes(
+    frequency_response, query_error
+):
+    responses = dict(STATUS_RESPONSES)
+    responses["SOURce1:FREQuency?"] = frequency_response
+    query_errors = (
+        {"SOURce1:FREQuency?": query_error}
+        if query_error is not None
+        else {}
+    )
+    session = FakeSession(
+        responses_by_command=responses,
+        query_errors_by_command=query_errors,
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(StatusQueryError):
+        query_status(
+            USB_RESOURCE,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.writes == []
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_status_rejects_unsupported_model_before_status_queries():
+    session = FakeSession(
+        response="Keysight Technologies,33522B,SERIAL,FIRMWARE",
+        responses_by_command=STATUS_RESPONSES,
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(UnsupportedInstrumentError):
+        query_status(
+            USB_RESOURCE,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
