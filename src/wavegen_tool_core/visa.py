@@ -947,7 +947,16 @@ def configure_pulse(
     edge_margin = 1.25 * edge_time
     minimum_width = max(16e-9, edge_margin)
     maximum_width = period - max(16e-9, edge_margin)
-    if minimum_width > maximum_width:
+    invalid_width_window = (
+        minimum_width > maximum_width
+        and not math.isclose(
+            minimum_width,
+            maximum_width,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        )
+    )
+    if invalid_width_window:
         raise WaveformParameterError(
             "Pulse frequency and edge time do not allow a valid pulse width."
         )

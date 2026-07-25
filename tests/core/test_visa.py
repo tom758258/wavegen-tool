@@ -935,6 +935,32 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
+def test_configure_pulse_accepts_float_equal_width_window_boundary():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_pulse(
+        USB_RESOURCE,
+        13_333_333.333333336,
+        0.1,
+        37.5e-9,
+        0,
+        30e-9,
+        50,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes[0] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in session.writes
+    assert result.frequency_hz == 13_333_333.333333336
+    assert result.pulse_width_s == 37.5e-9
+    assert result.edge_time_s == 30e-9
+    assert result.output_state == "off"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
 @pytest.mark.parametrize(
     ("frequency", "pulse_width", "edge_time"),
     [
