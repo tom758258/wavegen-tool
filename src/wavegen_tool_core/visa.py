@@ -140,6 +140,22 @@ class SineConfigurationResult:
 
 
 @dataclass(frozen=True)
+class SquareConfigurationResult:
+    """A successful Channel 1 square configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    duty_cycle_percent: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class OutputResult:
     """A successful explicit Channel 1 output-state change."""
 
@@ -652,20 +668,7 @@ def configure_sine(
             "Sine frequency must be between 0.000001 Hz and 30000000 Hz."
         )
 
-    if normalized_load == "50":
-        amplitude_min, amplitude_max, voltage_limit = 0.001, 10.0, 5.0
-    else:
-        amplitude_min, amplitude_max, voltage_limit = 0.002, 20.0, 10.0
-    if not amplitude_min <= amplitude <= amplitude_max:
-        raise WaveformParameterError(
-            f"Sine amplitude for {normalized_load} load must be between "
-            f"{amplitude_min:g} Vpp and {amplitude_max:g} Vpp."
-        )
-    if abs(offset) + amplitude / 2 > voltage_limit:
-        raise WaveformParameterError(
-            f"Sine amplitude and offset exceed the {voltage_limit:g} V peak limit "
-            f"for {normalized_load} load."
-        )
+    _validate_vpp_levels(amplitude, offset, normalized_load, "Sine")
 
     load_command = "50" if normalized_load == "50" else "INF"
     commands = (
@@ -692,6 +695,85 @@ def configure_sine(
         frequency_hz=frequency,
         amplitude_vpp=amplitude,
         offset_v=offset,
+        load=normalized_load,
+    )
+
+
+def configure_square(
+    resource: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    duty_cycle_percent: object = 50,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> SquareConfigurationResult:
+    """Validate and configure a Channel 1 square wave while keeping output off."""
+
+    frequency = _normalize_finite_number(
+        frequency_hz,
+        "frequency",
+        waveform="Square",
+    )
+    amplitude = _normalize_finite_number(
+        amplitude_vpp,
+        "amplitude",
+        waveform="Square",
+    )
+    offset = _normalize_finite_number(offset_v, "offset", waveform="Square")
+    duty_cycle = _normalize_finite_number(
+        duty_cycle_percent,
+        "duty cycle",
+        waveform="Square",
+    )
+    normalized_load = _normalize_load(load, waveform="Square")
+
+    if not 0.000001 <= frequency <= 30_000_000:
+        raise WaveformParameterError(
+            "Square frequency must be between 0.000001 Hz and 30000000 Hz."
+        )
+    _validate_vpp_levels(amplitude, offset, normalized_load, "Square")
+
+    minimum_duty = max(0.01, 100 * 16e-9 * frequency)
+    maximum_duty = min(99.99, 100 * (1 - 16e-9 * frequency))
+    if not minimum_duty <= duty_cycle <= maximum_duty:
+        raise WaveformParameterError(
+            "Square duty cycle must be between "
+            f"{_format_scpi_number(minimum_duty)}% and "
+            f"{_format_scpi_number(maximum_duty)}% at "
+            f"{_format_scpi_number(frequency)} Hz."
+        )
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion SQUare",
+        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
+        "SOURce1:FUNCtion:SQUare:DCYCle "
+        f"{_format_scpi_number(duty_cycle)}",
+        f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return SquareConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        duty_cycle_percent=duty_cycle,
         load=normalized_load,
     )
 
@@ -724,30 +806,61 @@ def set_output(
     )
 
 
-def _normalize_finite_number(value: object, label: str) -> float:
+def _normalize_finite_number(
+    value: object,
+    label: str,
+    *,
+    waveform: str = "Sine",
+) -> float:
     if isinstance(value, bool):
-        raise WaveformParameterError(f"Sine {label} must be a finite number.")
+        raise WaveformParameterError(
+            f"{waveform} {label} must be a finite number."
+        )
     try:
         normalized = float(value)
     except (TypeError, ValueError, OverflowError) as exc:
         raise WaveformParameterError(
-            f"Sine {label} must be a finite number."
+            f"{waveform} {label} must be a finite number."
         ) from exc
     if not math.isfinite(normalized):
-        raise WaveformParameterError(f"Sine {label} must be a finite number.")
+        raise WaveformParameterError(
+            f"{waveform} {label} must be a finite number."
+        )
     return normalized
 
 
-def _normalize_load(value: object) -> str:
+def _normalize_load(value: object, *, waveform: str = "Sine") -> str:
     if isinstance(value, bool):
-        raise WaveformParameterError("Sine load must be 50 or high-z.")
+        raise WaveformParameterError(f"{waveform} load must be 50 or high-z.")
     if isinstance(value, str):
         normalized = value.strip().casefold()
         if normalized in {"50", "high-z"}:
             return normalized
     elif value == 50:
         return "50"
-    raise WaveformParameterError("Sine load must be 50 or high-z.")
+    raise WaveformParameterError(f"{waveform} load must be 50 or high-z.")
+
+
+def _validate_vpp_levels(
+    amplitude: float,
+    offset: float,
+    load: str,
+    waveform: str,
+) -> None:
+    if load == "50":
+        amplitude_min, amplitude_max, voltage_limit = 0.001, 10.0, 5.0
+    else:
+        amplitude_min, amplitude_max, voltage_limit = 0.002, 20.0, 10.0
+    if not amplitude_min <= amplitude <= amplitude_max:
+        raise WaveformParameterError(
+            f"{waveform} amplitude for {load} load must be between "
+            f"{amplitude_min:g} Vpp and {amplitude_max:g} Vpp."
+        )
+    if abs(offset) + amplitude / 2 > voltage_limit:
+        raise WaveformParameterError(
+            f"{waveform} amplitude and offset exceed the "
+            f"{voltage_limit:g} V peak limit for {load} load."
+        )
 
 
 def _format_scpi_number(value: float) -> str:

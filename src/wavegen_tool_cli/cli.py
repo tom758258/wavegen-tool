@@ -25,6 +25,7 @@ from wavegen_tool_core import (
     WaveformParameterError,
     WavegenError,
     configure_sine,
+    configure_square,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -158,6 +159,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    square_parser = subparsers.add_parser(
+        "configure-square",
+        help="Configure a validated Channel 1 square waveform with output off.",
+    )
+    square_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    square_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    square_parser.add_argument(
+        "--frequency-hz",
+        required=True,
+        help="Square frequency in Hz.",
+    )
+    square_parser.add_argument(
+        "--amplitude-vpp",
+        required=True,
+        help="Square amplitude in Vpp.",
+    )
+    square_parser.add_argument(
+        "--offset-v",
+        default="0",
+        help="DC offset in volts (default: 0).",
+    )
+    square_parser.add_argument(
+        "--duty-cycle-percent",
+        default="50",
+        help="Square duty cycle percentage (default: 50).",
+    )
+    square_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    square_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set Channel 1 output on or off.",
@@ -232,6 +280,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_list_resources(args)
     if args.command == "configure-sine":
         return _run_configure_sine(args)
+    if args.command == "configure-square":
+        return _run_configure_square(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "status":
@@ -299,6 +349,21 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             args.frequency_hz,
             args.amplitude_vpp,
             args.offset_v,
+            args.load,
+            args.backend,
+        ),
+    )
+
+
+def _run_configure_square(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: configure_square(
+            args.resource,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.offset_v,
+            args.duty_cycle_percent,
             args.load,
             args.backend,
         ),
@@ -465,13 +530,15 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "output_state": result.output_state,
         "error": None,
     }
-    if action == "configure-sine":
+    if action in {"configure-sine", "configure-square"}:
         payload.update(
             frequency_hz=result.frequency_hz,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
             load=result.load,
         )
+    if action == "configure-square":
+        payload["duty_cycle_percent"] = result.duty_cycle_percent
     return payload
 
 
@@ -598,6 +665,8 @@ def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
 def _human_control_success(action: str, result: Any) -> str:
     if action == "configure-sine":
         heading = "Channel 1 sine waveform configured with output off."
+    elif action == "configure-square":
+        heading = "Channel 1 square waveform configured with output off."
     else:
         heading = f"Channel 1 output set to {result.output_state}."
     return "\n".join(

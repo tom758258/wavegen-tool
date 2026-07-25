@@ -3,7 +3,7 @@
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. The
 current milestone supports identification, read-only Channel 1 status, and
-basic Channel 1 sine/output control for the Keysight or Agilent 33521B.
+basic Channel 1 sine/square/output control for the Keysight or Agilent 33521B.
 
 ## Current Scope
 
@@ -11,6 +11,7 @@ basic Channel 1 sine/output control for the Keysight or Agilent 33521B.
   and Agilent Technologies 33521B
 - Parameter-validated Channel 1 sine configuration with explicit load, frequency,
   amplitude, and offset
+- Hardware-unvalidated, parameter-validated Channel 1 square configuration
 - Explicit Channel 1 output on/off control
 - Hardware-unvalidated, read-only Channel 1 status query
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
@@ -30,8 +31,9 @@ reported by the instrument while normalizing the model to `33521B`. It does not
 claim that every live backend/transport scope or control feature is
 hardware-validated. Identification has been hardware-validated against an
 Agilent Technologies 33521B through system VISA over USB. Live-only discovery
-has also been validated with USB and ASRL resources. Sine configuration,
-output control, and status readback have not yet been hardware-validated.
+has also been validated with USB and ASRL resources. Sine and square
+configuration, output control, and status readback have not yet been
+hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -227,6 +229,32 @@ The supported 33521B sine limits are:
 - High-impedance load setting: 0.002 Vpp to 20 Vpp, with
   `abs(offset) + amplitude / 2 <= 10 V`
 
+## Configure a Channel 1 Square Wave
+
+Configure a 1 kHz, 0.1 Vpp square wave with zero offset, 50% duty cycle,
+and a 50-ohm instrument output-load setting:
+
+```powershell
+uv run wavegen-tool configure-square `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --duty-cycle-percent 50 `
+  --load 50
+```
+
+The command first turns Channel 1 output off and leaves it off. It never
+enables output; only an explicit `output --state on` command can do that.
+Square frequency must be from 0.000001 Hz to 30000000 Hz. Duty cycle has a
+basic range of 0.01% to 99.99%, narrowed at higher frequencies by the 16 ns
+minimum pulse width. The amplitude, offset, and output-load setting limits are
+the same as for sine configuration above.
+
+The load value is the instrument output-load setting and does not detect or
+verify the physically connected load. Square configuration has not yet been
+hardware-validated.
+
 ## Control Channel 1 Output
 
 Output state changes are always explicit. Turn Channel 1 on only after
@@ -268,9 +296,10 @@ The `status` command resolves the exact manufacturer/model identity before its
 read-only Channel 1 queries. It does not write, reset, clear, inspect the error
 queue, or change output state.
 
-`configure-sine` first turns Channel 1 off and leaves it off after
-configuration. It cannot enable output. The `output` command changes only the
-Channel 1 output state and does not reconfigure or reset the instrument.
+`configure-sine` and `configure-square` first turn Channel 1 off and leave it
+off after configuration. They cannot enable output. The `output` command
+changes only the Channel 1 output state and does not reconfigure or reset the
+instrument.
 
 For identify, the `@py` plus USB combination is rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain
@@ -293,5 +322,6 @@ uv run wavegen-tool list-resources --help
 uv run wavegen-tool identify --help
 uv run wavegen-tool status --help
 uv run wavegen-tool configure-sine --help
+uv run wavegen-tool configure-square --help
 uv run wavegen-tool output --help
 ```

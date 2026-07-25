@@ -443,6 +443,65 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
     }
 
 
+def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
+    monkeypatch, capsys
+):
+    calls = []
+
+    def fake_configure_square(*args):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Keysight Technologies",
+                model="33521B",
+            ),
+            frequency_hz=1000.0,
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            duty_cycle_percent=50.0,
+            load="50",
+            output_state="off",
+        )
+
+    monkeypatch.setattr(cli_module, "configure_square", fake_configure_square)
+
+    exit_code = main(
+        [
+            "configure-square",
+            "--resource",
+            USB_RESOURCE,
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [
+        (USB_RESOURCE, "1000", "0.1", "0", "50", "50", "system")
+    ]
+    assert payload == {
+        "success": True,
+        "action": "configure-square",
+        "backend": "system",
+        "transport": "usb",
+        "manufacturer": "Keysight Technologies",
+        "model": "33521B",
+        "frequency_hz": 1000.0,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.0,
+        "duty_cycle_percent": 50.0,
+        "load": "50",
+        "output_state": "off",
+        "error": None,
+    }
+
+
 @pytest.mark.parametrize("state", ["on", "off"])
 def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
     calls = []
