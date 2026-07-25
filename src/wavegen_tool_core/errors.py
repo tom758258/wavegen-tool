@@ -17,11 +17,13 @@ class WavegenError(Exception):
         backend: str | None = None,
         transport: str | None = None,
         identity: Any = None,
+        output_state: str | None = None,
     ) -> None:
         super().__init__(message)
         self.backend = backend
         self.transport = transport
         self.identity = identity
+        self.output_state = output_state
         self.cleanup_errors: tuple[str, ...] = ()
 
     def attach_context(
@@ -30,6 +32,7 @@ class WavegenError(Exception):
         backend: str | None = None,
         transport: str | None = None,
         identity: Any = None,
+        output_state: str | None = None,
     ) -> WavegenError:
         """Add available diagnostic context without replacing existing values."""
 
@@ -39,6 +42,8 @@ class WavegenError(Exception):
             self.transport = transport
         if self.identity is None:
             self.identity = identity
+        if self.output_state is None:
+            self.output_state = output_state
         return self
 
     def attach_cleanup_errors(self, errors: tuple[str, ...]) -> WavegenError:

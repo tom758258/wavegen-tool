@@ -14,11 +14,13 @@ VALID_IDN = "Keysight Technologies,33521B,MY00000000,1.00-0.00-0.00"
 
 
 class FakeSession:
-    def __init__(self, response=VALID_IDN, *, query_error=None):
+    def __init__(self, response=VALID_IDN, *, query_error=None, close_error=None):
         self.response = response
         self.query_error = query_error
+        self.close_error = close_error
         self.timeout = None
         self.queries = []
+        self.writes = []
         self.closed = False
 
     def query(self, command):
@@ -29,6 +31,11 @@ class FakeSession:
 
     def close(self):
         self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
+
+    def write(self, command):
+        self.writes.append(command)
 
 
 class FakeManager:
@@ -464,3 +471,29 @@ def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
     assert payload["manufacturer"] == "Agilent Technologies"
     assert payload["output_state"] == state
     assert payload["error"] is None
+
+
+def test_output_on_cleanup_failure_json_preserves_possible_output_state(
+    monkeypatch, capsys
+):
+    session = FakeSession(close_error=RuntimeError("private close detail"))
+    manager = FakeManager(session)
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "output",
+            "--resource",
+            USB_RESOURCE,
+            "--state",
+            "on",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.VISA_CLEANUP_ERROR
+    assert payload["success"] is False
+    assert payload["output_state"] == "on"
+    assert "Channel 1 output may remain on" in payload["error"]
+    assert session.writes == ["OUTPut1 ON"]

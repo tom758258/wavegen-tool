@@ -9,7 +9,7 @@ control for the Keysight or Agilent 33521B.
 
 - Exact manufacturer-and-model recognition for Keysight Technologies 33521B
   and Agilent Technologies 33521B
-- Validated Channel 1 sine configuration with explicit load, frequency,
+- Parameter-validated Channel 1 sine configuration with explicit load, frequency,
   amplitude, and offset
 - Explicit Channel 1 output on/off control
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
@@ -26,10 +26,11 @@ These are the only recognized manufacturer/model pairs. Matching ignores case
 and ordinary whitespace differences but does not use prefix, substring, or
 fuzzy matching. A successful identify result preserves the manufacturer
 reported by the instrument while normalizing the model to `33521B`. It does not
-claim that every live backend/transport scope or future control feature is
-hardware-validated. This milestone has been validated against an Agilent
-Technologies 33521B through system VISA over USB. Live-only discovery has also
-been validated with USB and ASRL resources.
+claim that every live backend/transport scope or control feature is
+hardware-validated. Identification has been hardware-validated against an
+Agilent Technologies 33521B through system VISA over USB. Live-only discovery
+has also been validated with USB and ASRL resources. Sine configuration and
+output control have not yet been hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -175,7 +176,8 @@ to the running process and is not written to files or artifacts.
 
 ## Configure a Channel 1 Sine Wave
 
-Configure a 1 kHz, 0.1 Vpp sine wave with zero offset into 50 ohms:
+Configure a 1 kHz, 0.1 Vpp sine wave with zero offset and set the instrument's
+output-load setting to 50 ohms:
 
 ```powershell
 uv run wavegen-tool configure-sine `
@@ -186,18 +188,19 @@ uv run wavegen-tool configure-sine `
   --load 50
 ```
 
-Use `--load high-z` for a high-impedance load and `--json` for one JSON
-object. The command validates all waveform parameters before opening VISA. It
-then identifies the instrument in the same session, rejects anything except an
-exactly recognized 33521B, turns Channel 1 output off, and applies the settings.
-It never turns the output on.
+Use `--load high-z` to set the instrument's output-load setting to high
+impedance and `--json` for one JSON object. The load setting does not detect or
+verify the physically connected load. The command validates all waveform
+parameters before opening VISA. It then identifies the instrument in the same
+session, rejects anything except an exactly recognized 33521B, turns Channel 1
+output off, and applies the settings. It never turns the output on.
 
 The supported 33521B sine limits are:
 
 - Frequency: 0.000001 Hz to 30000000 Hz
-- 50-ohm load: 0.001 Vpp to 10 Vpp, with
+- 50-ohm load setting: 0.001 Vpp to 10 Vpp, with
   `abs(offset) + amplitude / 2 <= 5 V`
-- High-impedance load: 0.002 Vpp to 20 Vpp, with
+- High-impedance load setting: 0.002 Vpp to 20 Vpp, with
   `abs(offset) + amplitude / 2 <= 10 V`
 
 ## Control Channel 1 Output

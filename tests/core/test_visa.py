@@ -790,3 +790,38 @@ def test_control_write_failure_is_domain_error_and_resources_are_closed():
     assert session.writes == ["OUTPut1 OFF"]
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_output_on_cleanup_failure_preserves_possible_output_state():
+    session = FakeSession(close_error=RuntimeError("session close failed"))
+    manager = FakeManager(session)
+
+    with pytest.raises(VisaCleanupError) as error:
+        set_output(
+            USB_RESOURCE,
+            "on",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert error.value.output_state == "on"
+    assert "Channel 1 output may remain on" in str(error.value)
+    assert session.writes == ["OUTPut1 ON"]
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_invalid_output_state_is_domain_error_before_visa_io():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="on or off"):
+        set_output(
+            USB_RESOURCE,
+            "enabled",
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []

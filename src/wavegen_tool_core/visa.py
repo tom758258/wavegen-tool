@@ -477,6 +477,7 @@ def configure_sine(
         resource,
         backend,
         commands,
+        output_state_after_writes="off",
         resource_manager_factory=resource_manager_factory,
     )
     return SineConfigurationResult(
@@ -501,12 +502,13 @@ def set_output(
     """Explicitly set the recognized 33521B Channel 1 output state."""
 
     if not isinstance(state, str) or state.strip().casefold() not in {"on", "off"}:
-        raise ValueError("output state must be 'on' or 'off'")
+        raise WaveformParameterError("Output state must be on or off.")
     normalized_state = state.strip().casefold()
     context = _write_to_supported_33521b(
         resource,
         backend,
         (f"OUTPut1 {normalized_state.upper()}",),
+        output_state_after_writes=normalized_state,
         resource_manager_factory=resource_manager_factory,
     )
     return OutputResult(
@@ -553,6 +555,7 @@ def _write_to_supported_33521b(
     backend: str | None,
     commands: tuple[str, ...],
     *,
+    output_state_after_writes: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None,
 ) -> IdentificationResult:
     backend_selection = normalize_backend(backend)
@@ -627,11 +630,21 @@ def _write_to_supported_33521b(
             raise primary_error from primary_cause
         raise primary_error
     if cleanup_errors:
+        if output_state_after_writes == "on":
+            message = (
+                "The Channel 1 output ON command was sent, but VISA cleanup failed; "
+                "Channel 1 output may remain on: "
+                + "; ".join(cleanup_errors)
+                + "."
+            )
+        else:
+            message = "VISA cleanup failed: " + "; ".join(cleanup_errors) + "."
         raise VisaCleanupError(
-            "VISA cleanup failed: " + "; ".join(cleanup_errors) + ".",
+            message,
             backend=backend_selection.name,
             transport=transport,
             identity=identity,
+            output_state=output_state_after_writes,
         )
     if identity is None:  # pragma: no cover - defensive invariant
         raise RuntimeError("instrument control completed without an identity or error")

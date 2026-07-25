@@ -434,7 +434,7 @@ def _control_error_payload(action: str, error: WavegenError) -> dict[str, object
         "transport": error.transport,
         "manufacturer": getattr(identity, "manufacturer", None),
         "model": getattr(identity, "model", None),
-        "output_state": None,
+        "output_state": error.output_state,
         "error": _error_text(error),
     }
 
