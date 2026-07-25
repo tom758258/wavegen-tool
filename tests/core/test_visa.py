@@ -19,6 +19,7 @@ from wavegen_tool_core.visa import (
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
+    configure_ramp,
     configure_sine,
     configure_square,
     identify_instrument,
@@ -816,6 +817,74 @@ def test_invalid_square_parameters_fail_before_visa_io(
             amplitude,
             offset,
             duty_cycle,
+            50,
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
+
+
+def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_ramp(
+        USB_RESOURCE,
+        1000,
+        0.1,
+        0,
+        25,
+        50,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion RAMP",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:FUNCtion:RAMP:SYMMetry 25",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    ]
+    assert "OUTPut1 ON" not in session.writes
+    assert result.frequency_hz == 1000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.offset_v == 0.0
+    assert result.symmetry_percent == 25.0
+    assert result.load == "50"
+    assert result.output_state == "off"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("frequency", "amplitude", "offset", "symmetry"),
+    [
+        (200_001, 0.1, 0, 25),
+        (1000, 0.1, 0, -0.1),
+        (1000, 0.1, 0, 100.1),
+        (1000, 10, 0.1, 25),
+    ],
+)
+def test_invalid_ramp_parameters_fail_before_visa_io(
+    frequency, amplitude, offset, symmetry
+):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError):
+        configure_ramp(
+            USB_RESOURCE,
+            frequency,
+            amplitude,
+            offset,
+            symmetry,
             50,
             resource_manager_factory=factory,
         )

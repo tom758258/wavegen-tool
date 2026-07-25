@@ -24,6 +24,7 @@ from wavegen_tool_core import (
     VisaWriteError,
     WaveformParameterError,
     WavegenError,
+    configure_ramp,
     configure_sine,
     configure_square,
     identify_instrument,
@@ -206,6 +207,53 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    ramp_parser = subparsers.add_parser(
+        "configure-ramp",
+        help="Configure a validated Channel 1 ramp waveform with output off.",
+    )
+    ramp_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    ramp_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    ramp_parser.add_argument(
+        "--frequency-hz",
+        required=True,
+        help="Ramp frequency in Hz.",
+    )
+    ramp_parser.add_argument(
+        "--amplitude-vpp",
+        required=True,
+        help="Ramp amplitude in Vpp.",
+    )
+    ramp_parser.add_argument(
+        "--offset-v",
+        default="0",
+        help="DC offset in volts (default: 0).",
+    )
+    ramp_parser.add_argument(
+        "--symmetry-percent",
+        default="100",
+        help="Ramp symmetry percentage (default: 100).",
+    )
+    ramp_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    ramp_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set Channel 1 output on or off.",
@@ -282,6 +330,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_sine(args)
     if args.command == "configure-square":
         return _run_configure_square(args)
+    if args.command == "configure-ramp":
+        return _run_configure_ramp(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "status":
@@ -364,6 +414,21 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             args.amplitude_vpp,
             args.offset_v,
             args.duty_cycle_percent,
+            args.load,
+            args.backend,
+        ),
+    )
+
+
+def _run_configure_ramp(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: configure_ramp(
+            args.resource,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.offset_v,
+            args.symmetry_percent,
             args.load,
             args.backend,
         ),
@@ -530,7 +595,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "output_state": result.output_state,
         "error": None,
     }
-    if action in {"configure-sine", "configure-square"}:
+    if action in {"configure-sine", "configure-square", "configure-ramp"}:
         payload.update(
             frequency_hz=result.frequency_hz,
             amplitude_vpp=result.amplitude_vpp,
@@ -539,6 +604,8 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         )
     if action == "configure-square":
         payload["duty_cycle_percent"] = result.duty_cycle_percent
+    if action == "configure-ramp":
+        payload["symmetry_percent"] = result.symmetry_percent
     return payload
 
 
@@ -667,6 +734,8 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 sine waveform configured with output off."
     elif action == "configure-square":
         heading = "Channel 1 square waveform configured with output off."
+    elif action == "configure-ramp":
+        heading = "Channel 1 ramp waveform configured with output off."
     else:
         heading = f"Channel 1 output set to {result.output_state}."
     return "\n".join(

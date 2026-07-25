@@ -156,6 +156,22 @@ class SquareConfigurationResult:
 
 
 @dataclass(frozen=True)
+class RampConfigurationResult:
+    """A successful Channel 1 ramp configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    symmetry_percent: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class OutputResult:
     """A successful explicit Channel 1 output-state change."""
 
@@ -786,6 +802,79 @@ def configure_square(
         amplitude_vpp=amplitude,
         offset_v=offset,
         duty_cycle_percent=duty_cycle,
+        load=normalized_load,
+    )
+
+
+def configure_ramp(
+    resource: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    symmetry_percent: object = 100,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> RampConfigurationResult:
+    """Validate and configure a Channel 1 ramp wave while keeping output off."""
+
+    frequency = _normalize_finite_number(
+        frequency_hz,
+        "frequency",
+        waveform="Ramp",
+    )
+    amplitude = _normalize_finite_number(
+        amplitude_vpp,
+        "amplitude",
+        waveform="Ramp",
+    )
+    offset = _normalize_finite_number(offset_v, "offset", waveform="Ramp")
+    symmetry = _normalize_finite_number(
+        symmetry_percent,
+        "symmetry",
+        waveform="Ramp",
+    )
+    normalized_load = _normalize_load(load, waveform="Ramp")
+
+    if not 0.000001 <= frequency <= 200_000:
+        raise WaveformParameterError(
+            "Ramp frequency must be between 0.000001 Hz and 200000 Hz."
+        )
+    if not 0 <= symmetry <= 100:
+        raise WaveformParameterError(
+            "Ramp symmetry must be between 0% and 100%."
+        )
+    _validate_vpp_levels(amplitude, offset, normalized_load, "Ramp")
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion RAMP",
+        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
+        "SOURce1:FUNCtion:RAMP:SYMMetry "
+        f"{_format_scpi_number(symmetry)}",
+        f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return RampConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        symmetry_percent=symmetry,
         load=normalized_load,
     )
 
