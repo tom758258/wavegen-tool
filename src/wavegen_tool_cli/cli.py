@@ -26,6 +26,7 @@ from wavegen_tool_core import (
     WavegenError,
     configure_dc,
     configure_noise,
+    configure_prbs,
     configure_pulse,
     configure_ramp,
     configure_sine,
@@ -383,6 +384,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    prbs_parser = subparsers.add_parser(
+        "configure-prbs",
+        help="Configure a validated Channel 1 PRBS waveform with output off.",
+    )
+    prbs_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    prbs_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    prbs_parser.add_argument(
+        "--bit-rate-bps",
+        required=True,
+        help="PRBS bit rate in bits per second.",
+    )
+    prbs_parser.add_argument(
+        "--amplitude-vpp",
+        required=True,
+        help="PRBS amplitude in Vpp.",
+    )
+    prbs_parser.add_argument(
+        "--pattern",
+        choices=("pn7", "pn9", "pn11", "pn15", "pn20", "pn23"),
+        default="pn7",
+        help="PRBS pattern (default: pn7).",
+    )
+    prbs_parser.add_argument(
+        "--offset-v",
+        default="0",
+        help="DC offset in volts (default: 0).",
+    )
+    prbs_parser.add_argument(
+        "--edge-time-s",
+        default="0.0000000084",
+        help="Common rising and falling edge time in seconds (default: 8.4e-9).",
+    )
+    prbs_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    prbs_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set Channel 1 output on or off.",
@@ -467,6 +521,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_dc(args)
     if args.command == "configure-noise":
         return _run_configure_noise(args)
+    if args.command == "configure-prbs":
+        return _run_configure_prbs(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "status":
@@ -606,6 +662,22 @@ def _run_configure_noise(args: argparse.Namespace) -> int:
             args.amplitude_vpp,
             args.bandwidth_hz,
             args.offset_v,
+            args.load,
+            args.backend,
+        ),
+    )
+
+
+def _run_configure_prbs(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: configure_prbs(
+            args.resource,
+            args.bit_rate_bps,
+            args.amplitude_vpp,
+            args.pattern,
+            args.offset_v,
+            args.edge_time_s,
             args.load,
             args.backend,
         ),
@@ -805,6 +877,15 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             bandwidth_hz=result.bandwidth_hz,
             load=result.load,
         )
+    if action == "configure-prbs":
+        payload.update(
+            bit_rate_bps=result.bit_rate_bps,
+            amplitude_vpp=result.amplitude_vpp,
+            pattern=result.pattern,
+            offset_v=result.offset_v,
+            edge_time_s=result.edge_time_s,
+            load=result.load,
+        )
     return payload
 
 
@@ -941,6 +1022,8 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 DC voltage configured with output off."
     elif action == "configure-noise":
         heading = "Channel 1 noise waveform configured with output off."
+    elif action == "configure-prbs":
+        heading = "Channel 1 PRBS waveform configured with output off."
     else:
         heading = f"Channel 1 output set to {result.output_state}."
     return "\n".join(

@@ -21,6 +21,7 @@ from wavegen_tool_core.visa import (
     ResourceListEntry,
     configure_dc,
     configure_noise,
+    configure_prbs,
     configure_pulse,
     configure_ramp,
     configure_sine,
@@ -1104,6 +1105,81 @@ def test_invalid_noise_bandwidth_fails_before_visa_io(bandwidth):
             0.1,
             bandwidth,
             0,
+            50,
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
+
+
+def test_configure_prbs_identifies_then_writes_safe_channel_one_sequence():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_prbs(
+        USB_RESOURCE,
+        1_000_000,
+        0.1,
+        " pn15 ",
+        0,
+        1e-8,
+        50,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion PRBS",
+        "SOURce1:FUNCtion:PRBS:BRATe 1000000",
+        "SOURce1:FUNCtion:PRBS:DATA PN15",
+        "SOURce1:FUNCtion:PRBS:TRANsition:BOTH 1e-08",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    ]
+    assert not any(
+        command.startswith("SOURce1:FREQuency") for command in session.writes
+    )
+    assert "OUTPut1 ON" not in session.writes
+    assert result.bit_rate_bps == 1_000_000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.pattern == "PN15"
+    assert result.offset_v == 0.0
+    assert result.edge_time_s == 1e-8
+    assert result.load == "50"
+    assert result.output_state == "off"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("bit_rate", "pattern", "edge_time"),
+    [
+        (50_000_001, "PN7", 8.4e-9),
+        (1_000_000, "PN13", 8.4e-9),
+        (1_000_000, "PN7", 8e-9),
+        (50_000_000, "PN7", 21e-9),
+    ],
+)
+def test_invalid_prbs_parameters_fail_before_visa_io(
+    bit_rate, pattern, edge_time
+):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError):
+        configure_prbs(
+            USB_RESOURCE,
+            bit_rate,
+            0.1,
+            pattern,
+            0,
+            edge_time,
             50,
             resource_manager_factory=factory,
         )

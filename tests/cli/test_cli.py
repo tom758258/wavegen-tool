@@ -742,6 +742,80 @@ def test_configure_noise_cli_parses_arguments_calls_core_and_emits_json(
     assert "frequency_hz" not in payload
 
 
+def test_configure_prbs_cli_parses_arguments_calls_core_and_emits_json(
+    monkeypatch, capsys
+):
+    calls = []
+
+    def fake_configure_prbs(*args):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Agilent Technologies",
+                model="33521B",
+            ),
+            bit_rate_bps=1_000_000.0,
+            amplitude_vpp=0.1,
+            pattern="PN15",
+            offset_v=0.0,
+            edge_time_s=1e-8,
+            load="50",
+            output_state="off",
+        )
+
+    monkeypatch.setattr(cli_module, "configure_prbs", fake_configure_prbs)
+
+    exit_code = main(
+        [
+            "configure-prbs",
+            "--resource",
+            USB_RESOURCE,
+            "--bit-rate-bps",
+            "1000000",
+            "--amplitude-vpp",
+            "0.1",
+            "--pattern",
+            "pn15",
+            "--edge-time-s",
+            "0.00000001",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [
+        (
+            USB_RESOURCE,
+            "1000000",
+            "0.1",
+            "pn15",
+            "0",
+            "0.00000001",
+            "50",
+            "system",
+        )
+    ]
+    assert payload == {
+        "success": True,
+        "action": "configure-prbs",
+        "backend": "system",
+        "transport": "usb",
+        "manufacturer": "Agilent Technologies",
+        "model": "33521B",
+        "bit_rate_bps": 1_000_000.0,
+        "amplitude_vpp": 0.1,
+        "pattern": "PN15",
+        "offset_v": 0.0,
+        "edge_time_s": 1e-8,
+        "load": "50",
+        "output_state": "off",
+        "error": None,
+    }
+
+
 @pytest.mark.parametrize("state", ["on", "off"])
 def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
     calls = []

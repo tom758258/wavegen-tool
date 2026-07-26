@@ -3,8 +3,8 @@
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. The
 current milestone supports identification, read-only Channel 1 status, and
-basic Channel 1 sine/square/ramp/pulse/DC/noise/output control for the Keysight or
-Agilent 33521B.
+basic Channel 1 sine/square/ramp/pulse/DC/noise/PRBS/output control for the
+Keysight or Agilent 33521B.
 
 ## Current Scope
 
@@ -17,6 +17,7 @@ Agilent 33521B.
 - Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
 - Hardware-unvalidated, parameter-validated Channel 1 DC voltage configuration
 - Hardware-unvalidated, parameter-validated Channel 1 noise configuration
+- Hardware-unvalidated, parameter-validated Channel 1 PRBS configuration
 - Explicit Channel 1 output on/off control
 - Hardware-unvalidated, read-only Channel 1 status query
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
@@ -37,8 +38,8 @@ claim that every live backend/transport scope or control feature is
 hardware-validated. Identification has been hardware-validated against an
 Agilent Technologies 33521B through system VISA over USB. Live-only discovery
 has also been validated with USB and ASRL resources. Sine, square, ramp, pulse,
-DC, and noise configuration, output control, and status readback have not yet
-been hardware-validated.
+DC, noise, and PRBS configuration, output control, and status readback have not
+yet been hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -366,6 +367,37 @@ The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Noise configuration has not yet been
 hardware-validated.
 
+## Configure a Channel 1 PRBS Waveform
+
+Configure a 1 Mbps PN15 waveform with 0.1 Vpp amplitude, zero offset, equal
+10 ns rising and falling edge times, and a 50-ohm instrument output-load
+setting:
+
+```powershell
+uv run wavegen-tool configure-prbs `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --bit-rate-bps 1000000 `
+  --amplitude-vpp 0.1 `
+  --pattern pn15 `
+  --offset-v 0 `
+  --edge-time-s 0.00000001 `
+  --load 50
+```
+
+Bit rate must be from 0.001 bit/s to 50000000 bit/s. Supported patterns are
+PN7, PN9, PN11, PN15, PN20, and PN23. The common rising and falling edge time
+must be from 8.4 ns to 1 µs and must fit within one bit period. With the
+50-ohm load setting, amplitude must be from 0.001 Vpp to 10 Vpp and
+`abs(offset) + amplitude / 2` must not exceed 5 V. With the high-impedance
+setting, amplitude must be from 0.002 Vpp to 20 Vpp and the same expression
+must not exceed 10 V.
+
+The command first turns Channel 1 output off and leaves it off. Configuration
+never enables output; only an explicit `output --state on` command can do that.
+The load value is the instrument output-load setting and does not detect or
+verify the physically connected load. PRBS configuration has not yet been
+hardware-validated.
+
 ## Control Channel 1 Output
 
 Output state changes are always explicit. Turn Channel 1 on only after
@@ -408,10 +440,10 @@ read-only Channel 1 queries. It does not write, reset, clear, inspect the error
 queue, or change output state.
 
 `configure-sine`, `configure-square`, `configure-ramp`, `configure-pulse`,
-`configure-dc`, and `configure-noise` first turn Channel 1 off and leave it off
-after configuration. They cannot enable output. The `output` command changes
-only the Channel 1 output state and does not reconfigure or reset the
-instrument.
+`configure-dc`, `configure-noise`, and `configure-prbs` first turn Channel 1
+off and leave it off after configuration. They cannot enable output. The
+`output` command changes only the Channel 1 output state and does not
+reconfigure or reset the instrument.
 
 For identify, the `@py` plus USB combination is rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain
@@ -439,5 +471,6 @@ uv run wavegen-tool configure-ramp --help
 uv run wavegen-tool configure-pulse --help
 uv run wavegen-tool configure-dc --help
 uv run wavegen-tool configure-noise --help
+uv run wavegen-tool configure-prbs --help
 uv run wavegen-tool output --help
 ```

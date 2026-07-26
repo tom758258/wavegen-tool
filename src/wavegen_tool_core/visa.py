@@ -217,6 +217,23 @@ class NoiseConfigurationResult:
 
 
 @dataclass(frozen=True)
+class PrbsConfigurationResult:
+    """A successful Channel 1 PRBS configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    bit_rate_bps: float
+    amplitude_vpp: float
+    pattern: str
+    offset_v: float
+    edge_time_s: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class OutputResult:
     """A successful explicit Channel 1 output-state change."""
 
@@ -1143,6 +1160,95 @@ def configure_noise(
         amplitude_vpp=amplitude,
         offset_v=offset,
         bandwidth_hz=bandwidth,
+        load=normalized_load,
+    )
+
+
+def configure_prbs(
+    resource: str,
+    bit_rate_bps: object,
+    amplitude_vpp: object,
+    pattern: object = "PN7",
+    offset_v: object = 0,
+    edge_time_s: object = 8.4e-9,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> PrbsConfigurationResult:
+    """Validate and configure Channel 1 PRBS while keeping output off."""
+
+    bit_rate = _normalize_finite_number(
+        bit_rate_bps,
+        "bit rate",
+        waveform="PRBS",
+    )
+    amplitude = _normalize_finite_number(
+        amplitude_vpp,
+        "amplitude",
+        waveform="PRBS",
+    )
+    offset = _normalize_finite_number(offset_v, "offset", waveform="PRBS")
+    edge_time = _normalize_finite_number(
+        edge_time_s,
+        "edge time",
+        waveform="PRBS",
+    )
+    normalized_load = _normalize_load(load, waveform="PRBS")
+
+    if not 0.001 <= bit_rate <= 50_000_000:
+        raise WaveformParameterError(
+            "PRBS bit rate must be between 0.001 bit/s and 50000000 bit/s."
+        )
+    if not isinstance(pattern, str):
+        raise WaveformParameterError(
+            "PRBS pattern must be PN7, PN9, PN11, PN15, PN20, or PN23."
+        )
+    normalized_pattern = pattern.strip().upper()
+    if normalized_pattern not in {"PN7", "PN9", "PN11", "PN15", "PN20", "PN23"}:
+        raise WaveformParameterError(
+            "PRBS pattern must be PN7, PN9, PN11, PN15, PN20, or PN23."
+        )
+    if not 8.4e-9 <= edge_time <= 1e-6:
+        raise WaveformParameterError(
+            "PRBS edge time must be between 8.4e-9 s and 1e-6 s."
+        )
+    if edge_time > 1 / bit_rate:
+        raise WaveformParameterError(
+            "PRBS edge time must fit within the selected bit period."
+        )
+    _validate_vpp_levels(amplitude, offset, normalized_load, "PRBS")
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion PRBS",
+        f"SOURce1:FUNCtion:PRBS:BRATe {_format_scpi_number(bit_rate)}",
+        f"SOURce1:FUNCtion:PRBS:DATA {normalized_pattern}",
+        "SOURce1:FUNCtion:PRBS:TRANsition:BOTH "
+        f"{_format_scpi_number(edge_time)}",
+        f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return PrbsConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        bit_rate_bps=bit_rate,
+        amplitude_vpp=amplitude,
+        pattern=normalized_pattern,
+        offset_v=offset,
+        edge_time_s=edge_time,
         load=normalized_load,
     )
 
