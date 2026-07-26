@@ -787,6 +787,123 @@ def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
     }
 
 
+def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+    dry_run_calls = []
+
+    def fake_dry_run_ramp(*args):
+        dry_run_calls.append(args)
+        return SimpleNamespace(
+            model="33521B",
+            canonical_model_id="keysight-33521b",
+            frequency_hz=1000.0,
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            symmetry_percent=25.0,
+            load="50",
+            commands=(
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FUNCtion RAMP",
+                "SOURce1:FREQuency 1000",
+                "SOURce1:FUNCtion:RAMP:SYMMetry 25",
+                "SOURce1:VOLTage 0.1",
+                "SOURce1:VOLTage:OFFSet 0",
+            ),
+            executed=False,
+            output_state="off",
+        )
+
+    def fail_live_configure_ramp(*args):
+        raise AssertionError(f"live configure_ramp must not be called: {args}")
+
+    monkeypatch.setattr(cli_module, "dry_run_ramp", fake_dry_run_ramp)
+    monkeypatch.setattr(
+        cli_module,
+        "configure_ramp",
+        fail_live_configure_ramp,
+    )
+
+    exit_code = main(
+        [
+            "configure-ramp",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--symmetry-percent",
+            "25",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert dry_run_calls == [
+        ("keysight-33521b", "1000", "0.1", "0", "25", "50")
+    ]
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload == {
+        "success": True,
+        "action": "configure-ramp",
+        "mode": "dry-run",
+        "model": "33521B",
+        "canonical_model_id": "keysight-33521b",
+        "frequency_hz": 1000.0,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.0,
+        "symmetry_percent": 25.0,
+        "load": "50",
+        "commands": [
+            "OUTPut1 OFF",
+            "OUTPut1:LOAD 50",
+            "SOURce1:VOLTage:UNIT VPP",
+            "SOURce1:FUNCtion RAMP",
+            "SOURce1:FREQuency 1000",
+            "SOURce1:FUNCtion:RAMP:SYMMetry 25",
+            "SOURce1:VOLTage 0.1",
+            "SOURce1:VOLTage:OFFSet 0",
+        ],
+        "executed": False,
+        "output_state": "off",
+        "error": None,
+    }
+
+
+def test_configure_ramp_live_missing_resource_is_usage_error(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "configure-ramp",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert "usage:" in captured.err
+    assert "--resource" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
     monkeypatch, capsys
 ):

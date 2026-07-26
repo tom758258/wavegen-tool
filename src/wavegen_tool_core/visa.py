@@ -206,6 +206,22 @@ class RampConfigurationResult:
 
 
 @dataclass(frozen=True)
+class RampDryRunResult:
+    """A hardware-free preview of a Channel 1 ramp configuration."""
+
+    model: str
+    canonical_model_id: str
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    symmetry_percent: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class PulseConfigurationResult:
     """A successful Channel 1 pulse configuration."""
 
@@ -1037,6 +1053,84 @@ def configure_ramp(
 ) -> RampConfigurationResult:
     """Validate and configure a Channel 1 ramp wave while keeping output off."""
 
+    (
+        frequency,
+        amplitude,
+        offset,
+        symmetry,
+        normalized_load,
+        commands,
+    ) = _prepare_ramp(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        symmetry_percent,
+        load,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return RampConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        symmetry_percent=symmetry,
+        load=normalized_load,
+    )
+
+
+def dry_run_ramp(
+    model: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    symmetry_percent: object = 100,
+    load: object = 50,
+) -> RampDryRunResult:
+    """Preview a validated Channel 1 ramp configuration without VISA I/O."""
+
+    _validate_dry_run_model(model, "ramp")
+    (
+        frequency,
+        amplitude,
+        offset,
+        symmetry,
+        normalized_load,
+        commands,
+    ) = _prepare_ramp(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        symmetry_percent,
+        load,
+    )
+    return RampDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        symmetry_percent=symmetry,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_ramp(
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    symmetry_percent: object,
+    load: object,
+) -> tuple[float, float, float, float, str, tuple[str, ...]]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -1077,23 +1171,13 @@ def configure_ramp(
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
     )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
+    return (
+        frequency,
+        amplitude,
+        offset,
+        symmetry,
+        normalized_load,
         commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
-    return RampConfigurationResult(
-        resource=context.resource,
-        backend=context.backend,
-        transport=context.transport,
-        identity=context.identity,
-        frequency_hz=frequency,
-        amplitude_vpp=amplitude,
-        offset_v=offset,
-        symmetry_percent=symmetry,
-        load=normalized_load,
     )
 
 

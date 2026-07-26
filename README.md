@@ -12,7 +12,7 @@ Keysight or Agilent 33521B.
   and Agilent Technologies 33521B
 - Parameter-validated Channel 1 sine configuration with explicit load, frequency,
   amplitude, and offset
-- Initial hardware-free Channel 1 sine and square dry-run preview
+- Initial hardware-free Channel 1 sine, square, and ramp dry-run preview
 - Hardware-unvalidated, parameter-validated Channel 1 square configuration
 - Hardware-unvalidated, parameter-validated Channel 1 ramp configuration
 - Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
@@ -248,8 +248,8 @@ uv run wavegen-tool configure-sine `
   --load 50
 ```
 
-Dry-run currently supports only sine and square configuration. Sine dry-run
-uses the same Core validation and SCPI command planning as live sine
+Dry-run currently supports only sine, square, and ramp configuration. Sine
+dry-run uses the same Core validation and SCPI command planning as live sine
 configuration, but it does not create a ResourceManager, open a session, query,
 or write. The command list is only a preview and is not executed. Dry-run is
 neither a simulator nor hardware validation. Live `configure-sine` continues
@@ -327,6 +327,26 @@ never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Ramp configuration has not yet been
 hardware-validated.
+
+Preview the validated ramp SCPI plan without a VISA resource or instrument:
+
+```powershell
+uv run wavegen-tool configure-ramp `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --symmetry-percent 25 `
+  --load 50
+```
+
+Ramp dry-run shares live ramp parameter normalization, frequency and symmetry
+limits, Vpp and output-load validation, and SCPI command planning. It does not
+create a ResourceManager, open a session, query, or write. The command list is
+only a preview and is not executed. Dry-run is neither a simulator nor hardware
+validation. Live `configure-ramp` continues to require an explicit VISA
+resource.
 
 ## Configure a Channel 1 Pulse Wave
 
