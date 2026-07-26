@@ -31,6 +31,7 @@ from wavegen_tool_core import (
     configure_ramp,
     configure_sine,
     configure_square,
+    dry_run_sine,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -132,8 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sine_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     sine_parser.add_argument(
         "--backend",
@@ -156,6 +156,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("50", "high-z"),
         default="50",
         help="Output load (default: 50).",
+    )
+    sine_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    sine_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
     )
     sine_parser.add_argument(
         "--json",
@@ -506,7 +517,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI and return a stable process exit code."""
 
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if (
+        args.command == "configure-sine"
+        and not args.dry_run
+        and args.resource is None
+    ):
+        parser.error("the following arguments are required: --resource")
     if args.command == "list-resources":
         return _run_list_resources(args)
     if args.command == "configure-sine":
@@ -583,6 +601,8 @@ def _run_list_resources(args: argparse.Namespace) -> int:
 
 
 def _run_configure_sine(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_sine_dry_run(args)
     return _run_control(
         args,
         lambda: configure_sine(
@@ -594,6 +614,50 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             args.backend,
         ),
     )
+
+
+def _run_sine_dry_run(args: argparse.Namespace) -> int:
+    try:
+        result = dry_run_sine(
+            args.model,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.offset_v,
+            args.load,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _sine_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _sine_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _sine_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_sine_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
 
 
 def _run_configure_square(args: argparse.Namespace) -> int:
@@ -889,6 +953,42 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     return payload
 
 
+def _sine_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-sine",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "frequency_hz": result.frequency_hz,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _sine_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-sine",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _sine_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-sine",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
 def _control_error_payload(action: str, error: WavegenError) -> dict[str, object]:
     identity = error.identity
     return {
@@ -1034,6 +1134,21 @@ def _human_control_success(action: str, result: Any) -> str:
             f"Manufacturer: {result.identity.manufacturer}",
             f"Model: {result.identity.model}",
             f"Output state: {result.output_state}",
+        )
+    )
+
+
+def _human_sine_dry_run_success(result: Any) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    return "\n".join(
+        (
+            "Channel 1 sine dry-run completed; no VISA I/O was performed.",
+            f"Target model: {result.model}",
+            f"Canonical model ID: {result.canonical_model_id}",
+            "Executed: no",
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
         )
     )
 

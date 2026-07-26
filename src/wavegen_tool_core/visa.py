@@ -21,6 +21,7 @@ from wavegen_tool_core.errors import (
     ResourceManagerError,
     ResourceOpenError,
     StatusQueryError,
+    UnsupportedInstrumentError,
     UnsupportedTransportError,
     VisaCleanupError,
     VisaWriteError,
@@ -28,6 +29,8 @@ from wavegen_tool_core.errors import (
     WavegenError,
 )
 from wavegen_tool_core.identity import (
+    CANONICAL_MODEL,
+    CANONICAL_MODEL_ID,
     InstrumentIdentity,
     parse_idn,
     resolve_supported_identity,
@@ -136,6 +139,21 @@ class SineConfigurationResult:
     amplitude_vpp: float
     offset_v: float
     load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
+class SineDryRunResult:
+    """A hardware-free preview of a Channel 1 sine configuration."""
+
+    model: str
+    canonical_model_id: str
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
     output_state: str = "off"
 
 
@@ -736,6 +754,71 @@ def configure_sine(
 ) -> SineConfigurationResult:
     """Validate and configure a Channel 1 sine wave while keeping output off."""
 
+    frequency, amplitude, offset, normalized_load, commands = _prepare_sine(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        load,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return SineConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        load=normalized_load,
+    )
+
+
+def dry_run_sine(
+    model: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+) -> SineDryRunResult:
+    """Preview a validated Channel 1 sine configuration without VISA I/O."""
+
+    if (
+        not isinstance(model, str)
+        or model.strip().casefold() != CANONICAL_MODEL_ID
+    ):
+        raise UnsupportedInstrumentError(
+            "Unsupported sine dry-run model; expected 'keysight-33521b'."
+        )
+
+    frequency, amplitude, offset, normalized_load, commands = _prepare_sine(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        load,
+    )
+    return SineDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_sine(
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    load: object,
+) -> tuple[float, float, float, str, tuple[str, ...]]:
     frequency = _normalize_finite_number(frequency_hz, "frequency")
     amplitude = _normalize_finite_number(amplitude_vpp, "amplitude")
     offset = _normalize_finite_number(offset_v, "offset")
@@ -758,23 +841,7 @@ def configure_sine(
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
     )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
-        commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
-    return SineConfigurationResult(
-        resource=context.resource,
-        backend=context.backend,
-        transport=context.transport,
-        identity=context.identity,
-        frequency_hz=frequency,
-        amplitude_vpp=amplitude,
-        offset_v=offset,
-        load=normalized_load,
-    )
+    return frequency, amplitude, offset, normalized_load, commands
 
 
 def configure_square(

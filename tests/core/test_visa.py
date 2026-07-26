@@ -1,3 +1,5 @@
+from inspect import signature
+
 import pytest
 
 from wavegen_tool_core.errors import (
@@ -26,6 +28,7 @@ from wavegen_tool_core.visa import (
     configure_ramp,
     configure_sine,
     configure_square,
+    dry_run_sine,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -725,6 +728,55 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
     assert result.load == "50"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_dry_run_sine_returns_normalized_hardware_free_command_preview():
+    result = dry_run_sine(
+        "  KEYSIGHT-33521B  ",
+        1000,
+        0.1,
+        0,
+        50,
+    )
+
+    assert tuple(signature(dry_run_sine).parameters) == (
+        "model",
+        "frequency_hz",
+        "amplitude_vpp",
+        "offset_v",
+        "load",
+    )
+    assert result.model == "33521B"
+    assert result.canonical_model_id == "keysight-33521b"
+    assert result.frequency_hz == 1000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.offset_v == 0.0
+    assert result.load == "50"
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion SIN",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    )
+    assert result.executed is False
+    assert result.output_state == "off"
+
+
+@pytest.mark.parametrize(
+    ("model", "frequency", "error_type"),
+    [
+        ("keysight-33522b", 1000, UnsupportedInstrumentError),
+        ("keysight-33521b", 30_000_001, WaveformParameterError),
+    ],
+)
+def test_invalid_sine_dry_run_input_raises_domain_error(
+    model, frequency, error_type
+):
+    with pytest.raises(error_type):
+        dry_run_sine(model, frequency, 0.1)
 
 
 @pytest.mark.parametrize(
