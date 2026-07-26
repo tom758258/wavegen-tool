@@ -1671,3 +1671,213 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
         "load": "50",
         "error": None,
     }
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_action", "field", "expected"),
+    [
+        (
+            ["list-resources", "--simulate", "--json"],
+            None,
+            "resources",
+            [
+                {
+                    "resource": "USB0::SIM::33521B::INSTR",
+                    "manufacturer": None,
+                    "model": None,
+                }
+            ],
+        ),
+        (
+            ["identify", "--simulate", "--json"],
+            None,
+            "canonical_model_id",
+            "keysight-33521b",
+        ),
+        (
+            ["status", "--simulate", "--json"],
+            "status",
+            "function",
+            "SIN",
+        ),
+        (
+            [
+                "configure-sine",
+                "--simulate",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+                "--json",
+            ],
+            "configure-sine",
+            "frequency_hz",
+            1000.0,
+        ),
+        (
+            [
+                "configure-square",
+                "--simulate",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+                "--duty-cycle-percent",
+                "25",
+                "--json",
+            ],
+            "configure-square",
+            "duty_cycle_percent",
+            25.0,
+        ),
+        (
+            [
+                "configure-ramp",
+                "--simulate",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+                "--symmetry-percent",
+                "25",
+                "--json",
+            ],
+            "configure-ramp",
+            "symmetry_percent",
+            25.0,
+        ),
+        (
+            [
+                "configure-pulse",
+                "--simulate",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+                "--pulse-width-s",
+                "0.0001",
+                "--json",
+            ],
+            "configure-pulse",
+            "pulse_width_s",
+            0.0001,
+        ),
+        (
+            [
+                "configure-dc",
+                "--simulate",
+                "--voltage-v",
+                "1.5",
+                "--json",
+            ],
+            "configure-dc",
+            "voltage_v",
+            1.5,
+        ),
+        (
+            [
+                "configure-noise",
+                "--simulate",
+                "--amplitude-vpp",
+                "0.1",
+                "--bandwidth-hz",
+                "100000",
+                "--json",
+            ],
+            "configure-noise",
+            "bandwidth_hz",
+            100000.0,
+        ),
+        (
+            [
+                "configure-prbs",
+                "--simulate",
+                "--bit-rate-bps",
+                "1000000",
+                "--amplitude-vpp",
+                "0.1",
+                "--pattern",
+                "pn9",
+                "--json",
+            ],
+            "configure-prbs",
+            "pattern",
+            "PN9",
+        ),
+        (
+            ["output", "--simulate", "--state", "on", "--json"],
+            "output",
+            "output_state",
+            "on",
+        ),
+    ],
+)
+def test_all_public_cli_routes_support_simulation_without_real_visa(
+    monkeypatch,
+    capsys,
+    argv,
+    expected_action,
+    field,
+    expected,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(argv)
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.SUCCESS
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["mode"] == "simulate"
+    assert payload["simulated"] is True
+    assert payload.get("action") == expected_action
+    assert payload[field] == expected
+    assert captured.err == ""
+
+
+def test_dry_run_and_simulate_conflict_is_usage_error_without_visa(
+    monkeypatch,
+    capsys,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "configure-sine",
+                "--dry-run",
+                "--simulate",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert "--dry-run and --simulate cannot be used together" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_simulate_and_explicit_resource_conflict_is_usage_error_without_visa(
+    monkeypatch,
+    capsys,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(["identify", "--simulate", "--resource", USB_RESOURCE])
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert "--resource cannot be used with --simulate" in captured.err
+    assert "Traceback" not in captured.err

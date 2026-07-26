@@ -36,7 +36,11 @@ def test_cli_delegates_instrument_rules_to_core():
 
     assert "identify_instrument" in source
     assert "*IDN?" not in source
-    assert "33521B" not in source
+    source_without_simulator_contract = source.replace(
+        "SIMULATED_33521B_RESOURCE",
+        "",
+    ).replace("Simulated33521BState", "")
+    assert "33521B" not in source_without_simulator_contract
     assert "KEYSIGHT TECHNOLOGIES" not in source
 
 

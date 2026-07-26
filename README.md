@@ -13,6 +13,8 @@ Keysight or Agilent 33521B.
 - Parameter-validated Channel 1 sine configuration with explicit load, frequency,
   amplitude, and offset
 - Hardware-free Channel 1 dry-run preview for all seven waveform configurations
+- Stateful, hardware-free Keysight 33521B Channel 1 simulator for all public CLI
+  commands
 - Hardware-unvalidated, parameter-validated Channel 1 square configuration
 - Hardware-unvalidated, parameter-validated Channel 1 ramp configuration
 - Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
@@ -57,6 +59,59 @@ uv sync --all-extras --locked --link-mode=copy
 
 The repository contains one `wavegen-tool` distribution with Core, CLI, and
 reserved WebUI import packages.
+
+## Stateful Simulator
+
+The simulator supports `list-resources`, `identify`, `status`, all seven
+waveform configuration commands, and explicit output control for one simulated
+Keysight 33521B Channel 1. It uses the fixed resource
+`USB0::SIM::33521B::INSTR` and never creates a real VISA ResourceManager, runs
+real resource discovery, opens hardware, or performs hardware I/O. Supported
+writes update in-memory state, subsequent queries read that state, and
+unsupported resources or SCPI fail closed.
+
+Use `--simulate` without `--resource`:
+
+```powershell
+uv run wavegen-tool list-resources `
+  --simulate `
+  --json
+
+uv run wavegen-tool identify `
+  --simulate `
+  --json
+
+uv run wavegen-tool configure-square `
+  --simulate `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --duty-cycle-percent 50 `
+  --load 50 `
+  --json
+
+uv run wavegen-tool status `
+  --simulate `
+  --json
+
+uv run wavegen-tool output `
+  --simulate `
+  --state on `
+  --json
+```
+
+Each standalone CLI invocation creates a fresh simulator environment, so the
+separate commands above do not share state. A caller performing multiple Core
+operations in one Python process can preserve state by reusing the same
+`Simulated33521BState` through simulated ResourceManager factories. Closing a
+simulated session or manager does not clear that shared state. There is no
+cross-process persistence or Worker in this milestone.
+
+Simulator mode is distinct from dry-run: dry-run only previews validated SCPI,
+while the simulator executes supported SCPI against in-memory state. Neither
+mode is hardware validation. Live commands still require an explicit real VISA
+resource. `output --simulate --state on` enables only the simulated Channel 1
+state and never a physical output.
 
 ## List VISA Resources
 

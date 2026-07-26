@@ -32,6 +32,13 @@ from wavegen_tool_core.identity import (
     parse_idn,
     resolve_supported_identity,
 )
+from wavegen_tool_core.simulator import (
+    SIMULATED_33521B_IDN,
+    SIMULATED_33521B_RESOURCE,
+    Simulated33521BState,
+    SimulatedResource,
+    SimulatedResourceManager,
+)
 from wavegen_tool_core.transport import classify_transport, detect_resource_transport
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
@@ -108,10 +115,15 @@ __all__ = [
     "ResourceManagerError",
     "ResourceOpenError",
     "SERIAL_TERMINATIONS",
+    "SIMULATED_33521B_IDN",
+    "SIMULATED_33521B_RESOURCE",
     "SineConfigurationResult",
     "SineDryRunResult",
     "SquareConfigurationResult",
     "SquareDryRunResult",
+    "Simulated33521BState",
+    "SimulatedResource",
+    "SimulatedResourceManager",
     "StatusQueryError",
     "StatusResult",
     "UnsupportedBackendError",

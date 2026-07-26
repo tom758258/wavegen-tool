@@ -15,6 +15,9 @@ from wavegen_tool_core import (
     ResourceManagerError,
     ResourceOpenError,
     SERIAL_TERMINATIONS,
+    SIMULATED_33521B_RESOURCE,
+    Simulated33521BState,
+    SimulatedResourceManager,
     StatusQueryError,
     UnsupportedBackendError,
     UnsupportedConnectionScopeError,
@@ -82,6 +85,14 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
 )
 
 
+def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--simulate",
+        action="store_true",
+        help="Use the in-memory simulator without hardware VISA I/O.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser without touching VISA."""
 
@@ -95,10 +106,10 @@ def build_parser() -> argparse.ArgumentParser:
         "identify",
         help="Query and identify one explicit VISA resource.",
     )
+    _add_simulate_argument(identify_parser)
     identify_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     identify_parser.add_argument(
         "--backend",
@@ -116,10 +127,10 @@ def build_parser() -> argparse.ArgumentParser:
         "status",
         help="Read Channel 1 status without changing the instrument.",
     )
+    _add_simulate_argument(status_parser)
     status_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     status_parser.add_argument(
         "--backend",
@@ -137,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-sine",
         help="Configure a validated Channel 1 sine waveform with output off.",
     )
+    _add_simulate_argument(sine_parser)
     sine_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -185,6 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-square",
         help="Configure a validated Channel 1 square waveform with output off.",
     )
+    _add_simulate_argument(square_parser)
     square_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -242,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-ramp",
         help="Configure a validated Channel 1 ramp waveform with output off.",
     )
+    _add_simulate_argument(ramp_parser)
     ramp_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -299,6 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-pulse",
         help="Configure a validated Channel 1 pulse waveform with output off.",
     )
+    _add_simulate_argument(pulse_parser)
     pulse_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -361,6 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-dc",
         help="Configure a validated Channel 1 DC voltage with output off.",
     )
+    _add_simulate_argument(dc_parser)
     dc_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -403,6 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-noise",
         help="Configure a validated Channel 1 noise waveform with output off.",
     )
+    _add_simulate_argument(noise_parser)
     noise_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -455,6 +472,7 @@ def build_parser() -> argparse.ArgumentParser:
         "configure-prbs",
         help="Configure a validated Channel 1 PRBS waveform with output off.",
     )
+    _add_simulate_argument(prbs_parser)
     prbs_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -518,10 +536,10 @@ def build_parser() -> argparse.ArgumentParser:
         "output",
         help="Explicitly set Channel 1 output on or off.",
     )
+    _add_simulate_argument(output_parser)
     output_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     output_parser.add_argument(
         "--backend",
@@ -546,6 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="List resources from one selected VISA backend.",
         allow_abbrev=False,
     )
+    _add_simulate_argument(list_parser)
     list_parser.add_argument(
         "--live-only",
         action="store_true",
@@ -585,17 +604,35 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    waveform_commands = {
+        "configure-sine",
+        "configure-square",
+        "configure-ramp",
+        "configure-pulse",
+        "configure-dc",
+        "configure-noise",
+        "configure-prbs",
+    }
     if (
-        args.command in {
-            "configure-sine",
-            "configure-square",
-            "configure-ramp",
-            "configure-pulse",
-            "configure-dc",
-            "configure-noise",
-            "configure-prbs",
-        }
+        args.command in waveform_commands
+        and args.dry_run
+        and args.simulate
+    ):
+        parser.error("--dry-run and --simulate cannot be used together")
+    if args.simulate and getattr(args, "resource", None) is not None:
+        parser.error("--resource cannot be used with --simulate")
+    if args.simulate and args.backend.strip().casefold() != "system":
+        parser.error("--simulate requires the system backend")
+    if (
+        args.command in waveform_commands
         and not args.dry_run
+        and not args.simulate
+        and args.resource is None
+    ):
+        parser.error("the following arguments are required: --resource")
+    if (
+        args.command in {"identify", "status", "output"}
+        and not args.simulate
         and args.resource is None
     ):
         parser.error("the following arguments are required: --resource")
@@ -622,30 +659,78 @@ def main(argv: Sequence[str] | None = None) -> int:
     return _run_identify(args)
 
 
+def _simulated_target() -> tuple[str, Any]:
+    state = Simulated33521BState()
+
+    def factory(_pyvisa_library: str) -> SimulatedResourceManager:
+        return SimulatedResourceManager(state)
+
+    return SIMULATED_33521B_RESOURCE, factory
+
+
+def _factory_injection(simulated: bool, factory: Any) -> dict[str, Any]:
+    if simulated:
+        return {"resource_manager_factory": factory}
+    return {}
+
+
 def _run_identify(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     try:
-        result = identify_instrument(args.resource, args.backend)
+        result = identify_instrument(
+            resource,
+            args.backend,
+            **_factory_injection(args.simulate, factory),
+        )
     except WavegenError as exc:
         if args.json_output:
-            print(json.dumps(_error_payload(exc), separators=(",", ":")))
+            payload = _error_payload(exc)
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
         else:
-            print(_human_error(exc), file=sys.stderr)
+            print(
+                _with_simulation_notice(_human_error(exc), args.simulate),
+                file=sys.stderr,
+            )
         return int(_exit_code_for_error(exc))
     except Exception:
         if args.json_output:
-            print(json.dumps(_internal_error_payload(), separators=(",", ":")))
+            payload = _internal_error_payload()
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
         else:
-            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+            message = "Error [internal_error]: unexpected internal failure."
+            print(
+                _with_simulation_notice(message, args.simulate),
+                file=sys.stderr,
+            )
         return int(ExitCode.INTERNAL_ERROR)
 
     if args.json_output:
-        print(json.dumps(_success_payload(result), separators=(",", ":")))
+        payload = _success_payload(result)
+        print(
+            json.dumps(
+                _with_simulation_fields(payload, args.simulate),
+                separators=(",", ":"),
+            )
+        )
     else:
-        print(_human_success(result))
+        print(_with_simulation_notice(_human_success(result), args.simulate))
     return int(ExitCode.SUCCESS)
 
 
 def _run_list_resources(args: argparse.Namespace) -> int:
+    factory = _simulated_target()[1] if args.simulate else None
     try:
         result = list_resources(
             args.backend,
@@ -653,39 +738,70 @@ def _run_list_resources(args: argparse.Namespace) -> int:
             serial_baud_rate=args.serial_baud_rate,
             serial_read_termination=args.serial_read_termination,
             serial_write_termination=args.serial_write_termination,
+            **_factory_injection(args.simulate, factory),
         )
     except WavegenError as exc:
         if args.json_output:
-            print(json.dumps(_resource_list_error_payload(exc), separators=(",", ":")))
+            payload = _resource_list_error_payload(exc)
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
         else:
-            print(_human_error(exc), file=sys.stderr)
+            print(
+                _with_simulation_notice(_human_error(exc), args.simulate),
+                file=sys.stderr,
+            )
         return int(_exit_code_for_error(exc))
     except Exception:
         if args.json_output:
-            print(json.dumps(_resource_list_internal_error_payload(), separators=(",", ":")))
+            payload = _resource_list_internal_error_payload()
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
         else:
-            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+            message = "Error [internal_error]: unexpected internal failure."
+            print(
+                _with_simulation_notice(message, args.simulate),
+                file=sys.stderr,
+            )
         return int(ExitCode.INTERNAL_ERROR)
 
     if args.json_output:
-        print(json.dumps(_resource_list_success_payload(result), separators=(",", ":")))
+        payload = _resource_list_success_payload(result)
+        print(
+            json.dumps(
+                _with_simulation_fields(payload, args.simulate),
+                separators=(",", ":"),
+            )
+        )
     else:
-        print(_human_resource_list_success(result, live_only=args.live_only))
+        output = _human_resource_list_success(result, live_only=args.live_only)
+        print(_with_simulation_notice(output, args.simulate))
     return int(ExitCode.SUCCESS)
 
 
 def _run_configure_sine(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_sine_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
         lambda: configure_sine(
-            args.resource,
+            resource,
             args.frequency_hz,
             args.amplitude_vpp,
             args.offset_v,
             args.load,
             args.backend,
+            **_factory_injection(args.simulate, factory),
         ),
     )
 
@@ -737,16 +853,20 @@ def _run_sine_dry_run(args: argparse.Namespace) -> int:
 def _run_configure_square(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_square_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
         lambda: configure_square(
-            args.resource,
+            resource,
             args.frequency_hz,
             args.amplitude_vpp,
             args.offset_v,
             args.duty_cycle_percent,
             args.load,
             args.backend,
+            **_factory_injection(args.simulate, factory),
         ),
     )
 
@@ -799,16 +919,20 @@ def _run_square_dry_run(args: argparse.Namespace) -> int:
 def _run_configure_ramp(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_ramp_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
         lambda: configure_ramp(
-            args.resource,
+            resource,
             args.frequency_hz,
             args.amplitude_vpp,
             args.offset_v,
             args.symmetry_percent,
             args.load,
             args.backend,
+            **_factory_injection(args.simulate, factory),
         ),
     )
 
@@ -861,10 +985,13 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
 def _run_configure_pulse(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_pulse_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
         lambda: configure_pulse(
-            args.resource,
+            resource,
             args.frequency_hz,
             args.amplitude_vpp,
             args.pulse_width_s,
@@ -872,6 +999,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.edge_time_s,
             args.load,
             args.backend,
+            **_factory_injection(args.simulate, factory),
         ),
     )
 
@@ -925,13 +1053,17 @@ def _run_pulse_dry_run(args: argparse.Namespace) -> int:
 def _run_configure_dc(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_dc_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
         lambda: configure_dc(
-            args.resource,
+            resource,
             args.voltage_v,
             args.load,
             args.backend,
+            **_factory_injection(args.simulate, factory),
         ),
     )
 
@@ -977,15 +1109,19 @@ def _run_dc_dry_run(args: argparse.Namespace) -> int:
 def _run_configure_noise(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_noise_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
         lambda: configure_noise(
-            args.resource,
+            resource,
             args.amplitude_vpp,
             args.bandwidth_hz,
             args.offset_v,
             args.load,
             args.backend,
+            **_factory_injection(args.simulate, factory),
         ),
     )
 
@@ -1037,10 +1173,13 @@ def _run_noise_dry_run(args: argparse.Namespace) -> int:
 def _run_configure_prbs(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_prbs_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
         lambda: configure_prbs(
-            args.resource,
+            resource,
             args.bit_rate_bps,
             args.amplitude_vpp,
             args.pattern,
@@ -1048,6 +1187,7 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
             args.edge_time_s,
             args.load,
             args.backend,
+            **_factory_injection(args.simulate, factory),
         ),
     )
 
@@ -1099,32 +1239,77 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
 
 
 def _run_output(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     return _run_control(
         args,
-        lambda: set_output(args.resource, args.state, args.backend),
+        lambda: set_output(
+            resource,
+            args.state,
+            args.backend,
+            **_factory_injection(args.simulate, factory),
+        ),
     )
 
 
 def _run_status(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
     try:
-        result = query_status(args.resource, args.backend)
+        result = query_status(
+            resource,
+            args.backend,
+            **_factory_injection(args.simulate, factory),
+        )
     except WavegenError as exc:
         if args.json_output:
-            print(json.dumps(_status_error_payload(exc), separators=(",", ":")))
+            payload = _status_error_payload(exc)
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
         else:
-            print(_human_error(exc), file=sys.stderr)
+            print(
+                _with_simulation_notice(_human_error(exc), args.simulate),
+                file=sys.stderr,
+            )
         return int(_exit_code_for_error(exc))
     except Exception:
         if args.json_output:
-            print(json.dumps(_status_internal_error_payload(), separators=(",", ":")))
+            payload = _status_internal_error_payload()
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
         else:
-            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+            message = "Error [internal_error]: unexpected internal failure."
+            print(
+                _with_simulation_notice(message, args.simulate),
+                file=sys.stderr,
+            )
         return int(ExitCode.INTERNAL_ERROR)
 
     if args.json_output:
-        print(json.dumps(_status_success_payload(result), separators=(",", ":")))
+        payload = _status_success_payload(result)
+        print(
+            json.dumps(
+                _with_simulation_fields(payload, args.simulate),
+                separators=(",", ":"),
+            )
+        )
     else:
-        print(_human_status_success(result))
+        print(
+            _with_simulation_notice(
+                _human_status_success(result),
+                args.simulate,
+            )
+        )
     return int(ExitCode.SUCCESS)
 
 
@@ -1133,37 +1318,73 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
         result = operation()
     except WavegenError as exc:
         if args.json_output:
+            payload = _control_error_payload(args.command, exc)
             print(
                 json.dumps(
-                    _control_error_payload(args.command, exc),
+                    _with_simulation_fields(payload, args.simulate),
                     separators=(",", ":"),
                 )
             )
         else:
-            print(_human_error(exc), file=sys.stderr)
+            print(
+                _with_simulation_notice(_human_error(exc), args.simulate),
+                file=sys.stderr,
+            )
         return int(_exit_code_for_error(exc))
     except Exception:
         if args.json_output:
+            payload = _control_internal_error_payload(args.command)
             print(
                 json.dumps(
-                    _control_internal_error_payload(args.command),
+                    _with_simulation_fields(payload, args.simulate),
                     separators=(",", ":"),
                 )
             )
         else:
-            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+            message = "Error [internal_error]: unexpected internal failure."
+            print(
+                _with_simulation_notice(message, args.simulate),
+                file=sys.stderr,
+            )
         return int(ExitCode.INTERNAL_ERROR)
 
     if args.json_output:
+        payload = _control_success_payload(args.command, result)
         print(
             json.dumps(
-                _control_success_payload(args.command, result),
+                _with_simulation_fields(payload, args.simulate),
                 separators=(",", ":"),
             )
         )
     else:
-        print(_human_control_success(args.command, result))
+        print(
+            _with_simulation_notice(
+                _human_control_success(args.command, result),
+                args.simulate,
+            )
+        )
     return int(ExitCode.SUCCESS)
+
+
+def _with_simulation_fields(
+    payload: dict[str, object],
+    simulated: bool,
+) -> dict[str, object]:
+    if simulated:
+        payload.update(mode="simulate", simulated=True)
+    return payload
+
+
+def _with_simulation_notice(output: str, simulated: bool) -> str:
+    if not simulated:
+        return output
+    return "\n".join(
+        (
+            "Mode: simulate",
+            "No hardware VISA I/O was performed; result is from the in-memory simulator.",
+            output,
+        )
+    )
 
 
 def _success_payload(result: Any) -> dict[str, object]:
