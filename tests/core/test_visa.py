@@ -29,6 +29,7 @@ from wavegen_tool_core.visa import (
     configure_sine,
     configure_square,
     dry_run_sine,
+    dry_run_square,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -850,6 +851,50 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
     assert result.output_state == "off"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_dry_run_square_returns_normalized_hardware_free_command_preview():
+    result = dry_run_square(
+        "  KEYSIGHT-33521B  ",
+        1000,
+        0.1,
+        0,
+        50,
+        50,
+    )
+
+    assert tuple(signature(dry_run_square).parameters) == (
+        "model",
+        "frequency_hz",
+        "amplitude_vpp",
+        "offset_v",
+        "duty_cycle_percent",
+        "load",
+    )
+    assert result.model == "33521B"
+    assert result.canonical_model_id == "keysight-33521b"
+    assert result.frequency_hz == 1000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.offset_v == 0.0
+    assert result.duty_cycle_percent == 50.0
+    assert result.load == "50"
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion SQUare",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:FUNCtion:SQUare:DCYCle 50",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    )
+    assert result.executed is False
+    assert result.output_state == "off"
+
+
+def test_dry_run_square_rejects_frequency_dependent_duty_cycle():
+    with pytest.raises(WaveformParameterError):
+        dry_run_square("keysight-33521b", 30_000_000, 0.1, 0, 47)
 
 
 @pytest.mark.parametrize(

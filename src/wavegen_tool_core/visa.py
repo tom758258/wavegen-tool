@@ -174,6 +174,22 @@ class SquareConfigurationResult:
 
 
 @dataclass(frozen=True)
+class SquareDryRunResult:
+    """A hardware-free preview of a Channel 1 square configuration."""
+
+    model: str
+    canonical_model_id: str
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    duty_cycle_percent: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class RampConfigurationResult:
     """A successful Channel 1 ramp configuration."""
 
@@ -788,13 +804,7 @@ def dry_run_sine(
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
-    if (
-        not isinstance(model, str)
-        or model.strip().casefold() != CANONICAL_MODEL_ID
-    ):
-        raise UnsupportedInstrumentError(
-            "Unsupported sine dry-run model; expected 'keysight-33521b'."
-        )
+    _validate_dry_run_model(model, "sine")
 
     frequency, amplitude, offset, normalized_load, commands = _prepare_sine(
         frequency_hz,
@@ -811,6 +821,17 @@ def dry_run_sine(
         load=normalized_load,
         commands=commands,
     )
+
+
+def _validate_dry_run_model(model: object, waveform: str) -> None:
+    if (
+        not isinstance(model, str)
+        or model.strip().casefold() != CANONICAL_MODEL_ID
+    ):
+        raise UnsupportedInstrumentError(
+            f"Unsupported {waveform} dry-run model; "
+            "expected 'keysight-33521b'."
+        )
 
 
 def _prepare_sine(
@@ -857,6 +878,84 @@ def configure_square(
 ) -> SquareConfigurationResult:
     """Validate and configure a Channel 1 square wave while keeping output off."""
 
+    (
+        frequency,
+        amplitude,
+        offset,
+        duty_cycle,
+        normalized_load,
+        commands,
+    ) = _prepare_square(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        duty_cycle_percent,
+        load,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return SquareConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        duty_cycle_percent=duty_cycle,
+        load=normalized_load,
+    )
+
+
+def dry_run_square(
+    model: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    duty_cycle_percent: object = 50,
+    load: object = 50,
+) -> SquareDryRunResult:
+    """Preview a validated Channel 1 square configuration without VISA I/O."""
+
+    _validate_dry_run_model(model, "square")
+    (
+        frequency,
+        amplitude,
+        offset,
+        duty_cycle,
+        normalized_load,
+        commands,
+    ) = _prepare_square(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        duty_cycle_percent,
+        load,
+    )
+    return SquareDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        duty_cycle_percent=duty_cycle,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_square(
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    duty_cycle_percent: object,
+    load: object,
+) -> tuple[float, float, float, float, str, tuple[str, ...]]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -915,23 +1014,13 @@ def configure_square(
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
     )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
+    return (
+        frequency,
+        amplitude,
+        offset,
+        duty_cycle,
+        normalized_load,
         commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
-    return SquareConfigurationResult(
-        resource=context.resource,
-        backend=context.backend,
-        transport=context.transport,
-        identity=context.identity,
-        frequency_hz=frequency,
-        amplitude_vpp=amplitude,
-        offset_v=offset,
-        duty_cycle_percent=duty_cycle,
-        load=normalized_load,
     )
 
 

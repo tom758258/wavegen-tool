@@ -613,6 +613,121 @@ def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
     }
 
 
+def test_configure_square_dry_run_cli_emits_hardware_free_json(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+    dry_run_calls = []
+
+    def fake_dry_run_square(*args):
+        dry_run_calls.append(args)
+        return SimpleNamespace(
+            model="33521B",
+            canonical_model_id="keysight-33521b",
+            frequency_hz=1000.0,
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            duty_cycle_percent=50.0,
+            load="50",
+            commands=(
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FUNCtion SQUare",
+                "SOURce1:FREQuency 1000",
+                "SOURce1:FUNCtion:SQUare:DCYCle 50",
+                "SOURce1:VOLTage 0.1",
+                "SOURce1:VOLTage:OFFSet 0",
+            ),
+            executed=False,
+            output_state="off",
+        )
+
+    def fail_live_configure_square(*args):
+        raise AssertionError(f"live configure_square must not be called: {args}")
+
+    monkeypatch.setattr(cli_module, "dry_run_square", fake_dry_run_square)
+    monkeypatch.setattr(
+        cli_module,
+        "configure_square",
+        fail_live_configure_square,
+    )
+
+    exit_code = main(
+        [
+            "configure-square",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert dry_run_calls == [
+        ("keysight-33521b", "1000", "0.1", "0", "50", "50")
+    ]
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload == {
+        "success": True,
+        "action": "configure-square",
+        "mode": "dry-run",
+        "model": "33521B",
+        "canonical_model_id": "keysight-33521b",
+        "frequency_hz": 1000.0,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.0,
+        "duty_cycle_percent": 50.0,
+        "load": "50",
+        "commands": [
+            "OUTPut1 OFF",
+            "OUTPut1:LOAD 50",
+            "SOURce1:VOLTage:UNIT VPP",
+            "SOURce1:FUNCtion SQUare",
+            "SOURce1:FREQuency 1000",
+            "SOURce1:FUNCtion:SQUare:DCYCle 50",
+            "SOURce1:VOLTage 0.1",
+            "SOURce1:VOLTage:OFFSet 0",
+        ],
+        "executed": False,
+        "output_state": "off",
+        "error": None,
+    }
+
+
+def test_configure_square_live_missing_resource_is_usage_error(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "configure-square",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert "usage:" in captured.err
+    assert "--resource" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
     monkeypatch, capsys
 ):
