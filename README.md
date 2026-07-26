@@ -12,7 +12,7 @@ Keysight or Agilent 33521B.
   and Agilent Technologies 33521B
 - Parameter-validated Channel 1 sine configuration with explicit load, frequency,
   amplitude, and offset
-- Initial hardware-free Channel 1 sine, square, and ramp dry-run preview
+- Hardware-free Channel 1 dry-run preview for all seven waveform configurations
 - Hardware-unvalidated, parameter-validated Channel 1 square configuration
 - Hardware-unvalidated, parameter-validated Channel 1 ramp configuration
 - Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
@@ -248,12 +248,13 @@ uv run wavegen-tool configure-sine `
   --load 50
 ```
 
-Dry-run currently supports only sine, square, and ramp configuration. Sine
-dry-run uses the same Core validation and SCPI command planning as live sine
-configuration, but it does not create a ResourceManager, open a session, query,
-or write. The command list is only a preview and is not executed. Dry-run is
-neither a simulator nor hardware validation. Live `configure-sine` continues
-to require an explicit VISA resource.
+Dry-run supports sine, square, ramp, pulse, DC, noise, and PRBS configuration.
+Each dry-run uses the same Core parameter normalization, waveform-specific
+validation, and SCPI command planning as its live command, but does not create
+a ResourceManager, open a session, query, or write. The command list is only a
+preview and is not executed. Dry-run is neither a simulator nor hardware
+validation. Live waveform configuration continues to require an explicit VISA
+resource.
 
 ## Configure a Channel 1 Square Wave
 
@@ -377,6 +378,24 @@ The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Pulse configuration has not yet been
 hardware-validated.
 
+Preview the pulse plan without a VISA resource:
+
+```powershell
+uv run wavegen-tool configure-pulse `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --pulse-width-s 0.0001 `
+  --offset-v 0 `
+  --edge-time-s 0.00000001 `
+  --load 50
+```
+
+Pulse dry-run applies the live frequency, edge-time, and pulse-width
+relationship validation and previews the same SCPI plan. It performs no VISA
+I/O; live `configure-pulse` still requires an explicit resource.
+
 ## Configure a Channel 1 DC Voltage
 
 Configure a 1.5 V DC voltage with a 50-ohm instrument output-load setting:
@@ -399,6 +418,20 @@ The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Actual terminal voltage still depends
 on the physically connected load. DC configuration has not yet been
 hardware-validated.
+
+Preview the DC plan without a VISA resource:
+
+```powershell
+uv run wavegen-tool configure-dc `
+  --dry-run `
+  --model keysight-33521b `
+  --voltage-v 1.5 `
+  --load 50
+```
+
+DC dry-run applies the live load-dependent voltage limits and previews the same
+SCPI plan. It performs no VISA I/O; live `configure-dc` still requires an
+explicit resource.
 
 ## Configure a Channel 1 Noise Wave
 
@@ -426,6 +459,22 @@ never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Noise configuration has not yet been
 hardware-validated.
+
+Preview the noise plan without a VISA resource:
+
+```powershell
+uv run wavegen-tool configure-noise `
+  --dry-run `
+  --model keysight-33521b `
+  --amplitude-vpp 0.1 `
+  --bandwidth-hz 1000000 `
+  --offset-v 0 `
+  --load 50
+```
+
+Noise dry-run applies the live bandwidth and Vpp/output-load limits and
+previews the same SCPI plan. It performs no VISA I/O; live `configure-noise`
+still requires an explicit resource.
 
 ## Configure a Channel 1 PRBS Waveform
 
@@ -457,6 +506,24 @@ never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. PRBS configuration has not yet been
 hardware-validated.
+
+Preview the PRBS plan without a VISA resource:
+
+```powershell
+uv run wavegen-tool configure-prbs `
+  --dry-run `
+  --model keysight-33521b `
+  --bit-rate-bps 1000000 `
+  --amplitude-vpp 0.1 `
+  --pattern pn9 `
+  --offset-v 0 `
+  --edge-time-s 0.0000000084 `
+  --load 50
+```
+
+PRBS dry-run applies the live pattern, bit-rate, and edge-time/bit-period
+validation and previews the same SCPI plan. It performs no VISA I/O; live
+`configure-prbs` still requires an explicit resource.
 
 ## Control Channel 1 Output
 

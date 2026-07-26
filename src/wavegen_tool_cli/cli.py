@@ -31,6 +31,10 @@ from wavegen_tool_core import (
     configure_ramp,
     configure_sine,
     configure_square,
+    dry_run_dc,
+    dry_run_noise,
+    dry_run_prbs,
+    dry_run_pulse,
     dry_run_ramp,
     dry_run_sine,
     dry_run_square,
@@ -297,8 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pulse_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     pulse_parser.add_argument(
         "--backend",
@@ -337,6 +340,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output load (default: 50).",
     )
     pulse_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    pulse_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
+    )
+    pulse_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -349,8 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dc_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     dc_parser.add_argument(
         "--backend",
@@ -369,6 +382,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output load (default: 50).",
     )
     dc_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    dc_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
+    )
+    dc_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -381,8 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     noise_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     noise_parser.add_argument(
         "--backend",
@@ -411,6 +434,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output load (default: 50).",
     )
     noise_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    noise_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
+    )
+    noise_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -423,8 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prbs_parser.add_argument(
         "--resource",
-        required=True,
-        help="Explicit USB or TCPIP/LAN VISA resource.",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
     )
     prbs_parser.add_argument(
         "--backend",
@@ -462,6 +495,17 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("50", "high-z"),
         default="50",
         help="Output load (default: 50).",
+    )
+    prbs_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    prbs_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
     )
     prbs_parser.add_argument(
         "--json",
@@ -542,7 +586,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if (
-        args.command in {"configure-sine", "configure-square", "configure-ramp"}
+        args.command in {
+            "configure-sine",
+            "configure-square",
+            "configure-ramp",
+            "configure-pulse",
+            "configure-dc",
+            "configure-noise",
+            "configure-prbs",
+        }
         and not args.dry_run
         and args.resource is None
     ):
@@ -807,6 +859,8 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
 
 
 def _run_configure_pulse(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_pulse_dry_run(args)
     return _run_control(
         args,
         lambda: configure_pulse(
@@ -822,7 +876,55 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
     )
 
 
+def _run_pulse_dry_run(args: argparse.Namespace) -> int:
+    try:
+        result = dry_run_pulse(
+            args.model,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.pulse_width_s,
+            args.offset_v,
+            args.edge_time_s,
+            args.load,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _pulse_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _pulse_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _pulse_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_pulse_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
 def _run_configure_dc(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_dc_dry_run(args)
     return _run_control(
         args,
         lambda: configure_dc(
@@ -834,7 +936,47 @@ def _run_configure_dc(args: argparse.Namespace) -> int:
     )
 
 
+def _run_dc_dry_run(args: argparse.Namespace) -> int:
+    try:
+        result = dry_run_dc(args.model, args.voltage_v, args.load)
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _dc_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _dc_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _dc_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_dc_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
 def _run_configure_noise(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_noise_dry_run(args)
     return _run_control(
         args,
         lambda: configure_noise(
@@ -848,7 +990,53 @@ def _run_configure_noise(args: argparse.Namespace) -> int:
     )
 
 
+def _run_noise_dry_run(args: argparse.Namespace) -> int:
+    try:
+        result = dry_run_noise(
+            args.model,
+            args.amplitude_vpp,
+            args.bandwidth_hz,
+            args.offset_v,
+            args.load,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _noise_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _noise_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _noise_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_noise_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
 def _run_configure_prbs(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_prbs_dry_run(args)
     return _run_control(
         args,
         lambda: configure_prbs(
@@ -862,6 +1050,52 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
             args.backend,
         ),
     )
+
+
+def _run_prbs_dry_run(args: argparse.Namespace) -> int:
+    try:
+        result = dry_run_prbs(
+            args.model,
+            args.bit_rate_bps,
+            args.amplitude_vpp,
+            args.pattern,
+            args.offset_v,
+            args.edge_time_s,
+            args.load,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _prbs_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _prbs_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _prbs_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_prbs_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
 
 
 def _run_output(args: argparse.Namespace) -> int:
@@ -1179,6 +1413,152 @@ def _ramp_dry_run_internal_error_payload() -> dict[str, object]:
     }
 
 
+def _pulse_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-pulse",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "frequency_hz": result.frequency_hz,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "pulse_width_s": result.pulse_width_s,
+        "edge_time_s": result.edge_time_s,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _pulse_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-pulse",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _pulse_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-pulse",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _dc_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-dc",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "voltage_v": result.voltage_v,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _dc_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-dc",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _dc_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-dc",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _noise_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-noise",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "bandwidth_hz": result.bandwidth_hz,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _noise_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-noise",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _noise_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-noise",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _prbs_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-prbs",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "bit_rate_bps": result.bit_rate_bps,
+        "amplitude_vpp": result.amplitude_vpp,
+        "pattern": result.pattern,
+        "offset_v": result.offset_v,
+        "edge_time_s": result.edge_time_s,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _prbs_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-prbs",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _prbs_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-prbs",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
 def _control_error_payload(action: str, error: WavegenError) -> dict[str, object]:
     identity = error.identity
     return {
@@ -1363,6 +1743,66 @@ def _human_ramp_dry_run_success(result: Any) -> str:
     return "\n".join(
         (
             "Channel 1 ramp dry-run completed; no VISA I/O was performed.",
+            f"Target model: {result.model}",
+            f"Canonical model ID: {result.canonical_model_id}",
+            "Executed: no",
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+
+
+def _human_pulse_dry_run_success(result: Any) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    return "\n".join(
+        (
+            "Channel 1 pulse dry-run completed; no VISA I/O was performed.",
+            f"Target model: {result.model}",
+            f"Canonical model ID: {result.canonical_model_id}",
+            "Executed: no",
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+
+
+def _human_dc_dry_run_success(result: Any) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    return "\n".join(
+        (
+            "Channel 1 DC dry-run completed; no VISA I/O was performed.",
+            f"Target model: {result.model}",
+            f"Canonical model ID: {result.canonical_model_id}",
+            "Executed: no",
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+
+
+def _human_noise_dry_run_success(result: Any) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    return "\n".join(
+        (
+            "Channel 1 noise dry-run completed; no VISA I/O was performed.",
+            f"Target model: {result.model}",
+            f"Canonical model ID: {result.canonical_model_id}",
+            "Executed: no",
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+
+
+def _human_prbs_dry_run_success(result: Any) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    return "\n".join(
+        (
+            "Channel 1 PRBS dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",

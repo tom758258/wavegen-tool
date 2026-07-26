@@ -28,6 +28,10 @@ from wavegen_tool_core.visa import (
     configure_ramp,
     configure_sine,
     configure_square,
+    dry_run_dc,
+    dry_run_noise,
+    dry_run_prbs,
+    dry_run_pulse,
     dry_run_ramp,
     dry_run_sine,
     dry_run_square,
@@ -1080,6 +1084,61 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
+def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
+    result = dry_run_pulse(
+        "  KEYSIGHT-33521B  ",
+        1000,
+        0.1,
+        0.0001,
+        0,
+        1e-8,
+        50,
+    )
+
+    assert tuple(signature(dry_run_pulse).parameters) == (
+        "model",
+        "frequency_hz",
+        "amplitude_vpp",
+        "pulse_width_s",
+        "offset_v",
+        "edge_time_s",
+        "load",
+    )
+    assert result.model == "33521B"
+    assert result.canonical_model_id == "keysight-33521b"
+    assert result.frequency_hz == 1000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.offset_v == 0.0
+    assert result.pulse_width_s == 0.0001
+    assert result.edge_time_s == 1e-8
+    assert result.load == "50"
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion PULSe",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:FUNCtion:PULSe:WIDTh 0.0001",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    )
+    assert result.executed is False
+    assert result.output_state == "off"
+
+
+def test_dry_run_pulse_rejects_invalid_timing_relationship():
+    with pytest.raises(WaveformParameterError):
+        dry_run_pulse(
+            "keysight-33521b",
+            30_000_000,
+            0.1,
+            100e-9,
+            0,
+            1e-6,
+        )
+
+
 def test_configure_pulse_accepts_float_equal_width_window_boundary():
     session = FakeSession()
     manager = FakeManager(session)
@@ -1175,6 +1234,28 @@ def test_configure_dc_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
+def test_dry_run_dc_returns_normalized_hardware_free_command_preview():
+    result = dry_run_dc("  KEYSIGHT-33521B  ", 1.5, 50)
+
+    assert tuple(signature(dry_run_dc).parameters) == (
+        "model",
+        "voltage_v",
+        "load",
+    )
+    assert result.model == "33521B"
+    assert result.canonical_model_id == "keysight-33521b"
+    assert result.voltage_v == 1.5
+    assert result.load == "50"
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:FUNCtion DC",
+        "SOURce1:VOLTage:OFFSet 1.5",
+    )
+    assert result.executed is False
+    assert result.output_state == "off"
+
+
 @pytest.mark.parametrize(
     ("voltage", "load"),
     [
@@ -1234,6 +1315,41 @@ def test_configure_noise_identifies_then_writes_safe_channel_one_sequence():
     assert result.output_state == "off"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_dry_run_noise_returns_normalized_hardware_free_command_preview():
+    result = dry_run_noise(
+        "  KEYSIGHT-33521B  ",
+        0.1,
+        1_000_000,
+        0,
+        50,
+    )
+
+    assert tuple(signature(dry_run_noise).parameters) == (
+        "model",
+        "amplitude_vpp",
+        "bandwidth_hz",
+        "offset_v",
+        "load",
+    )
+    assert result.model == "33521B"
+    assert result.canonical_model_id == "keysight-33521b"
+    assert result.amplitude_vpp == 0.1
+    assert result.offset_v == 0.0
+    assert result.bandwidth_hz == 1_000_000.0
+    assert result.load == "50"
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion NOISe",
+        "SOURce1:FUNCtion:NOISe:BANDwidth 1000000",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    )
+    assert result.executed is False
+    assert result.output_state == "off"
 
 
 @pytest.mark.parametrize("bandwidth", [0.0009, 30_000_001])
@@ -1297,6 +1413,61 @@ def test_configure_prbs_identifies_then_writes_safe_channel_one_sequence():
     assert result.output_state == "off"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_dry_run_prbs_returns_normalized_hardware_free_command_preview():
+    result = dry_run_prbs(
+        "  KEYSIGHT-33521B  ",
+        1_000_000,
+        0.1,
+        "pn9",
+        0,
+        8.4e-9,
+        50,
+    )
+
+    assert tuple(signature(dry_run_prbs).parameters) == (
+        "model",
+        "bit_rate_bps",
+        "amplitude_vpp",
+        "pattern",
+        "offset_v",
+        "edge_time_s",
+        "load",
+    )
+    assert result.model == "33521B"
+    assert result.canonical_model_id == "keysight-33521b"
+    assert result.bit_rate_bps == 1_000_000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.pattern == "PN9"
+    assert result.offset_v == 0.0
+    assert result.edge_time_s == 8.4e-9
+    assert result.load == "50"
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion PRBS",
+        "SOURce1:FUNCtion:PRBS:BRATe 1000000",
+        "SOURce1:FUNCtion:PRBS:DATA PN9",
+        "SOURce1:FUNCtion:PRBS:TRANsition:BOTH 8.4e-09",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    )
+    assert result.executed is False
+    assert result.output_state == "off"
+
+
+def test_dry_run_prbs_rejects_edge_time_longer_than_bit_period():
+    with pytest.raises(WaveformParameterError):
+        dry_run_prbs(
+            "keysight-33521b",
+            50_000_000,
+            0.1,
+            "PN7",
+            0,
+            21e-9,
+        )
 
 
 @pytest.mark.parametrize(

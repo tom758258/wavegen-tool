@@ -1159,6 +1159,415 @@ def test_configure_prbs_cli_parses_arguments_calls_core_and_emits_json(
     }
 
 
+def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+    dry_run_calls = []
+
+    def fake_dry_run_pulse(*args):
+        dry_run_calls.append(args)
+        return SimpleNamespace(
+            model="33521B",
+            canonical_model_id="keysight-33521b",
+            frequency_hz=1000.0,
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            pulse_width_s=0.0001,
+            edge_time_s=1e-8,
+            load="50",
+            commands=(
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FUNCtion PULSe",
+                "SOURce1:FREQuency 1000",
+                "SOURce1:FUNCtion:PULSe:WIDTh 0.0001",
+                "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
+                "SOURce1:VOLTage 0.1",
+                "SOURce1:VOLTage:OFFSet 0",
+            ),
+            executed=False,
+            output_state="off",
+        )
+
+    def fail_live_configure_pulse(*args):
+        raise AssertionError(f"live configure_pulse must not be called: {args}")
+
+    monkeypatch.setattr(cli_module, "dry_run_pulse", fake_dry_run_pulse)
+    monkeypatch.setattr(
+        cli_module,
+        "configure_pulse",
+        fail_live_configure_pulse,
+    )
+
+    exit_code = main(
+        [
+            "configure-pulse",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--pulse-width-s",
+            "0.0001",
+            "--edge-time-s",
+            "0.00000001",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert dry_run_calls == [
+        (
+            "keysight-33521b",
+            "1000",
+            "0.1",
+            "0.0001",
+            "0",
+            "0.00000001",
+            "50",
+        )
+    ]
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload == {
+        "success": True,
+        "action": "configure-pulse",
+        "mode": "dry-run",
+        "model": "33521B",
+        "canonical_model_id": "keysight-33521b",
+        "frequency_hz": 1000.0,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.0,
+        "pulse_width_s": 0.0001,
+        "edge_time_s": 1e-8,
+        "load": "50",
+        "commands": [
+            "OUTPut1 OFF",
+            "OUTPut1:LOAD 50",
+            "SOURce1:VOLTage:UNIT VPP",
+            "SOURce1:FUNCtion PULSe",
+            "SOURce1:FREQuency 1000",
+            "SOURce1:FUNCtion:PULSe:WIDTh 0.0001",
+            "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
+            "SOURce1:VOLTage 0.1",
+            "SOURce1:VOLTage:OFFSet 0",
+        ],
+        "executed": False,
+        "output_state": "off",
+        "error": None,
+    }
+
+
+def test_configure_dc_dry_run_cli_emits_hardware_free_json(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+    dry_run_calls = []
+
+    def fake_dry_run_dc(*args):
+        dry_run_calls.append(args)
+        return SimpleNamespace(
+            model="33521B",
+            canonical_model_id="keysight-33521b",
+            voltage_v=1.5,
+            load="50",
+            commands=(
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:FUNCtion DC",
+                "SOURce1:VOLTage:OFFSet 1.5",
+            ),
+            executed=False,
+            output_state="off",
+        )
+
+    def fail_live_configure_dc(*args):
+        raise AssertionError(f"live configure_dc must not be called: {args}")
+
+    monkeypatch.setattr(cli_module, "dry_run_dc", fake_dry_run_dc)
+    monkeypatch.setattr(cli_module, "configure_dc", fail_live_configure_dc)
+
+    exit_code = main(
+        [
+            "configure-dc",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--voltage-v",
+            "1.5",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert dry_run_calls == [("keysight-33521b", "1.5", "50")]
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload == {
+        "success": True,
+        "action": "configure-dc",
+        "mode": "dry-run",
+        "model": "33521B",
+        "canonical_model_id": "keysight-33521b",
+        "voltage_v": 1.5,
+        "load": "50",
+        "commands": [
+            "OUTPut1 OFF",
+            "OUTPut1:LOAD 50",
+            "SOURce1:FUNCtion DC",
+            "SOURce1:VOLTage:OFFSet 1.5",
+        ],
+        "executed": False,
+        "output_state": "off",
+        "error": None,
+    }
+
+
+def test_configure_noise_dry_run_cli_emits_hardware_free_json(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+    dry_run_calls = []
+
+    def fake_dry_run_noise(*args):
+        dry_run_calls.append(args)
+        return SimpleNamespace(
+            model="33521B",
+            canonical_model_id="keysight-33521b",
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            bandwidth_hz=1_000_000.0,
+            load="50",
+            commands=(
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FUNCtion NOISe",
+                "SOURce1:FUNCtion:NOISe:BANDwidth 1000000",
+                "SOURce1:VOLTage 0.1",
+                "SOURce1:VOLTage:OFFSet 0",
+            ),
+            executed=False,
+            output_state="off",
+        )
+
+    def fail_live_configure_noise(*args):
+        raise AssertionError(f"live configure_noise must not be called: {args}")
+
+    monkeypatch.setattr(cli_module, "dry_run_noise", fake_dry_run_noise)
+    monkeypatch.setattr(
+        cli_module,
+        "configure_noise",
+        fail_live_configure_noise,
+    )
+
+    exit_code = main(
+        [
+            "configure-noise",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--amplitude-vpp",
+            "0.1",
+            "--bandwidth-hz",
+            "1000000",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert dry_run_calls == [
+        ("keysight-33521b", "0.1", "1000000", "0", "50")
+    ]
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload == {
+        "success": True,
+        "action": "configure-noise",
+        "mode": "dry-run",
+        "model": "33521B",
+        "canonical_model_id": "keysight-33521b",
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.0,
+        "bandwidth_hz": 1_000_000.0,
+        "load": "50",
+        "commands": [
+            "OUTPut1 OFF",
+            "OUTPut1:LOAD 50",
+            "SOURce1:VOLTage:UNIT VPP",
+            "SOURce1:FUNCtion NOISe",
+            "SOURce1:FUNCtion:NOISe:BANDwidth 1000000",
+            "SOURce1:VOLTage 0.1",
+            "SOURce1:VOLTage:OFFSet 0",
+        ],
+        "executed": False,
+        "output_state": "off",
+        "error": None,
+    }
+
+
+def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+    dry_run_calls = []
+
+    def fake_dry_run_prbs(*args):
+        dry_run_calls.append(args)
+        return SimpleNamespace(
+            model="33521B",
+            canonical_model_id="keysight-33521b",
+            bit_rate_bps=1_000_000.0,
+            amplitude_vpp=0.1,
+            pattern="PN9",
+            offset_v=0.0,
+            edge_time_s=8.4e-9,
+            load="50",
+            commands=(
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FUNCtion PRBS",
+                "SOURce1:FUNCtion:PRBS:BRATe 1000000",
+                "SOURce1:FUNCtion:PRBS:DATA PN9",
+                "SOURce1:FUNCtion:PRBS:TRANsition:BOTH 8.4e-09",
+                "SOURce1:VOLTage 0.1",
+                "SOURce1:VOLTage:OFFSet 0",
+            ),
+            executed=False,
+            output_state="off",
+        )
+
+    def fail_live_configure_prbs(*args):
+        raise AssertionError(f"live configure_prbs must not be called: {args}")
+
+    monkeypatch.setattr(cli_module, "dry_run_prbs", fake_dry_run_prbs)
+    monkeypatch.setattr(
+        cli_module,
+        "configure_prbs",
+        fail_live_configure_prbs,
+    )
+
+    exit_code = main(
+        [
+            "configure-prbs",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--bit-rate-bps",
+            "1000000",
+            "--amplitude-vpp",
+            "0.1",
+            "--pattern",
+            "pn9",
+            "--edge-time-s",
+            "0.0000000084",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert dry_run_calls == [
+        (
+            "keysight-33521b",
+            "1000000",
+            "0.1",
+            "pn9",
+            "0",
+            "0.0000000084",
+            "50",
+        )
+    ]
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload == {
+        "success": True,
+        "action": "configure-prbs",
+        "mode": "dry-run",
+        "model": "33521B",
+        "canonical_model_id": "keysight-33521b",
+        "bit_rate_bps": 1_000_000.0,
+        "amplitude_vpp": 0.1,
+        "pattern": "PN9",
+        "offset_v": 0.0,
+        "edge_time_s": 8.4e-9,
+        "load": "50",
+        "commands": [
+            "OUTPut1 OFF",
+            "OUTPut1:LOAD 50",
+            "SOURce1:VOLTage:UNIT VPP",
+            "SOURce1:FUNCtion PRBS",
+            "SOURce1:FUNCtion:PRBS:BRATe 1000000",
+            "SOURce1:FUNCtion:PRBS:DATA PN9",
+            "SOURce1:FUNCtion:PRBS:TRANsition:BOTH 8.4e-09",
+            "SOURce1:VOLTage 0.1",
+            "SOURce1:VOLTage:OFFSet 0",
+        ],
+        "executed": False,
+        "output_state": "off",
+        "error": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        [
+            "configure-pulse",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--pulse-width-s",
+            "0.0001",
+        ],
+        ["configure-dc", "--voltage-v", "1.5"],
+        [
+            "configure-noise",
+            "--amplitude-vpp",
+            "0.1",
+            "--bandwidth-hz",
+            "1000000",
+        ],
+        [
+            "configure-prbs",
+            "--bit-rate-bps",
+            "1000000",
+            "--amplitude-vpp",
+            "0.1",
+        ],
+    ],
+)
+def test_remaining_live_waveforms_require_resource(
+    monkeypatch, capsys, argv
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(argv)
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert "usage:" in captured.err
+    assert "--resource" in captured.err
+    assert "Traceback" not in captured.err
+
+
 @pytest.mark.parametrize("state", ["on", "off"])
 def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
     calls = []

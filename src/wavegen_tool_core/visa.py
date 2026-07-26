@@ -239,6 +239,23 @@ class PulseConfigurationResult:
 
 
 @dataclass(frozen=True)
+class PulseDryRunResult:
+    """A hardware-free preview of a Channel 1 pulse configuration."""
+
+    model: str
+    canonical_model_id: str
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    pulse_width_s: float
+    edge_time_s: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class DcConfigurationResult:
     """A successful Channel 1 DC voltage configuration."""
 
@@ -248,6 +265,19 @@ class DcConfigurationResult:
     identity: InstrumentIdentity
     voltage_v: float
     load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
+class DcDryRunResult:
+    """A hardware-free preview of a Channel 1 DC configuration."""
+
+    model: str
+    canonical_model_id: str
+    voltage_v: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
     output_state: str = "off"
 
 
@@ -267,6 +297,21 @@ class NoiseConfigurationResult:
 
 
 @dataclass(frozen=True)
+class NoiseDryRunResult:
+    """A hardware-free preview of a Channel 1 noise configuration."""
+
+    model: str
+    canonical_model_id: str
+    amplitude_vpp: float
+    offset_v: float
+    bandwidth_hz: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class PrbsConfigurationResult:
     """A successful Channel 1 PRBS configuration."""
 
@@ -280,6 +325,23 @@ class PrbsConfigurationResult:
     offset_v: float
     edge_time_s: float
     load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
+class PrbsDryRunResult:
+    """A hardware-free preview of a Channel 1 PRBS configuration."""
+
+    model: str
+    canonical_model_id: str
+    bit_rate_bps: float
+    amplitude_vpp: float
+    pattern: str
+    offset_v: float
+    edge_time_s: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
     output_state: str = "off"
 
 
@@ -1195,6 +1257,92 @@ def configure_pulse(
 ) -> PulseConfigurationResult:
     """Validate and configure a Channel 1 pulse wave while keeping output off."""
 
+    (
+        frequency,
+        amplitude,
+        offset,
+        pulse_width,
+        edge_time,
+        normalized_load,
+        commands,
+    ) = _prepare_pulse(
+        frequency_hz,
+        amplitude_vpp,
+        pulse_width_s,
+        offset_v,
+        edge_time_s,
+        load,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return PulseConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        pulse_width_s=pulse_width,
+        edge_time_s=edge_time,
+        load=normalized_load,
+    )
+
+
+def dry_run_pulse(
+    model: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    pulse_width_s: object,
+    offset_v: object = 0,
+    edge_time_s: object = 10e-9,
+    load: object = 50,
+) -> PulseDryRunResult:
+    """Preview a validated Channel 1 pulse configuration without VISA I/O."""
+
+    _validate_dry_run_model(model, "pulse")
+    (
+        frequency,
+        amplitude,
+        offset,
+        pulse_width,
+        edge_time,
+        normalized_load,
+        commands,
+    ) = _prepare_pulse(
+        frequency_hz,
+        amplitude_vpp,
+        pulse_width_s,
+        offset_v,
+        edge_time_s,
+        load,
+    )
+    return PulseDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        pulse_width_s=pulse_width,
+        edge_time_s=edge_time,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_pulse(
+    frequency_hz: object,
+    amplitude_vpp: object,
+    pulse_width_s: object,
+    offset_v: object,
+    edge_time_s: object,
+    load: object,
+) -> tuple[float, float, float, float, float, str, tuple[str, ...]]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -1279,24 +1427,14 @@ def configure_pulse(
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
     )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
+    return (
+        frequency,
+        amplitude,
+        offset,
+        pulse_width,
+        edge_time,
+        normalized_load,
         commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
-    return PulseConfigurationResult(
-        resource=context.resource,
-        backend=context.backend,
-        transport=context.transport,
-        identity=context.identity,
-        frequency_hz=frequency,
-        amplitude_vpp=amplitude,
-        offset_v=offset,
-        pulse_width_s=pulse_width,
-        edge_time_s=edge_time,
-        load=normalized_load,
     )
 
 
@@ -1310,22 +1448,7 @@ def configure_dc(
 ) -> DcConfigurationResult:
     """Validate and configure a Channel 1 DC voltage while keeping output off."""
 
-    voltage = _normalize_finite_number(voltage_v, "voltage", waveform="DC")
-    normalized_load = _normalize_load(load, waveform="DC")
-    voltage_limit = 5.0 if normalized_load == "50" else 10.0
-    if not -voltage_limit <= voltage <= voltage_limit:
-        raise WaveformParameterError(
-            f"DC voltage for {normalized_load} load must be between "
-            f"{-voltage_limit:g} V and {voltage_limit:g} V."
-        )
-
-    load_command = "50" if normalized_load == "50" else "INF"
-    commands = (
-        "OUTPut1 OFF",
-        f"OUTPut1:LOAD {load_command}",
-        "SOURce1:FUNCtion DC",
-        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(voltage)}",
-    )
+    voltage, normalized_load, commands = _prepare_dc(voltage_v, load)
     context = _write_to_supported_33521b(
         resource,
         backend,
@@ -1343,6 +1466,47 @@ def configure_dc(
     )
 
 
+def dry_run_dc(
+    model: str,
+    voltage_v: object,
+    load: object = 50,
+) -> DcDryRunResult:
+    """Preview a validated Channel 1 DC configuration without VISA I/O."""
+
+    _validate_dry_run_model(model, "DC")
+    voltage, normalized_load, commands = _prepare_dc(voltage_v, load)
+    return DcDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        voltage_v=voltage,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_dc(
+    voltage_v: object,
+    load: object,
+) -> tuple[float, str, tuple[str, ...]]:
+    voltage = _normalize_finite_number(voltage_v, "voltage", waveform="DC")
+    normalized_load = _normalize_load(load, waveform="DC")
+    voltage_limit = 5.0 if normalized_load == "50" else 10.0
+    if not -voltage_limit <= voltage <= voltage_limit:
+        raise WaveformParameterError(
+            f"DC voltage for {normalized_load} load must be between "
+            f"{-voltage_limit:g} V and {voltage_limit:g} V."
+        )
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:FUNCtion DC",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(voltage)}",
+    )
+    return voltage, normalized_load, commands
+
+
 def configure_noise(
     resource: str,
     amplitude_vpp: object,
@@ -1355,6 +1519,76 @@ def configure_noise(
 ) -> NoiseConfigurationResult:
     """Validate and configure a Channel 1 noise wave while keeping output off."""
 
+    (
+        amplitude,
+        offset,
+        bandwidth,
+        normalized_load,
+        commands,
+    ) = _prepare_noise(
+        amplitude_vpp,
+        bandwidth_hz,
+        offset_v,
+        load,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return NoiseConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        bandwidth_hz=bandwidth,
+        load=normalized_load,
+    )
+
+
+def dry_run_noise(
+    model: str,
+    amplitude_vpp: object,
+    bandwidth_hz: object,
+    offset_v: object = 0,
+    load: object = 50,
+) -> NoiseDryRunResult:
+    """Preview a validated Channel 1 noise configuration without VISA I/O."""
+
+    _validate_dry_run_model(model, "noise")
+    (
+        amplitude,
+        offset,
+        bandwidth,
+        normalized_load,
+        commands,
+    ) = _prepare_noise(
+        amplitude_vpp,
+        bandwidth_hz,
+        offset_v,
+        load,
+    )
+    return NoiseDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        bandwidth_hz=bandwidth,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_noise(
+    amplitude_vpp: object,
+    bandwidth_hz: object,
+    offset_v: object,
+    load: object,
+) -> tuple[float, float, float, str, tuple[str, ...]]:
     amplitude = _normalize_finite_number(
         amplitude_vpp,
         "amplitude",
@@ -1385,22 +1619,12 @@ def configure_noise(
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
     )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
+    return (
+        amplitude,
+        offset,
+        bandwidth,
+        normalized_load,
         commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
-    return NoiseConfigurationResult(
-        resource=context.resource,
-        backend=context.backend,
-        transport=context.transport,
-        identity=context.identity,
-        amplitude_vpp=amplitude,
-        offset_v=offset,
-        bandwidth_hz=bandwidth,
-        load=normalized_load,
     )
 
 
@@ -1418,6 +1642,92 @@ def configure_prbs(
 ) -> PrbsConfigurationResult:
     """Validate and configure Channel 1 PRBS while keeping output off."""
 
+    (
+        bit_rate,
+        amplitude,
+        normalized_pattern,
+        offset,
+        edge_time,
+        normalized_load,
+        commands,
+    ) = _prepare_prbs(
+        bit_rate_bps,
+        amplitude_vpp,
+        pattern,
+        offset_v,
+        edge_time_s,
+        load,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return PrbsConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        bit_rate_bps=bit_rate,
+        amplitude_vpp=amplitude,
+        pattern=normalized_pattern,
+        offset_v=offset,
+        edge_time_s=edge_time,
+        load=normalized_load,
+    )
+
+
+def dry_run_prbs(
+    model: str,
+    bit_rate_bps: object,
+    amplitude_vpp: object,
+    pattern: object = "PN7",
+    offset_v: object = 0,
+    edge_time_s: object = 8.4e-9,
+    load: object = 50,
+) -> PrbsDryRunResult:
+    """Preview a validated Channel 1 PRBS configuration without VISA I/O."""
+
+    _validate_dry_run_model(model, "PRBS")
+    (
+        bit_rate,
+        amplitude,
+        normalized_pattern,
+        offset,
+        edge_time,
+        normalized_load,
+        commands,
+    ) = _prepare_prbs(
+        bit_rate_bps,
+        amplitude_vpp,
+        pattern,
+        offset_v,
+        edge_time_s,
+        load,
+    )
+    return PrbsDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        bit_rate_bps=bit_rate,
+        amplitude_vpp=amplitude,
+        pattern=normalized_pattern,
+        offset_v=offset,
+        edge_time_s=edge_time,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_prbs(
+    bit_rate_bps: object,
+    amplitude_vpp: object,
+    pattern: object,
+    offset_v: object,
+    edge_time_s: object,
+    load: object,
+) -> tuple[float, float, str, float, float, str, tuple[str, ...]]:
     bit_rate = _normalize_finite_number(
         bit_rate_bps,
         "bit rate",
@@ -1472,24 +1782,14 @@ def configure_prbs(
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
     )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
+    return (
+        bit_rate,
+        amplitude,
+        normalized_pattern,
+        offset,
+        edge_time,
+        normalized_load,
         commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
-    return PrbsConfigurationResult(
-        resource=context.resource,
-        backend=context.backend,
-        transport=context.transport,
-        identity=context.identity,
-        bit_rate_bps=bit_rate,
-        amplitude_vpp=amplitude,
-        pattern=normalized_pattern,
-        offset_v=offset,
-        edge_time_s=edge_time,
-        load=normalized_load,
     )
 
 
