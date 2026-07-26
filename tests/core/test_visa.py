@@ -20,6 +20,7 @@ from wavegen_tool_core.visa import (
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
     configure_dc,
+    configure_noise,
     configure_pulse,
     configure_ramp,
     configure_sine,
@@ -1047,6 +1048,63 @@ def test_invalid_dc_parameters_fail_before_visa_io(voltage, load):
             USB_RESOURCE,
             voltage,
             load,
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
+
+
+def test_configure_noise_identifies_then_writes_safe_channel_one_sequence():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_noise(
+        USB_RESOURCE,
+        0.1,
+        100_000,
+        0,
+        50,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion NOISe",
+        "SOURce1:FUNCtion:NOISe:BANDwidth 100000",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+    ]
+    assert not any(
+        command.startswith("SOURce1:FREQuency") for command in session.writes
+    )
+    assert "OUTPut1 ON" not in session.writes
+    assert result.amplitude_vpp == 0.1
+    assert result.offset_v == 0.0
+    assert result.bandwidth_hz == 100_000.0
+    assert result.load == "50"
+    assert result.output_state == "off"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize("bandwidth", [0.0009, 30_000_001])
+def test_invalid_noise_bandwidth_fails_before_visa_io(bandwidth):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError):
+        configure_noise(
+            USB_RESOURCE,
+            0.1,
+            bandwidth,
+            0,
+            50,
             resource_manager_factory=factory,
         )
 

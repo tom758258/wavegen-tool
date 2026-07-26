@@ -25,6 +25,7 @@ from wavegen_tool_core import (
     WaveformParameterError,
     WavegenError,
     configure_dc,
+    configure_noise,
     configure_pulse,
     configure_ramp,
     configure_sine,
@@ -340,6 +341,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    noise_parser = subparsers.add_parser(
+        "configure-noise",
+        help="Configure a validated Channel 1 noise waveform with output off.",
+    )
+    noise_parser.add_argument(
+        "--resource",
+        required=True,
+        help="Explicit USB or TCPIP/LAN VISA resource.",
+    )
+    noise_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    noise_parser.add_argument(
+        "--amplitude-vpp",
+        required=True,
+        help="Noise amplitude in Vpp.",
+    )
+    noise_parser.add_argument(
+        "--offset-v",
+        default="0",
+        help="DC offset in volts (default: 0).",
+    )
+    noise_parser.add_argument(
+        "--bandwidth-hz",
+        required=True,
+        help="Noise bandwidth in Hz.",
+    )
+    noise_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    noise_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set Channel 1 output on or off.",
@@ -422,6 +465,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_pulse(args)
     if args.command == "configure-dc":
         return _run_configure_dc(args)
+    if args.command == "configure-noise":
+        return _run_configure_noise(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "status":
@@ -547,6 +592,20 @@ def _run_configure_dc(args: argparse.Namespace) -> int:
         lambda: configure_dc(
             args.resource,
             args.voltage_v,
+            args.load,
+            args.backend,
+        ),
+    )
+
+
+def _run_configure_noise(args: argparse.Namespace) -> int:
+    return _run_control(
+        args,
+        lambda: configure_noise(
+            args.resource,
+            args.amplitude_vpp,
+            args.bandwidth_hz,
+            args.offset_v,
             args.load,
             args.backend,
         ),
@@ -739,6 +798,13 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             voltage_v=result.voltage_v,
             load=result.load,
         )
+    if action == "configure-noise":
+        payload.update(
+            amplitude_vpp=result.amplitude_vpp,
+            offset_v=result.offset_v,
+            bandwidth_hz=result.bandwidth_hz,
+            load=result.load,
+        )
     return payload
 
 
@@ -873,6 +939,8 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 pulse waveform configured with output off."
     elif action == "configure-dc":
         heading = "Channel 1 DC voltage configured with output off."
+    elif action == "configure-noise":
+        heading = "Channel 1 noise waveform configured with output off."
     else:
         heading = f"Channel 1 output set to {result.output_state}."
     return "\n".join(

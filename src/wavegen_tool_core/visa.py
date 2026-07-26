@@ -202,6 +202,21 @@ class DcConfigurationResult:
 
 
 @dataclass(frozen=True)
+class NoiseConfigurationResult:
+    """A successful Channel 1 noise configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    amplitude_vpp: float
+    offset_v: float
+    bandwidth_hz: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class OutputResult:
     """A successful explicit Channel 1 output-state change."""
 
@@ -1067,6 +1082,67 @@ def configure_dc(
         transport=context.transport,
         identity=context.identity,
         voltage_v=voltage,
+        load=normalized_load,
+    )
+
+
+def configure_noise(
+    resource: str,
+    amplitude_vpp: object,
+    bandwidth_hz: object,
+    offset_v: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> NoiseConfigurationResult:
+    """Validate and configure a Channel 1 noise wave while keeping output off."""
+
+    amplitude = _normalize_finite_number(
+        amplitude_vpp,
+        "amplitude",
+        waveform="Noise",
+    )
+    bandwidth = _normalize_finite_number(
+        bandwidth_hz,
+        "bandwidth",
+        waveform="Noise",
+    )
+    offset = _normalize_finite_number(offset_v, "offset", waveform="Noise")
+    normalized_load = _normalize_load(load, waveform="Noise")
+
+    if not 0.001 <= bandwidth <= 30_000_000:
+        raise WaveformParameterError(
+            "Noise bandwidth must be between 0.001 Hz and 30000000 Hz."
+        )
+    _validate_vpp_levels(amplitude, offset, normalized_load, "Noise")
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion NOISe",
+        "SOURce1:FUNCtion:NOISe:BANDwidth "
+        f"{_format_scpi_number(bandwidth)}",
+        f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return NoiseConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        bandwidth_hz=bandwidth,
         load=normalized_load,
     )
 

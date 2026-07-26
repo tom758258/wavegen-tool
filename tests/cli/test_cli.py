@@ -684,6 +684,64 @@ def test_configure_dc_cli_parses_arguments_calls_core_and_emits_json(
     }
 
 
+def test_configure_noise_cli_parses_arguments_calls_core_and_emits_json(
+    monkeypatch, capsys
+):
+    calls = []
+
+    def fake_configure_noise(*args):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Agilent Technologies",
+                model="33521B",
+            ),
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            bandwidth_hz=100_000.0,
+            load="50",
+            output_state="off",
+        )
+
+    monkeypatch.setattr(cli_module, "configure_noise", fake_configure_noise)
+
+    exit_code = main(
+        [
+            "configure-noise",
+            "--resource",
+            USB_RESOURCE,
+            "--amplitude-vpp",
+            "0.1",
+            "--bandwidth-hz",
+            "100000",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [
+        (USB_RESOURCE, "0.1", "100000", "0", "50", "system")
+    ]
+    assert payload == {
+        "success": True,
+        "action": "configure-noise",
+        "backend": "system",
+        "transport": "usb",
+        "manufacturer": "Agilent Technologies",
+        "model": "33521B",
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.0,
+        "bandwidth_hz": 100_000.0,
+        "load": "50",
+        "output_state": "off",
+        "error": None,
+    }
+    assert "frequency_hz" not in payload
+
+
 @pytest.mark.parametrize("state", ["on", "off"])
 def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
     calls = []
