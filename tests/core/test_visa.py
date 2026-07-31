@@ -15,6 +15,7 @@ from wavegen_tool_core.errors import (
     VisaCleanupError,
     VisaWriteError,
     WaveformParameterError,
+    WaveformVerificationError,
 )
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
@@ -57,6 +58,14 @@ STATUS_RESPONSES = {
     "SOURce1:VOLTage:OFFSet?": "0.000000000000000E+00",
     "OUTPut1:LOAD?": "9.900000000000000E+37",
 }
+PULSE_RESPONSES = {
+    "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum": "1.000000000000000E-06",
+    "OUTPut1?": "0",
+    "SOURce1:FUNCtion?": "PULS",
+    "SOURce1:FREQuency?": "10000000.0000005",
+    "SOURce1:FUNCtion:PULSe:WIDTh?": "5.00000001e-08",
+    "SOURce1:FUNCtion:PULSe:TRANsition?": "2.00000001e-08",
+}
 
 
 class FakeSession:
@@ -82,10 +91,12 @@ class FakeSession:
         self.write_termination = "existing write"
         self.queries = []
         self.writes = []
+        self.events = []
         self.close_calls = 0
 
     def query(self, command):
         self.queries.append(command)
+        self.events.append(("query", command))
         if command in self.query_errors_by_command:
             raise self.query_errors_by_command[command]
         if self.query_error is not None:
@@ -99,6 +110,7 @@ class FakeSession:
 
     def write(self, command):
         self.writes.append(command)
+        self.events.append(("write", command))
         if self.write_error is not None:
             raise self.write_error
 
@@ -1046,40 +1058,124 @@ def test_invalid_ramp_parameters_fail_before_visa_io(
 
 
 def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
-    session = FakeSession()
+    session = FakeSession(responses_by_command=PULSE_RESPONSES)
     manager = FakeManager(session)
 
     result = configure_pulse(
         USB_RESOURCE,
-        1000,
+        10_000_000,
         0.1,
-        0.0001,
+        50e-9,
         0,
-        0.00000001,
+        20e-9,
         50,
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.queries == [IDN_QUERY]
+    assert session.queries == [
+        IDN_QUERY,
+        "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum",
+        "OUTPut1?",
+        "SOURce1:FUNCtion?",
+        "SOURce1:FREQuency?",
+        "SOURce1:FUNCtion:PULSe:WIDTh?",
+        "SOURce1:FUNCtion:PULSe:TRANsition?",
+    ]
     assert session.writes == [
         "OUTPut1 OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum",
+        "SOURce1:FUNCtion:PULSe:WIDTh MINimum",
         "SOURce1:FUNCtion PULSe",
-        "SOURce1:FREQuency 1000",
-        "SOURce1:FUNCtion:PULSe:WIDTh 0.0001",
-        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
+        "SOURce1:FREQuency 10000000",
+        "SOURce1:FUNCtion:PULSe:WIDTh 5e-08",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 2e-08",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
     ]
+    assert session.events == [
+        ("query", IDN_QUERY),
+        ("write", "OUTPut1 OFF"),
+        ("write", "OUTPut1:LOAD 50"),
+        ("write", "SOURce1:VOLTage:UNIT VPP"),
+        ("write", "SOURce1:FUNCtion:PULSe:HOLD WIDTh"),
+        ("write", "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum"),
+        ("write", "SOURce1:FUNCtion:PULSe:WIDTh MINimum"),
+        ("write", "SOURce1:FUNCtion PULSe"),
+        ("write", "SOURce1:FREQuency 10000000"),
+        ("write", "SOURce1:FUNCtion:PULSe:WIDTh 5e-08"),
+        ("query", "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum"),
+        ("write", "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 2e-08"),
+        ("write", "SOURce1:VOLTage 0.1"),
+        ("write", "SOURce1:VOLTage:OFFSet 0"),
+        ("query", "OUTPut1?"),
+        ("query", "SOURce1:FUNCtion?"),
+        ("query", "SOURce1:FREQuency?"),
+        ("query", "SOURce1:FUNCtion:PULSe:WIDTh?"),
+        ("query", "SOURce1:FUNCtion:PULSe:TRANsition?"),
+    ]
     assert "OUTPut1 ON" not in session.writes
-    assert result.frequency_hz == 1000.0
+    assert result.frequency_hz == 10_000_000.0000005
     assert result.amplitude_vpp == 0.1
-    assert result.pulse_width_s == 0.0001
+    assert result.pulse_width_s == 5.00000001e-08
     assert result.offset_v == 0.0
-    assert result.edge_time_s == 1e-8
+    assert result.edge_time_s == 2.00000001e-08
     assert result.load == "50"
     assert result.output_state == "off"
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("responses", "expected_writes", "message"),
+    [
+        (
+            {
+                **PULSE_RESPONSES,
+                "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum": "2.9e-08",
+            },
+            False,
+            "exceeds instrument maximum",
+        ),
+        (
+            {
+                **PULSE_RESPONSES,
+                "SOURce1:FREQuency?": "10000000",
+                "SOURce1:FUNCtion:PULSe:WIDTh?": "5e-08",
+                "SOURce1:FUNCtion:PULSe:TRANsition?": "2.9e-08",
+            },
+            True,
+            "readback mismatch",
+        ),
+    ],
+)
+def test_configure_pulse_verification_failures(
+    responses,
+    expected_writes,
+    message,
+):
+    session = FakeSession(responses_by_command=responses)
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformVerificationError, match=message) as error:
+        configure_pulse(
+            USB_RESOURCE,
+            10_000_000,
+            0.1,
+            50e-9,
+            0,
+            30e-9,
+            50,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert error.value.output_state == "off"
+    assert "SYSTem:ERRor?" not in session.queries
+    target_edge = "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 3e-08"
+    assert (target_edge in session.writes) is expected_writes
+    assert "OUTPut1 ON" not in session.writes
     assert session.close_calls == 1
     assert manager.close_calls == 1
 
@@ -1116,6 +1212,9 @@ def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
         "OUTPut1 OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum",
+        "SOURce1:FUNCtion:PULSe:WIDTh MINimum",
         "SOURce1:FUNCtion PULSe",
         "SOURce1:FREQuency 1000",
         "SOURce1:FUNCtion:PULSe:WIDTh 0.0001",
@@ -1140,7 +1239,14 @@ def test_dry_run_pulse_rejects_invalid_timing_relationship():
 
 
 def test_configure_pulse_accepts_float_equal_width_window_boundary():
-    session = FakeSession()
+    session = FakeSession(
+        responses_by_command={
+            **PULSE_RESPONSES,
+            "SOURce1:FREQuency?": "13333333.333333336",
+            "SOURce1:FUNCtion:PULSe:WIDTh?": "3.75e-08",
+            "SOURce1:FUNCtion:PULSe:TRANsition?": "3e-08",
+        }
+    )
     manager = FakeManager(session)
 
     result = configure_pulse(
@@ -1154,7 +1260,15 @@ def test_configure_pulse_accepts_float_equal_width_window_boundary():
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.queries == [IDN_QUERY]
+    assert session.queries == [
+        IDN_QUERY,
+        "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum",
+        "OUTPut1?",
+        "SOURce1:FUNCtion?",
+        "SOURce1:FREQuency?",
+        "SOURce1:FUNCtion:PULSe:WIDTh?",
+        "SOURce1:FUNCtion:PULSe:TRANsition?",
+    ]
     assert session.writes[0] == "OUTPut1 OFF"
     assert "OUTPut1 ON" not in session.writes
     assert result.frequency_hz == 13_333_333.333333336
@@ -1589,10 +1703,92 @@ def test_invalid_output_state_is_domain_error_before_visa_io():
     assert manager.session.writes == []
 
 
-def test_status_uses_one_session_and_parses_read_only_channel_one_state():
+@pytest.mark.parametrize(
+    (
+        "function_response",
+        "extra_responses",
+        "expected_queries",
+        "expected_frequency",
+        "expected_amplitude",
+        "expected_unit",
+        "expected_bandwidth",
+        "expected_offset",
+    ),
+    [
+        (
+            " sin ",
+            {},
+            [
+                IDN_QUERY,
+                "OUTPut1?",
+                "SOURce1:FUNCtion?",
+                "SOURce1:VOLTage:OFFSet?",
+                "OUTPut1:LOAD?",
+                "SOURce1:FREQuency?",
+                "SOURce1:VOLTage:UNIT?",
+                "SOURce1:VOLTage?",
+            ],
+            1000.0,
+            0.1,
+            "VPP",
+            None,
+            0.0,
+        ),
+        (
+            " DC ",
+            {"SOURce1:VOLTage:OFFSet?": "1.5"},
+            [
+                IDN_QUERY,
+                "OUTPut1?",
+                "SOURce1:FUNCtion?",
+                "SOURce1:VOLTage:OFFSet?",
+                "OUTPut1:LOAD?",
+            ],
+            None,
+            None,
+            None,
+            None,
+            1.5,
+        ),
+        (
+            " NOIS ",
+            {"SOURce1:FUNCtion:NOISe:BANDwidth?": "200000"},
+            [
+                IDN_QUERY,
+                "OUTPut1?",
+                "SOURce1:FUNCtion?",
+                "SOURce1:VOLTage:OFFSet?",
+                "OUTPut1:LOAD?",
+                "SOURce1:VOLTage:UNIT?",
+                "SOURce1:VOLTage?",
+                "SOURce1:FUNCtion:NOISe:BANDwidth?",
+            ],
+            None,
+            0.1,
+            "VPP",
+            200000.0,
+            0.0,
+        ),
+    ],
+)
+def test_status_uses_one_session_and_parses_mode_aware_channel_one_state(
+    function_response,
+    extra_responses,
+    expected_queries,
+    expected_frequency,
+    expected_amplitude,
+    expected_unit,
+    expected_bandwidth,
+    expected_offset,
+):
+    responses = {
+        **STATUS_RESPONSES,
+        "SOURce1:FUNCtion?": function_response,
+        **extra_responses,
+    }
     session = FakeSession(
         response="Agilent Technologies,33521B,SERIAL,FIRMWARE",
-        responses_by_command=STATUS_RESPONSES,
+        responses_by_command=responses,
     )
     manager = FakeManager(session)
     factory = RecordingFactory(manager)
@@ -1604,24 +1800,16 @@ def test_status_uses_one_session_and_parses_read_only_channel_one_state():
 
     assert factory.calls == ["@ivi"]
     assert manager.opened_resources == [USB_RESOURCE]
-    assert session.queries == [
-        IDN_QUERY,
-        "OUTPut1?",
-        "SOURce1:FUNCtion?",
-        "SOURce1:FREQuency?",
-        "SOURce1:VOLTage:UNIT?",
-        "SOURce1:VOLTage?",
-        "SOURce1:VOLTage:OFFSet?",
-        "OUTPut1:LOAD?",
-    ]
+    assert session.queries == expected_queries
     assert session.writes == []
     assert result.identity.manufacturer == "Agilent Technologies"
     assert result.output_state == "off"
-    assert result.function == "SIN"
-    assert result.frequency_hz == 1000.0
-    assert result.amplitude == 0.1
-    assert result.amplitude_unit == "VPP"
-    assert result.offset_v == 0.0
+    assert result.function == function_response.strip().upper()
+    assert result.frequency_hz == expected_frequency
+    assert result.amplitude == expected_amplitude
+    assert result.amplitude_unit == expected_unit
+    assert result.bandwidth_hz == expected_bandwidth
+    assert result.offset_v == expected_offset
     assert result.load == "high-z"
     assert session.close_calls == 1
     assert manager.close_calls == 1

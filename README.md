@@ -256,11 +256,14 @@ uv run wavegen-tool status `
   --json
 ```
 
-Status reports the Channel 1 output state, function, frequency, amplitude and
-current amplitude unit, offset, and instrument output-load setting. It does not
-modify settings or turn the output on or off. The output-load setting does not
-detect or verify the physically connected load. Status readback has not yet
-been hardware-validated.
+Status reports the Channel 1 output state, function, offset, and instrument
+output-load setting. Frequency, amplitude, and amplitude unit are reported only
+when they are valid for the active function. DC does not report stale retained
+frequency or amplitude values. Noise reports its bandwidth rather than treating
+the ordinary frequency query as bandwidth. In JSON output, fields that do not
+apply to the active function are `null`. Status does not modify settings or turn
+the output on or off. The output-load setting does not detect or verify the
+physically connected load.
 
 ## Configure a Channel 1 Sine Wave
 
@@ -406,7 +409,7 @@ resource.
 
 ## Configure a Channel 1 Pulse Wave
 
-Configure a 1 kHz, 0.1 Vpp pulse with a 100 µs width, zero offset, equal 10 ns
+Configure a 1 kHz, 0.1 Vpp pulse with a 100 us width, zero offset, equal 10 ns
 leading and trailing edge times, and a 50-ohm instrument output-load setting:
 
 ```powershell
@@ -421,17 +424,22 @@ uv run wavegen-tool configure-pulse `
 ```
 
 Pulse frequency must be from 0.000001 Hz to 30000000 Hz, pulse width is at
-least 16 ns, and edge time must be from 8.4 ns to 1 µs. This command applies
+least 16 ns, and edge time must be from 8.4 ns to 1 us. This command applies
 the same edge time to the leading and trailing edges. Width must also fit
 within the waveform period and the selected edge-time constraints. The
 amplitude, offset, and output-load setting limits are the same as for the
 other waveform configuration commands.
 
-The command first turns Channel 1 output off and leaves it off. Configuration
-never enables output; only an explicit `output --state on` command can do that.
-The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Pulse configuration has not yet been
-hardware-validated.
+Live configuration first turns Channel 1 output off and applies safe
+intermediate pulse width and edge settings before selecting Pulse mode. It then
+queries the instrument's dynamic BOTH-edge maximum for the requested frequency
+and width. Before reporting success, it reads back the function, frequency,
+width, edge time, and output state; the output must still be off. If the
+instrument limit rejects or clips the requested edge time, the command fails
+instead of reporting a false success. Configuration never enables output; only
+an explicit `output --state on` command can do that. The load value is the
+instrument output-load setting and does not detect or verify the physically
+connected load.
 
 Preview the pulse plan without a VISA resource:
 
@@ -448,8 +456,10 @@ uv run wavegen-tool configure-pulse `
 ```
 
 Pulse dry-run applies the live frequency, edge-time, and pulse-width
-relationship validation and previews the same SCPI plan. It performs no VISA
-I/O; live `configure-pulse` still requires an explicit resource.
+relationship validation and previews the safe intermediate SCPI plan. It does
+not query the instrument's dynamic edge maximum or perform readback
+verification because no VISA I/O occurs; live `configure-pulse` still requires
+an explicit resource.
 
 ## Configure a Channel 1 DC Voltage
 

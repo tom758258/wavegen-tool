@@ -101,6 +101,12 @@ class StatusQueryError(WavegenError):
     code = "status_query_error"
 
 
+class WaveformVerificationError(WavegenError):
+    """A waveform limit or readback verification failed."""
+
+    code = "waveform_verification_error"
+
+
 class WaveformParameterError(WavegenError):
     """A waveform parameter cannot be safely applied."""
 

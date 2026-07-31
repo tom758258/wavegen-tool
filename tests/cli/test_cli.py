@@ -386,6 +386,7 @@ def test_exit_code_contract_is_centralized():
     assert ExitCode.RESOURCE_DISCOVERY_ERROR == 26
     assert ExitCode.VISA_WRITE_ERROR == 27
     assert ExitCode.STATUS_QUERY_ERROR == 28
+    assert ExitCode.WAVEFORM_VERIFICATION_ERROR == 29
 
 
 def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
@@ -1642,6 +1643,7 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
             frequency_hz=1000.0,
             amplitude=0.1,
             amplitude_unit="VPP",
+            bandwidth_hz=None,
             offset_v=0.0,
             load="50",
         )
@@ -1667,6 +1669,7 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
         "frequency_hz": 1000.0,
         "amplitude": 0.1,
         "amplitude_unit": "VPP",
+        "bandwidth_hz": None,
         "offset_v": 0.0,
         "load": "50",
         "error": None,

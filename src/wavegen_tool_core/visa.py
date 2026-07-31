@@ -26,6 +26,7 @@ from wavegen_tool_core.errors import (
     VisaCleanupError,
     VisaWriteError,
     WaveformParameterError,
+    WaveformVerificationError,
     WavegenError,
 )
 from wavegen_tool_core.identity import (
@@ -49,12 +50,22 @@ IDN_QUERY = "*IDN?"
 STATUS_QUERIES = (
     "OUTPut1?",
     "SOURce1:FUNCtion?",
-    "SOURce1:FREQuency?",
-    "SOURce1:VOLTage:UNIT?",
-    "SOURce1:VOLTage?",
     "SOURce1:VOLTage:OFFSet?",
     "OUTPut1:LOAD?",
 )
+STATUS_COMMON_QUERIES = STATUS_QUERIES
+STATUS_FREQUENCY_AMPLITUDE_QUERIES = (
+    "SOURce1:FREQuency?",
+    "SOURce1:VOLTage:UNIT?",
+    "SOURce1:VOLTage?",
+)
+STATUS_NOISE_QUERIES = (
+    "SOURce1:VOLTage:UNIT?",
+    "SOURce1:VOLTage?",
+    "SOURce1:FUNCtion:NOISe:BANDwidth?",
+)
+PULSE_TIMING_ABS_TOLERANCE_S = 1e-12
+PULSE_FREQUENCY_ABS_TOLERANCE_HZ = 1e-6
 DEFAULT_TIMEOUT_MS = 5000
 LIVE_VERIFY_TIMEOUT_MS = 1000
 SERIAL_TERMINATIONS = ("CR", "LF", "CRLF", "NONE")
@@ -120,9 +131,10 @@ class StatusResult:
     identity: InstrumentIdentity
     output_state: str
     function: str
-    frequency_hz: float
-    amplitude: float
-    amplitude_unit: str
+    frequency_hz: float | None
+    amplitude: float | None
+    amplitude_unit: str | None
+    bandwidth_hz: float | None
     offset_v: float
     load: str
 
@@ -721,20 +733,64 @@ def query_status(
                     )
                 else:
                     responses: dict[str, str] = {}
-                    for command in STATUS_QUERIES:
-                        try:
+                    current_command = "status"
+                    try:
+                        for command in STATUS_COMMON_QUERIES:
+                            current_command = command
                             responses[command] = session.query(command)
-                        except Exception as exc:
-                            primary_error = StatusQueryError(
-                                f"Status query {command} failed or timed out.",
-                                backend=backend_selection.name,
-                                transport=transport,
-                                identity=identity,
-                            )
-                            primary_cause = exc
-                            break
+                        function = _parse_status_function(
+                            responses["SOURce1:FUNCtion?"]
+                        )
+                        if function == "DC":
+                            function_queries = ()
+                        elif function in {"NOIS", "NOISE"}:
+                            function_queries = STATUS_NOISE_QUERIES
+                        else:
+                            function_queries = STATUS_FREQUENCY_AMPLITUDE_QUERIES
+                        for command in function_queries:
+                            current_command = command
+                            responses[command] = session.query(command)
+                    except Exception as exc:
+                        primary_error = StatusQueryError(
+                            f"Status query {current_command} failed or timed out.",
+                            backend=backend_selection.name,
+                            transport=transport,
+                            identity=identity,
+                        )
+                        primary_cause = exc
                     if primary_error is None:
                         try:
+                            frequency_hz = (
+                                _parse_status_number(
+                                    responses["SOURce1:FREQuency?"],
+                                    "frequency",
+                                )
+                                if "SOURce1:FREQuency?" in responses
+                                else None
+                            )
+                            amplitude_unit = (
+                                _parse_status_unit(
+                                    responses["SOURce1:VOLTage:UNIT?"]
+                                )
+                                if "SOURce1:VOLTage:UNIT?" in responses
+                                else None
+                            )
+                            amplitude = (
+                                _parse_status_number(
+                                    responses["SOURce1:VOLTage?"],
+                                    "amplitude",
+                                )
+                                if "SOURce1:VOLTage?" in responses
+                                else None
+                            )
+                            bandwidth_hz = (
+                                _parse_status_number(
+                                    responses["SOURce1:FUNCtion:NOISe:BANDwidth?"],
+                                    "noise bandwidth",
+                                )
+                                if "SOURce1:FUNCtion:NOISe:BANDwidth?" in responses
+                                else None
+                            )
                             result = StatusResult(
                                 resource=resource_name,
                                 backend=backend_selection.name,
@@ -743,20 +799,11 @@ def query_status(
                                 output_state=_parse_status_output(
                                     responses["OUTPut1?"]
                                 ),
-                                function=_parse_status_function(
-                                    responses["SOURce1:FUNCtion?"]
-                                ),
-                                frequency_hz=_parse_status_number(
-                                    responses["SOURce1:FREQuency?"],
-                                    "frequency",
-                                ),
-                                amplitude_unit=_parse_status_unit(
-                                    responses["SOURce1:VOLTage:UNIT?"]
-                                ),
-                                amplitude=_parse_status_number(
-                                    responses["SOURce1:VOLTage?"],
-                                    "amplitude",
-                                ),
+                                function=function,
+                                frequency_hz=frequency_hz,
+                                amplitude=amplitude,
+                                amplitude_unit=amplitude_unit,
+                                bandwidth_hz=bandwidth_hz,
                                 offset_v=_parse_status_number(
                                     responses["SOURce1:VOLTage:OFFSet?"],
                                     "offset",
@@ -1273,23 +1320,127 @@ def configure_pulse(
         edge_time_s,
         load,
     )
-    context = _write_to_supported_33521b(
+    def operate(
+        session: VisaSession,
+        context: IdentificationResult,
+    ) -> tuple[float, float, float]:
+        for command in commands[:9]:
+            session.write(command)
+
+        maximum = _query_pulse_verification(
+            session,
+            "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum",
+            "dynamic BOTH edge maximum",
+            _parse_pulse_verification_number,
+        )
+        if edge_time > maximum and not math.isclose(
+            edge_time,
+            maximum,
+            rel_tol=0.0,
+            abs_tol=PULSE_TIMING_ABS_TOLERANCE_S,
+        ):
+            raise WaveformVerificationError(
+                "Requested BOTH edge time "
+                f"{_format_scpi_number(edge_time)} s exceeds instrument maximum "
+                f"{_format_scpi_number(maximum)} s.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+                output_state="off",
+            )
+
+        for command in commands[9:]:
+            session.write(command)
+
+        output_state = _query_pulse_verification(
+            session,
+            "OUTPut1?",
+            "output state",
+            _parse_status_output,
+        )
+        function = _query_pulse_verification(
+            session,
+            "SOURce1:FUNCtion?",
+            "function",
+            _parse_status_function,
+        )
+        readback_frequency = _query_pulse_verification(
+            session,
+            "SOURce1:FREQuency?",
+            "frequency",
+            _parse_pulse_verification_number,
+        )
+        readback_width = _query_pulse_verification(
+            session,
+            "SOURce1:FUNCtion:PULSe:WIDTh?",
+            "pulse width",
+            _parse_pulse_verification_number,
+        )
+        readback_edge = _query_pulse_verification(
+            session,
+            "SOURce1:FUNCtion:PULSe:TRANsition?",
+            "BOTH edge",
+            _parse_pulse_verification_number,
+        )
+
+        if output_state != "off":
+            raise WaveformVerificationError(
+                f"Pulse readback reported output state {output_state!r}; expected 'off'.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+                output_state="off",
+            )
+        if function not in {"PULS", "PULSE"}:
+            raise WaveformVerificationError(
+                f"Pulse readback reported function {function!r}; expected PULS or PULSE.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+                output_state="off",
+            )
+        _verify_pulse_readback(
+            "frequency",
+            frequency,
+            readback_frequency,
+            PULSE_FREQUENCY_ABS_TOLERANCE_HZ,
+            context,
+        )
+        _verify_pulse_readback(
+            "pulse width",
+            pulse_width,
+            readback_width,
+            PULSE_TIMING_ABS_TOLERANCE_S,
+            context,
+        )
+        _verify_pulse_readback(
+            "BOTH edge",
+            edge_time,
+            readback_edge,
+            PULSE_TIMING_ABS_TOLERANCE_S,
+            context,
+        )
+        return readback_frequency, readback_width, readback_edge
+
+    context, readback = _run_on_supported_33521b(
         resource,
         backend,
-        commands,
-        output_state_after_writes="off",
+        operate,
+        output_state_after_operation="off",
+        operation_error_output_state="off",
         resource_manager_factory=resource_manager_factory,
     )
+    readback_frequency, readback_width, readback_edge = readback
     return PulseConfigurationResult(
         resource=context.resource,
         backend=context.backend,
         transport=context.transport,
         identity=context.identity,
-        frequency_hz=frequency,
+        frequency_hz=readback_frequency,
         amplitude_vpp=amplitude,
         offset_v=offset,
-        pulse_width_s=pulse_width,
-        edge_time_s=edge_time,
+        pulse_width_s=readback_width,
+        edge_time_s=readback_edge,
         load=normalized_load,
     )
 
@@ -1418,6 +1569,9 @@ def _prepare_pulse(
         "OUTPut1 OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum",
+        "SOURce1:FUNCtion:PULSe:WIDTh MINimum",
         "SOURce1:FUNCtion PULSe",
         f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
         "SOURce1:FUNCtion:PULSe:WIDTh "
@@ -1882,14 +2036,73 @@ def _format_scpi_number(value: float) -> str:
     return format(value, ".15g")
 
 
-def _write_to_supported_33521b(
+def _query_pulse_verification(
+    session: VisaSession,
+    command: str,
+    field: str,
+    parser: Callable[[object], object],
+) -> object:
+    try:
+        response = session.query(command)
+    except Exception as exc:
+        raise WaveformVerificationError(
+            f"Pulse verification query {command} failed or timed out.",
+            output_state="off",
+        ) from exc
+    try:
+        return parser(response)
+    except Exception as exc:
+        raise WaveformVerificationError(
+            f"Malformed Pulse verification response for {field}.",
+            output_state="off",
+        ) from exc
+
+
+def _parse_pulse_verification_number(response: object) -> float:
+    if not isinstance(response, str) or not response.strip():
+        raise ValueError("response must be a non-empty string")
+    try:
+        value = float(response.strip())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("response must be numeric") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("response must be a finite positive number")
+    return value
+
+
+def _verify_pulse_readback(
+    field: str,
+    requested: float,
+    actual: float,
+    abs_tolerance: float,
+    context: IdentificationResult,
+) -> None:
+    if math.isclose(
+        requested,
+        actual,
+        rel_tol=0.0,
+        abs_tol=abs_tolerance,
+    ):
+        return
+    raise WaveformVerificationError(
+        f"Pulse readback mismatch for {field}: requested "
+        f"{_format_scpi_number(requested)}, actual {_format_scpi_number(actual)}.",
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        output_state="off",
+    )
+
+
+def _run_on_supported_33521b(
     resource: str,
     backend: str | None,
-    commands: tuple[str, ...],
+    operation: Callable[[VisaSession, IdentificationResult], object],
     *,
-    output_state_after_writes: str | None = None,
+    output_state_after_operation: str | None = None,
+    operation_error_output_state: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None,
-) -> IdentificationResult:
+) -> tuple[IdentificationResult, object]:
     backend_selection = normalize_backend(backend)
     resource_name = normalize_resource(resource)
     try:
@@ -1910,6 +2123,9 @@ def _write_to_supported_33521b(
 
     session: VisaSession | None = None
     identity: InstrumentIdentity | None = None
+    context: IdentificationResult | None = None
+    operation_result: object | None = None
+    operation_completed = False
     primary_error: WavegenError | None = None
     primary_cause: Exception | None = None
     try:
@@ -1942,15 +2158,29 @@ def _write_to_supported_33521b(
                         transport=transport,
                     )
                 else:
+                    context = IdentificationResult(
+                        resource=resource_name,
+                        backend=backend_selection.name,
+                        transport=transport,
+                        identity=identity,
+                    )
                     try:
-                        for command in commands:
-                            session.write(command)
+                        operation_result = operation(session, context)
+                        operation_completed = True
+                    except WavegenError as exc:
+                        primary_error = exc.attach_context(
+                            backend=backend_selection.name,
+                            transport=transport,
+                            identity=identity,
+                            output_state=operation_error_output_state,
+                        )
                     except Exception as exc:
                         primary_error = VisaWriteError(
                             "Could not apply the requested instrument control write.",
                             backend=backend_selection.name,
                             transport=transport,
                             identity=identity,
+                            output_state=operation_error_output_state,
                         )
                         primary_cause = exc
     finally:
@@ -1962,7 +2192,7 @@ def _write_to_supported_33521b(
             raise primary_error from primary_cause
         raise primary_error
     if cleanup_errors:
-        if output_state_after_writes == "on":
+        if output_state_after_operation == "on":
             message = (
                 "The Channel 1 output ON command was sent, but VISA cleanup failed; "
                 "Channel 1 output may remain on: "
@@ -1976,16 +2206,36 @@ def _write_to_supported_33521b(
             backend=backend_selection.name,
             transport=transport,
             identity=identity,
-            output_state=output_state_after_writes,
+            output_state=output_state_after_operation,
         )
-    if identity is None:  # pragma: no cover - defensive invariant
+    if context is None or not operation_completed:  # pragma: no cover - defensive invariant
         raise RuntimeError("instrument control completed without an identity or error")
-    return IdentificationResult(
-        resource=resource_name,
-        backend=backend_selection.name,
-        transport=transport,
-        identity=identity,
+    return context, operation_result
+
+
+def _write_to_supported_33521b(
+    resource: str,
+    backend: str | None,
+    commands: tuple[str, ...],
+    *,
+    output_state_after_writes: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None,
+) -> IdentificationResult:
+    def write_commands(
+        session: VisaSession,
+        _context: IdentificationResult,
+    ) -> None:
+        for command in commands:
+            session.write(command)
+
+    context, _ = _run_on_supported_33521b(
+        resource,
+        backend,
+        write_commands,
+        output_state_after_operation=output_state_after_writes,
+        resource_manager_factory=resource_manager_factory,
     )
+    return context
 
 
 def _close_visa_resources(

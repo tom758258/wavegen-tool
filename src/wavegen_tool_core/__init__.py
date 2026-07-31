@@ -21,6 +21,7 @@ from wavegen_tool_core.errors import (
     VisaCleanupError,
     VisaWriteError,
     WaveformParameterError,
+    WaveformVerificationError,
     WavegenError,
 )
 from wavegen_tool_core.identity import (
@@ -134,6 +135,7 @@ __all__ = [
     "VisaCleanupError",
     "VisaWriteError",
     "WaveformParameterError",
+    "WaveformVerificationError",
     "WavegenError",
     "classify_transport",
     "configure_dc",

@@ -93,6 +93,8 @@ class SimulatedResource:
             raise RuntimeError("Simulated VISA session is closed.")
 
     def _apply_write(self, command: str) -> None:
+        if command == "SOURce1:FUNCtion:PULSe:HOLD WIDTh":
+            return
         exact_updates = {
             "OUTPut1 OFF": ("output_enabled", False),
             "OUTPut1 ON": ("output_enabled", True),
@@ -106,6 +108,14 @@ class SimulatedResource:
             "SOURce1:FUNCtion DC": ("active_function", "DC"),
             "SOURce1:FUNCtion NOISe": ("active_function", "NOISE"),
             "SOURce1:FUNCtion PRBS": ("active_function", "PRBS"),
+            "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum": (
+                "pulse_edge_time_s",
+                8.4e-9,
+            ),
+            "SOURce1:FUNCtion:PULSe:WIDTh MINimum": (
+                "pulse_width_s",
+                16e-9,
+            ),
         }
         update = exact_updates.get(command)
         if update is not None:
@@ -151,6 +161,16 @@ class SimulatedResource:
             "OUTPut1?": "1" if self.state.output_enabled else "0",
             "SOURce1:FUNCtion?": self.state.active_function,
             "SOURce1:FREQuency?": _format_number(self.state.frequency_hz),
+            "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum": "1e-6",
+            "SOURce1:FUNCtion:PULSe:WIDTh?": _format_number(
+                self.state.pulse_width_s
+            ),
+            "SOURce1:FUNCtion:PULSe:TRANsition?": _format_number(
+                self.state.pulse_edge_time_s
+            ),
+            "SOURce1:FUNCtion:NOISe:BANDwidth?": _format_number(
+                self.state.noise_bandwidth_hz
+            ),
             "SOURce1:VOLTage:UNIT?": self.state.voltage_unit,
             "SOURce1:VOLTage?": _format_number(self.state.amplitude_vpp),
             "SOURce1:VOLTage:OFFSet?": _format_number(self.state.offset_v),

@@ -26,6 +26,7 @@ from wavegen_tool_core import (
     VisaCleanupError,
     VisaWriteError,
     WaveformParameterError,
+    WaveformVerificationError,
     WavegenError,
     configure_dc,
     configure_noise,
@@ -65,6 +66,7 @@ class ExitCode(IntEnum):
     RESOURCE_DISCOVERY_ERROR = 26
     VISA_WRITE_ERROR = 27
     STATUS_QUERY_ERROR = 28
+    WAVEFORM_VERIFICATION_ERROR = 29
     INTERNAL_ERROR = 70
 
 
@@ -82,6 +84,7 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (VisaCleanupError, ExitCode.VISA_CLEANUP_ERROR),
     (VisaWriteError, ExitCode.VISA_WRITE_ERROR),
     (StatusQueryError, ExitCode.STATUS_QUERY_ERROR),
+    (WaveformVerificationError, ExitCode.WAVEFORM_VERIFICATION_ERROR),
 )
 
 
@@ -1820,6 +1823,7 @@ def _status_success_payload(result: Any) -> dict[str, object]:
         "frequency_hz": result.frequency_hz,
         "amplitude": result.amplitude,
         "amplitude_unit": result.amplitude_unit,
+        "bandwidth_hz": result.bandwidth_hz,
         "offset_v": result.offset_v,
         "load": result.load,
         "error": None,
@@ -2035,19 +2039,33 @@ def _human_prbs_dry_run_success(result: Any) -> str:
 
 
 def _human_status_success(result: Any) -> str:
-    return "\n".join(
-        (
-            f"Instrument: {result.identity.manufacturer} {result.identity.model}",
-            f"Backend: {result.backend}",
-            f"Transport: {result.transport}",
-            f"Channel 1 output: {result.output_state}",
-            f"Function: {result.function}",
-            f"Frequency: {result.frequency_hz:g} Hz",
-            f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
-            f"Offset: {result.offset_v:g} V",
-            f"Output-load setting: {result.load}",
+    lines = [
+        f"Instrument: {result.identity.manufacturer} {result.identity.model}",
+        f"Backend: {result.backend}",
+        f"Transport: {result.transport}",
+        f"Channel 1 output: {result.output_state}",
+        f"Function: {result.function}",
+    ]
+    if result.function == "DC":
+        lines.append(f"DC voltage: {result.offset_v:g} V")
+    elif result.function in {"NOIS", "NOISE"}:
+        lines.extend(
+            (
+                f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
+                f"Bandwidth: {result.bandwidth_hz:g} Hz",
+                f"Offset: {result.offset_v:g} V",
+            )
         )
-    )
+    else:
+        lines.extend(
+            (
+                f"Frequency: {result.frequency_hz:g} Hz",
+                f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
+                f"Offset: {result.offset_v:g} V",
+            )
+        )
+    lines.append(f"Output-load setting: {result.load}")
+    return "\n".join(lines)
 
 
 def _human_error(error: WavegenError) -> str:
