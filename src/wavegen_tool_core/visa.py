@@ -411,16 +411,17 @@ class SystemErrorEntry:
 
 @dataclass(frozen=True)
 class ErrorQueueResult:
-    """A complete, bounded SYSTem:ERRor? drain of an exactly recognized 33521B."""
+    """A bounded SYSTem:ERRor? drain of an exactly recognized 33521B."""
 
     resource: str
     backend: str
     transport: str
     identity: InstrumentIdentity
-    entries: tuple[SystemErrorEntry, ...]
+    errors: tuple[SystemErrorEntry, ...]
     read_count: int
     max_reads: int
-    exhausted: bool
+    empty_confirmed: bool
+    limit_reached: bool
 
 
 def normalize_serial_baud_rate(value: int | str) -> int:
@@ -2292,13 +2293,9 @@ def _normalize_error_queue_max_reads(value: object) -> int:
     """Return a validated 1..100 SYSTem:ERRor? read cap."""
 
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ErrorQueueQueryError(
-            "max_reads must be an integer between 1 and 100."
-        )
+        raise ValueError("max_reads must be an integer between 1 and 100.")
     if not ERROR_QUEUE_MAX_READS_MIN <= value <= ERROR_QUEUE_MAX_READS_MAX:
-        raise ErrorQueueQueryError(
-            "max_reads must be an integer between 1 and 100."
-        )
+        raise ValueError("max_reads must be an integer between 1 and 100.")
     return int(value)
 
 
@@ -2406,9 +2403,10 @@ def read_error_queue(
                         transport=transport,
                     )
                 else:
-                    entries: list[SystemErrorEntry] = []
+                    errors: list[SystemErrorEntry] = []
                     read_count = 0
-                    exhausted = False
+                    empty_confirmed = False
+                    limit_reached = False
                     try:
                         for _ in range(normalized_max_reads):
                             current_command = SYSTEM_ERROR_QUERY
@@ -2416,10 +2414,11 @@ def read_error_queue(
                             read_count += 1
                             entry = _parse_error_queue_entry(raw_response)
                             if entry.code == ERROR_QUEUE_NO_ERROR_CODE:
+                                empty_confirmed = True
                                 break
-                            entries.append(entry)
+                            errors.append(entry)
                         else:
-                            exhausted = True
+                            limit_reached = True
                     except ErrorQueueQueryError as exc:
                         primary_error = exc.attach_context(
                             backend=backend_selection.name,
@@ -2440,10 +2439,11 @@ def read_error_queue(
                             backend=backend_selection.name,
                             transport=transport,
                             identity=identity,
-                            entries=tuple(entries),
+                            errors=tuple(errors),
                             read_count=read_count,
                             max_reads=normalized_max_reads,
-                            exhausted=exhausted,
+                            empty_confirmed=empty_confirmed,
+                            limit_reached=limit_reached,
                         )
     finally:
         cleanup_errors = _close_visa_resources(session, manager)

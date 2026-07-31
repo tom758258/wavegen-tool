@@ -2010,13 +2010,14 @@ def test_read_error_queue_live_drains_fifo():
 
     assert result.read_count == 3
     assert result.max_reads == 20
-    assert result.exhausted is False
-    assert len(result.entries) == 2
-    assert result.entries[0].code == -100
-    assert result.entries[0].message == "Data out of range"
-    assert result.entries[1].code == -222
-    assert result.entries[1].message == "Data out of range, value clipped to upper limit"
-    assert result.entries[1].raw_response == '-222,"Data out of range, value clipped to upper limit"'
+    assert result.empty_confirmed is True
+    assert result.limit_reached is False
+    assert len(result.errors) == 2
+    assert result.errors[0].code == -100
+    assert result.errors[0].message == "Data out of range"
+    assert result.errors[1].code == -222
+    assert result.errors[1].message == "Data out of range, value clipped to upper limit"
+    assert result.errors[1].raw_response == '-222,"Data out of range, value clipped to upper limit"'
     assert session.queries == [IDN_QUERY, "SYSTem:ERRor?", "SYSTem:ERRor?", "SYSTem:ERRor?"]
     assert session.writes == []
     assert session.close_calls == 1
@@ -2024,7 +2025,7 @@ def test_read_error_queue_live_drains_fifo():
 
 
 def test_read_error_queue_max_reads_cap():
-    """Stops at max_reads and sets exhausted=True."""
+    """Stops at max_reads without confirming that the queue is empty."""
     # Queue longer than max_reads, no sentinel
     session = FakeErrorQueueSession(
         ['-100,"A"', '-200,"B"', '-300,"C"', '-400,"D"', '-500,"E"'],
@@ -2040,11 +2041,12 @@ def test_read_error_queue_max_reads_cap():
 
     assert result.read_count == 3
     assert result.max_reads == 3
-    assert result.exhausted is True
-    assert len(result.entries) == 3
-    assert result.entries[0].code == -100
-    assert result.entries[1].code == -200
-    assert result.entries[2].code == -300
+    assert result.empty_confirmed is False
+    assert result.limit_reached is True
+    assert len(result.errors) == 3
+    assert result.errors[0].code == -100
+    assert result.errors[1].code == -200
+    assert result.errors[2].code == -300
     assert session.close_calls == 1
     assert manager.close_calls == 1
 
@@ -2055,7 +2057,7 @@ def test_read_error_queue_rejects_invalid_max_reads_before_manager(bad_max_reads
     session = FakeSession()
     manager = FakeManager(session)
 
-    with pytest.raises(ErrorQueueQueryError, match="must be an integer between 1 and 100"):
+    with pytest.raises(ValueError, match="must be an integer between 1 and 100"):
         read_error_queue(
             USB_RESOURCE,
             resource_manager_factory=RecordingFactory(manager),
