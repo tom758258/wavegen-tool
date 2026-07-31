@@ -1129,16 +1129,29 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
 
 
 @pytest.mark.parametrize(
-    ("responses", "expected_writes", "message", "expected_output_state"),
+    (
+        "responses",
+        "frequency",
+        "pulse_width",
+        "edge_time",
+        "expected_writes",
+        "message",
+        "expected_output_state",
+        "target_edge",
+    ),
     [
         (
             {
                 **PULSE_RESPONSES,
                 "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum": "2.9e-08",
             },
+            10_000_000,
+            50e-9,
+            30e-9,
             False,
             "exceeds instrument maximum",
             "off",
+            "3e-08",
         ),
         (
             {
@@ -1147,26 +1160,52 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
                 "SOURce1:FUNCtion:PULSe:WIDTh?": "5e-08",
                 "SOURce1:FUNCtion:PULSe:TRANsition?": "2.9e-08",
             },
+            10_000_000,
+            50e-9,
+            30e-9,
             True,
             "readback mismatch",
             "off",
+            "3e-08",
         ),
         (
             {
                 **PULSE_RESPONSES,
                 "OUTPut1?": "1",
             },
+            10_000_000,
+            50e-9,
+            30e-9,
             True,
             "reported output state 'on'; expected 'off'",
             "on",
+            "3e-08",
+        ),
+        (
+            {
+                **PULSE_RESPONSES,
+                "SOURce1:FREQuency?": "1000",
+                "SOURce1:FUNCtion:PULSe:WIDTh?": "9.995e-05",
+            },
+            1000,
+            100e-6,
+            20e-9,
+            True,
+            "readback mismatch",
+            "off",
+            "2e-08",
         ),
     ],
 )
 def test_configure_pulse_verification_failures(
     responses,
+    frequency,
+    pulse_width,
+    edge_time,
     expected_writes,
     message,
     expected_output_state,
+    target_edge,
 ):
     session = FakeSession(responses_by_command=responses)
     manager = FakeManager(session)
@@ -1174,19 +1213,21 @@ def test_configure_pulse_verification_failures(
     with pytest.raises(WaveformVerificationError, match=message) as error:
         configure_pulse(
             USB_RESOURCE,
-            10_000_000,
+            frequency,
             0.1,
-            50e-9,
+            pulse_width,
             0,
-            30e-9,
+            edge_time,
             50,
             resource_manager_factory=RecordingFactory(manager),
         )
 
     assert error.value.output_state == expected_output_state
     assert "SYSTem:ERRor?" not in session.queries
-    target_edge = "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 3e-08"
-    assert (target_edge in session.writes) is expected_writes
+    assert (
+        f"SOURce1:FUNCtion:PULSe:TRANsition:BOTH {target_edge}"
+        in session.writes
+    ) is expected_writes
     assert "OUTPut1 ON" not in session.writes
     assert session.close_calls == 1
     assert manager.close_calls == 1
