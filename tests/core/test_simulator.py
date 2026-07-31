@@ -216,9 +216,6 @@ def test_simulator_fails_closed_for_unknown_operations_and_closed_sessions() -> 
     session = manager.open_resource(SIMULATED_33521B_RESOURCE)
     with pytest.raises(ValueError, match="Unsupported simulated SCPI write"):
         session.write("*RST")
-    with pytest.raises(ValueError, match="Unsupported simulated SCPI query"):
-        session.query("SYSTem:ERRor?")
-
     session.close()
     with pytest.raises(RuntimeError, match="session is closed"):
         session.write("OUTPut1 OFF")
@@ -229,3 +226,44 @@ def test_simulator_fails_closed_for_unknown_operations_and_closed_sessions() -> 
     direct_session.close()
     with pytest.raises(RuntimeError, match="session is closed"):
         direct_session.query("*IDN?")
+
+def test_simulator_error_queue_fifo() -> None:
+    """SYSTem:ERRor? drains the shared state FIFO; status does not consume it."""
+    state = Simulated33521BState()
+    state.error_queue = ['-222,"Data out of range"', '-350,"Queue overflow"']
+
+    manager_a = SimulatedResourceManager(state)
+    session_a = manager_a.open_resource(SIMULATED_33521B_RESOURCE)
+
+    # First session drains first entry
+    assert session_a.query("SYSTem:ERRor?") == '-222,"Data out of range"'
+
+    # Second session (same state) drains second entry
+    manager_b = SimulatedResourceManager(state)
+    session_b = manager_b.open_resource(SIMULATED_33521B_RESOURCE)
+    assert session_b.query("SYSTem:ERRor?") == '-350,"Queue overflow"'
+
+    # Third drain on empty queue returns sentinel
+    assert session_b.query("SYSTem:ERRor?") == '+0,"No error"'
+
+    # Status query does not consume the queue
+    state.error_queue = ['-100,"Data out of range"']
+    manager_c = SimulatedResourceManager(state)
+    session_c = manager_c.open_resource(SIMULATED_33521B_RESOURCE)
+    result = query_status(
+        SIMULATED_33521B_RESOURCE,
+        resource_manager_factory=_factory_for(state),
+    )
+    assert result.function == "SIN"
+    # Queue still has the entry (not consumed by status)
+    assert session_c.query("SYSTem:ERRor?") == '-100,"Data out of range"'
+
+    # Close does not clear a pending queue entry
+    state.error_queue = ['+123,"Test after close"']
+    session_c.close()
+    assert state.error_queue == ['+123,"Test after close"']
+
+    # Cross-session: remaining sessions on the same state see the shared queue
+    manager_d = SimulatedResourceManager(state)
+    session_d = manager_d.open_resource(SIMULATED_33521B_RESOURCE)
+    assert session_d.query("SYSTem:ERRor?") == '+123,"Test after close"'

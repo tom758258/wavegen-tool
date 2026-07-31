@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+import csv
 from dataclasses import dataclass
+from io import StringIO
 import math
 from typing import Protocol
 
@@ -15,6 +17,7 @@ from wavegen_tool_core.backends import (
     validate_backend_transport,
 )
 from wavegen_tool_core.errors import (
+    ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
     ResourceDiscoveryError,
@@ -47,6 +50,11 @@ from wavegen_tool_core.transport import (
 
 
 IDN_QUERY = "*IDN?"
+SYSTEM_ERROR_QUERY = "SYSTem:ERRor?"
+DEFAULT_ERROR_QUEUE_MAX_READS = 20
+ERROR_QUEUE_MAX_READS_MIN = 1
+ERROR_QUEUE_MAX_READS_MAX = 100
+ERROR_QUEUE_NO_ERROR_CODE = 0
 STATUS_QUERIES = (
     "OUTPut1?",
     "SOURce1:FUNCtion?",
@@ -384,6 +392,35 @@ class ResourceListResult:
 
     backend: str
     resources: tuple[ResourceListEntry, ...]
+
+
+@dataclass(frozen=True)
+class SystemErrorEntry:
+    """One parsed System Error queue entry."""
+
+    code: int
+    message: str
+    raw_response: str
+
+    @property
+    def is_no_error(self) -> bool:
+        """Return True for the Keysight `+0,"No error"` sentinel."""
+
+        return self.code == 0
+
+
+@dataclass(frozen=True)
+class ErrorQueueResult:
+    """A complete, bounded SYSTem:ERRor? drain of an exactly recognized 33521B."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    entries: tuple[SystemErrorEntry, ...]
+    read_count: int
+    max_reads: int
+    exhausted: bool
 
 
 def normalize_serial_baud_rate(value: int | str) -> int:
@@ -2249,6 +2286,183 @@ def _write_to_supported_33521b(
         resource_manager_factory=resource_manager_factory,
     )
     return context
+
+
+def _normalize_error_queue_max_reads(value: object) -> int:
+    """Return a validated 1..100 SYSTem:ERRor? read cap."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ErrorQueueQueryError(
+            "max_reads must be an integer between 1 and 100."
+        )
+    if not ERROR_QUEUE_MAX_READS_MIN <= value <= ERROR_QUEUE_MAX_READS_MAX:
+        raise ErrorQueueQueryError(
+            "max_reads must be an integer between 1 and 100."
+        )
+    return int(value)
+
+
+def _parse_error_queue_entry(raw_response: str) -> SystemErrorEntry:
+    """Parse one SYSTem:ERRor? response into code and message."""
+
+    if not isinstance(raw_response, str) or not raw_response.strip():
+        raise ErrorQueueQueryError(
+            "SYSTem:ERRor? returned an empty response."
+        )
+
+    try:
+        rows = list(csv.reader(StringIO(raw_response), strict=True))
+    except csv.Error as exc:
+        raise ErrorQueueQueryError(
+            "Malformed SYSTem:ERRor? response: invalid CSV."
+        ) from exc
+    if len(rows) != 1 or len(rows[0]) != 2:
+        raise ErrorQueueQueryError(
+            "Malformed SYSTem:ERRor? response: expected code and message."
+        )
+
+    code_field, message = rows[0]
+    code_field = code_field.strip()
+    sign = code_field[:1]
+    digits = code_field[1:] if sign in {"+", "-"} else code_field
+    if not digits or not digits.isascii() or not digits.isdecimal():
+        raise ErrorQueueQueryError(
+            "Malformed SYSTem:ERRor? response: missing numeric code."
+        )
+    try:
+        code = int(code_field)
+    except ValueError as exc:
+        raise ErrorQueueQueryError(
+            "Malformed SYSTem:ERRor? response: non-integer code."
+        ) from exc
+    return SystemErrorEntry(
+        code=code,
+        message=message,
+        raw_response=raw_response,
+    )
+
+
+def read_error_queue(
+    resource: str,
+    backend: str | None = None,
+    *,
+    max_reads: int = DEFAULT_ERROR_QUEUE_MAX_READS,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> ErrorQueueResult:
+    """Drain the SYSTem:ERRor? queue of one exactly recognized 33521B."""
+
+    normalized_max_reads = _normalize_error_queue_max_reads(max_reads)
+    backend_selection = normalize_backend(backend)
+    resource_name = normalize_resource(resource)
+    try:
+        transport = classify_transport(resource_name)
+    except WavegenError as exc:
+        raise exc.attach_context(backend=backend_selection.name)
+    validate_backend_transport(backend_selection, transport)
+
+    factory = resource_manager_factory or create_resource_manager
+    try:
+        manager = factory(backend_selection.pyvisa_library)
+    except Exception as exc:
+        raise ResourceManagerError(
+            "Could not create the requested VISA ResourceManager.",
+            backend=backend_selection.name,
+            transport=transport,
+        ) from exc
+
+    session: VisaSession | None = None
+    identity: InstrumentIdentity | None = None
+    result: ErrorQueueResult | None = None
+    primary_error: WavegenError | None = None
+    primary_cause: Exception | None = None
+    current_command = "status"
+    try:
+        try:
+            session = manager.open_resource(resource_name)
+            session.timeout = DEFAULT_TIMEOUT_MS
+        except Exception as exc:
+            primary_error = ResourceOpenError(
+                "Could not open the explicit VISA resource.",
+                backend=backend_selection.name,
+                transport=transport,
+            )
+            primary_cause = exc
+        else:
+            try:
+                raw_idn = session.query(IDN_QUERY)
+            except Exception as exc:
+                primary_error = IdnQueryError(
+                    "The instrument identification query failed or timed out.",
+                    backend=backend_selection.name,
+                    transport=transport,
+                )
+                primary_cause = exc
+            else:
+                try:
+                    identity = resolve_supported_identity(parse_idn(raw_idn))
+                except WavegenError as exc:
+                    primary_error = exc.attach_context(
+                        backend=backend_selection.name,
+                        transport=transport,
+                    )
+                else:
+                    entries: list[SystemErrorEntry] = []
+                    read_count = 0
+                    exhausted = False
+                    try:
+                        for _ in range(normalized_max_reads):
+                            current_command = SYSTEM_ERROR_QUERY
+                            raw_response = session.query(current_command)
+                            read_count += 1
+                            entry = _parse_error_queue_entry(raw_response)
+                            if entry.code == ERROR_QUEUE_NO_ERROR_CODE:
+                                break
+                            entries.append(entry)
+                        else:
+                            exhausted = True
+                    except ErrorQueueQueryError as exc:
+                        primary_error = exc.attach_context(
+                            backend=backend_selection.name,
+                            transport=transport,
+                            identity=identity,
+                        )
+                    except Exception as exc:
+                        primary_error = ErrorQueueQueryError(
+                            f"SYSTem:ERRor? query {current_command} failed or timed out.",
+                            backend=backend_selection.name,
+                            transport=transport,
+                            identity=identity,
+                        )
+                        primary_cause = exc
+                    if primary_error is None:
+                        result = ErrorQueueResult(
+                            resource=resource_name,
+                            backend=backend_selection.name,
+                            transport=transport,
+                            identity=identity,
+                            entries=tuple(entries),
+                            read_count=read_count,
+                            max_reads=normalized_max_reads,
+                            exhausted=exhausted,
+                        )
+    finally:
+        cleanup_errors = _close_visa_resources(session, manager)
+
+    if primary_error is not None:
+        primary_error.attach_cleanup_errors(cleanup_errors)
+        if primary_cause is not None:
+            raise primary_error from primary_cause
+        raise primary_error
+    if cleanup_errors:
+        raise VisaCleanupError(
+            "VISA cleanup failed: " + "; ".join(cleanup_errors) + ".",
+            backend=backend_selection.name,
+            transport=transport,
+            identity=identity,
+        )
+    if result is None:  # pragma: no cover - defensive invariant
+        raise RuntimeError("error queue query completed without a result or error")
+    return result
 
 
 def _close_visa_resources(

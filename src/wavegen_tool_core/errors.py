@@ -135,3 +135,9 @@ class VisaCleanupError(WavegenError):
     """A session or ResourceManager could not be closed."""
 
     code = "visa_cleanup_error"
+
+
+class ErrorQueueQueryError(WavegenError):
+    """A SYSTem:ERRor? query failed, was empty, or returned a malformed response."""
+
+    code = "error_queue_query_error"

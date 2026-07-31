@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 import math
 
 
@@ -29,6 +29,7 @@ class Simulated33521BState:
     prbs_bit_rate_bps: float = 1000000.0
     prbs_pattern: str = "PN7"
     prbs_edge_time_s: float = 8.4e-9
+    error_queue: list[str] = dataclass_field(default_factory=list)
 
 
 class SimulatedResourceManager:
@@ -180,6 +181,10 @@ class SimulatedResource:
                 else self.state.output_load
             ),
         }
+        if command == "SYSTem:ERRor?":
+            if self.state.error_queue:
+                return self.state.error_queue.pop(0)
+            return '+0,"No error"'
         try:
             return responses[command]
         except KeyError as exc:

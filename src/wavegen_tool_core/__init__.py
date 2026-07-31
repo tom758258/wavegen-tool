@@ -43,6 +43,8 @@ from wavegen_tool_core.simulator import (
 from wavegen_tool_core.transport import classify_transport, detect_resource_transport
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
+    ErrorQueueResult,
+    SystemErrorEntry,
     LIVE_VERIFY_TIMEOUT_MS,
     SERIAL_TERMINATIONS,
     DcConfigurationResult,
@@ -83,6 +85,7 @@ from wavegen_tool_core.visa import (
     normalize_serial_baud_rate,
     normalize_serial_termination,
     query_status,
+    read_error_queue,
     set_output,
 )
 
@@ -92,6 +95,7 @@ __all__ = [
     "CANONICAL_MODEL_ID",
     "DEFAULT_TIMEOUT_MS",
     "DcConfigurationResult",
+    "ErrorQueueResult",
     "DcDryRunResult",
     "LIVE_VERIFY_TIMEOUT_MS",
     "PYVISA_PY_BACKEND",
@@ -127,6 +131,7 @@ __all__ = [
     "SimulatedResourceManager",
     "StatusQueryError",
     "StatusResult",
+    "SystemErrorEntry",
     "UnsupportedBackendError",
     "UnsupportedConnectionScopeError",
     "UnsupportedInstrumentError",
@@ -160,6 +165,7 @@ __all__ = [
     "normalize_serial_termination",
     "parse_idn",
     "query_status",
+    "read_error_queue",
     "resolve_supported_identity",
     "set_output",
     "validate_backend_transport",

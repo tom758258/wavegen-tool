@@ -3,6 +3,7 @@ from inspect import signature
 import pytest
 
 from wavegen_tool_core.errors import (
+    ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
     ResourceDiscoveryError,
@@ -41,6 +42,7 @@ from wavegen_tool_core.visa import (
     normalize_serial_baud_rate,
     normalize_serial_termination,
     query_status,
+    read_error_queue,
     set_output,
 )
 
@@ -113,6 +115,56 @@ class FakeSession:
         self.events.append(("write", command))
         if self.write_error is not None:
             raise self.write_error
+
+    def clear(self):
+        raise AssertionError("clear must not be called")
+
+    def control_ren(self, mode):
+        raise AssertionError(f"control_ren must not be called: {mode}")
+
+    def read_stb(self):
+        raise AssertionError("read_stb must not be called")
+
+
+class FakeErrorQueueSession:
+    """FakeSession with a FIFO response queue for SYSTem:ERRor?."""
+
+    def __init__(
+        self,
+        error_queue_responses,
+        response=VALID_IDN,
+        *,
+        close_error=None,
+    ):
+        self.response = response
+        self.error_queue_responses = list(error_queue_responses)
+        self.close_error = close_error
+        self.timeout = None
+        self.baud_rate = 4800
+        self.read_termination = "existing read"
+        self.write_termination = "existing write"
+        self.queries = []
+        self.writes = []
+        self.events = []
+        self.close_calls = 0
+
+    def query(self, command):
+        self.queries.append(command)
+        self.events.append(("query", command))
+        if command == "SYSTem:ERRor?":
+            if self.error_queue_responses:
+                return self.error_queue_responses.pop(0)
+            return '+0,"No error"'
+        return self.response
+
+    def close(self):
+        self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+    def write(self, command):
+        self.writes.append(command)
+        self.events.append(("write", command))
 
     def clear(self):
         raise AssertionError("clear must not be called")
@@ -1935,5 +1987,142 @@ def test_status_rejects_unsupported_model_before_status_queries():
 
     assert session.queries == [IDN_QUERY]
     assert session.writes == []
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+# ------------
+
+def test_read_error_queue_live_drains_fifo():
+    """Drain the error queue FIFO with comma-in-message, sentinel, read_count."""
+    error_responses = [
+        '-100,"Data out of range"',
+        '-222,"Data out of range, value clipped to upper limit"',
+        '+0,"No error"',
+    ]
+    session = FakeErrorQueueSession(error_responses)
+    manager = FakeManager(session)
+    factory = RecordingFactory(manager)
+
+    result = read_error_queue(
+        USB_RESOURCE,
+        resource_manager_factory=factory,
+    )
+
+    assert result.read_count == 3
+    assert result.max_reads == 20
+    assert result.exhausted is False
+    assert len(result.entries) == 2
+    assert result.entries[0].code == -100
+    assert result.entries[0].message == "Data out of range"
+    assert result.entries[1].code == -222
+    assert result.entries[1].message == "Data out of range, value clipped to upper limit"
+    assert result.entries[1].raw_response == '-222,"Data out of range, value clipped to upper limit"'
+    assert session.queries == [IDN_QUERY, "SYSTem:ERRor?", "SYSTem:ERRor?", "SYSTem:ERRor?"]
+    assert session.writes == []
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_read_error_queue_max_reads_cap():
+    """Stops at max_reads and sets exhausted=True."""
+    # Queue longer than max_reads, no sentinel
+    session = FakeErrorQueueSession(
+        ['-100,"A"', '-200,"B"', '-300,"C"', '-400,"D"', '-500,"E"'],
+    )
+    manager = FakeManager(session)
+    factory = RecordingFactory(manager)
+
+    result = read_error_queue(
+        USB_RESOURCE,
+        resource_manager_factory=factory,
+        max_reads=3,
+    )
+
+    assert result.read_count == 3
+    assert result.max_reads == 3
+    assert result.exhausted is True
+    assert len(result.entries) == 3
+    assert result.entries[0].code == -100
+    assert result.entries[1].code == -200
+    assert result.entries[2].code == -300
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize("bad_max_reads", [0, 101, True])
+def test_read_error_queue_rejects_invalid_max_reads_before_manager(bad_max_reads):
+    """Invalid max_reads must be rejected before any ResourceManager is created."""
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(ErrorQueueQueryError, match="must be an integer between 1 and 100"):
+        read_error_queue(
+            USB_RESOURCE,
+            resource_manager_factory=RecordingFactory(manager),
+            max_reads=bad_max_reads,
+        )
+
+    # RecordingFactory was never called; manager must not have been opened
+    assert manager.open_calls == []
+    assert manager.close_calls == 0
+    assert session.queries == []
+    assert session.close_calls == 0
+
+
+def test_read_error_queue_rejects_unsupported_idn_before_queue():
+    """Unsupported IDN must stop before SYSTem:ERRor? is sent."""
+    session = FakeSession(response="Keysight Technologies,33522B,SERIAL,FIRMWARE")
+    manager = FakeManager(session)
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(UnsupportedInstrumentError):
+        read_error_queue(
+            USB_RESOURCE,
+            resource_manager_factory=factory,
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_read_error_queue_malformed_response_raises_and_closes():
+    """Malformed SYSTem:ERRor? raises ErrorQueueQueryError and cleans up."""
+    session = FakeErrorQueueSession(["not a valid response"])
+    manager = FakeManager(session)
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(ErrorQueueQueryError, match="Malformed SYSTem:ERRor?"):
+        read_error_queue(
+            USB_RESOURCE,
+            resource_manager_factory=factory,
+        )
+
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_read_error_queue_query_failure_chains_and_closes():
+    """Query failure on SYSTem:ERRor? raises ErrorQueueQueryError, chains cause, cleans up."""
+    session = FakeSession(
+        query_errors_by_command={"SYSTem:ERRor?": TimeoutError("query timed out")},
+        close_error=RuntimeError("session close failed"),
+    )
+    manager = FakeManager(session, close_error=RuntimeError("manager close failed"))
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(ErrorQueueQueryError, match="failed or timed out") as caught:
+        read_error_queue(
+            USB_RESOURCE,
+            resource_manager_factory=factory,
+        )
+
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert caught.value.cleanup_errors == (
+        "session close failed",
+        "ResourceManager close failed",
+    )
+    assert session.queries == [IDN_QUERY, "SYSTem:ERRor?"]
     assert session.close_calls == 1
     assert manager.close_calls == 1
