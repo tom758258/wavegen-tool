@@ -2056,15 +2056,17 @@ def test_read_error_queue_rejects_invalid_max_reads_before_manager(bad_max_reads
     """Invalid max_reads must be rejected before any ResourceManager is created."""
     session = FakeSession()
     manager = FakeManager(session)
+    factory = RecordingFactory(manager)
 
     with pytest.raises(ValueError, match="must be an integer between 1 and 100"):
         read_error_queue(
             USB_RESOURCE,
-            resource_manager_factory=RecordingFactory(manager),
+            resource_manager_factory=factory,
             max_reads=bad_max_reads,
         )
 
     # RecordingFactory was never called; manager must not have been opened
+    assert factory.calls == []
     assert manager.open_calls == []
     assert manager.close_calls == 0
     assert session.queries == []
