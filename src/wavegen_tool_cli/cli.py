@@ -497,9 +497,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prbs_parser.add_argument(
         "--pattern",
-        choices=("pn7", "pn9", "pn11", "pn15", "pn20", "pn23"),
-        default="pn7",
-        help="PRBS pattern (default: pn7).",
+        type=str.upper,
+        choices=("PN7", "PN9", "PN11", "PN15", "PN20", "PN23"),
+        default="PN7",
+        help="PRBS pattern (default: PN7).",
     )
     prbs_parser.add_argument(
         "--offset-v",

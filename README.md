@@ -552,14 +552,15 @@ uv run wavegen-tool configure-prbs `
   --resource "$env:WAVEGEN_TOOL_RESOURCE" `
   --bit-rate-bps 1000000 `
   --amplitude-vpp 0.1 `
-  --pattern pn15 `
+  --pattern PN15 `
   --offset-v 0 `
   --edge-time-s 0.00000001 `
   --load 50
 ```
 
 Bit rate must be from 0.001 bit/s to 50000000 bit/s. Supported patterns are
-PN7, PN9, PN11, PN15, PN20, and PN23. The common rising and falling edge time
+PN7, PN9, PN11, PN15, PN20, and PN23. Pattern input is case-insensitive and
+results are normalized to uppercase canonical values. The common rising and falling edge time
 must be from 8.4 ns to 1 µs and must fit within one bit period. With the
 50-ohm load setting, amplitude must be from 0.001 Vpp to 10 Vpp and
 `abs(offset) + amplitude / 2` must not exceed 5 V. With the high-impedance
@@ -580,7 +581,7 @@ uv run wavegen-tool configure-prbs `
   --model keysight-33521b `
   --bit-rate-bps 1000000 `
   --amplitude-vpp 0.1 `
-  --pattern pn9 `
+  --pattern PN9 `
   --offset-v 0 `
   --edge-time-s 0.0000000084 `
   --load 50
