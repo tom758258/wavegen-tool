@@ -64,7 +64,8 @@ STATUS_NOISE_QUERIES = (
     "SOURce1:VOLTage?",
     "SOURce1:FUNCtion:NOISe:BANDwidth?",
 )
-PULSE_TIMING_ABS_TOLERANCE_S = 1e-12
+PULSE_TIMING_REL_TOLERANCE = 1e-3
+PULSE_TIMING_ABS_TOLERANCE_S = 100e-12
 PULSE_FREQUENCY_ABS_TOLERANCE_HZ = 1e-6
 DEFAULT_TIMEOUT_MS = 5000
 LIVE_VERIFY_TIMEOUT_MS = 1000
@@ -1320,12 +1321,23 @@ def configure_pulse(
         edge_time_s,
         load,
     )
+
     def operate(
         session: VisaSession,
         context: IdentificationResult,
     ) -> tuple[float, float, float]:
-        for command in commands[:9]:
-            session.write(command)
+        def write_pulse_command(command: str, output_state: str | None) -> None:
+            try:
+                session.write(command)
+            except Exception as exc:
+                raise VisaWriteError(
+                    "Could not apply the requested instrument control write.",
+                    output_state=output_state,
+                ) from exc
+
+        write_pulse_command(commands[0], None)
+        for command in commands[1:9]:
+            write_pulse_command(command, "off")
 
         maximum = _query_pulse_verification(
             session,
@@ -1336,7 +1348,7 @@ def configure_pulse(
         if edge_time > maximum and not math.isclose(
             edge_time,
             maximum,
-            rel_tol=0.0,
+            rel_tol=PULSE_TIMING_REL_TOLERANCE,
             abs_tol=PULSE_TIMING_ABS_TOLERANCE_S,
         ):
             raise WaveformVerificationError(
@@ -1350,7 +1362,7 @@ def configure_pulse(
             )
 
         for command in commands[9:]:
-            session.write(command)
+            write_pulse_command(command, "off")
 
         output_state = _query_pulse_verification(
             session,
@@ -1389,7 +1401,7 @@ def configure_pulse(
                 backend=context.backend,
                 transport=context.transport,
                 identity=context.identity,
-                output_state="off",
+                output_state=output_state,
             )
         if function not in {"PULS", "PULSE"}:
             raise WaveformVerificationError(
@@ -1403,22 +1415,25 @@ def configure_pulse(
             "frequency",
             frequency,
             readback_frequency,
-            PULSE_FREQUENCY_ABS_TOLERANCE_HZ,
-            context,
+            rel_tolerance=0.0,
+            abs_tolerance=PULSE_FREQUENCY_ABS_TOLERANCE_HZ,
+            context=context,
         )
         _verify_pulse_readback(
             "pulse width",
             pulse_width,
             readback_width,
-            PULSE_TIMING_ABS_TOLERANCE_S,
-            context,
+            rel_tolerance=PULSE_TIMING_REL_TOLERANCE,
+            abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
+            context=context,
         )
         _verify_pulse_readback(
             "BOTH edge",
             edge_time,
             readback_edge,
-            PULSE_TIMING_ABS_TOLERANCE_S,
-            context,
+            rel_tolerance=PULSE_TIMING_REL_TOLERANCE,
+            abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
+            context=context,
         )
         return readback_frequency, readback_width, readback_edge
 
@@ -1427,7 +1442,6 @@ def configure_pulse(
         backend,
         operate,
         output_state_after_operation="off",
-        operation_error_output_state="off",
         resource_manager_factory=resource_manager_factory,
     )
     readback_frequency, readback_width, readback_edge = readback
@@ -2074,13 +2088,15 @@ def _verify_pulse_readback(
     field: str,
     requested: float,
     actual: float,
+    *,
+    rel_tolerance: float,
     abs_tolerance: float,
     context: IdentificationResult,
 ) -> None:
     if math.isclose(
         requested,
         actual,
-        rel_tol=0.0,
+        rel_tol=rel_tolerance,
         abs_tol=abs_tolerance,
     ):
         return
@@ -2100,7 +2116,6 @@ def _run_on_supported_33521b(
     operation: Callable[[VisaSession, IdentificationResult], object],
     *,
     output_state_after_operation: str | None = None,
-    operation_error_output_state: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None,
 ) -> tuple[IdentificationResult, object]:
     backend_selection = normalize_backend(backend)
@@ -2172,7 +2187,6 @@ def _run_on_supported_33521b(
                             backend=backend_selection.name,
                             transport=transport,
                             identity=identity,
-                            output_state=operation_error_output_state,
                         )
                     except Exception as exc:
                         primary_error = VisaWriteError(
@@ -2180,7 +2194,6 @@ def _run_on_supported_33521b(
                             backend=backend_selection.name,
                             transport=transport,
                             identity=identity,
-                            output_state=operation_error_output_state,
                         )
                         primary_cause = exc
     finally:

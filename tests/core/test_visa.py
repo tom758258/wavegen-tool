@@ -63,8 +63,8 @@ PULSE_RESPONSES = {
     "OUTPut1?": "0",
     "SOURce1:FUNCtion?": "PULS",
     "SOURce1:FREQuency?": "10000000.0000005",
-    "SOURce1:FUNCtion:PULSe:WIDTh?": "5.00000001e-08",
-    "SOURce1:FUNCtion:PULSe:TRANsition?": "2.00000001e-08",
+    "SOURce1:FUNCtion:PULSe:WIDTh?": "5.005e-08",
+    "SOURce1:FUNCtion:PULSe:TRANsition?": "2.005e-08",
 }
 
 
@@ -1119,9 +1119,9 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert "OUTPut1 ON" not in session.writes
     assert result.frequency_hz == 10_000_000.0000005
     assert result.amplitude_vpp == 0.1
-    assert result.pulse_width_s == 5.00000001e-08
+    assert result.pulse_width_s == 5.005e-08
     assert result.offset_v == 0.0
-    assert result.edge_time_s == 2.00000001e-08
+    assert result.edge_time_s == 2.005e-08
     assert result.load == "50"
     assert result.output_state == "off"
     assert session.close_calls == 1
@@ -1129,7 +1129,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
 
 
 @pytest.mark.parametrize(
-    ("responses", "expected_writes", "message"),
+    ("responses", "expected_writes", "message", "expected_output_state"),
     [
         (
             {
@@ -1138,6 +1138,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
             },
             False,
             "exceeds instrument maximum",
+            "off",
         ),
         (
             {
@@ -1148,6 +1149,16 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
             },
             True,
             "readback mismatch",
+            "off",
+        ),
+        (
+            {
+                **PULSE_RESPONSES,
+                "OUTPut1?": "1",
+            },
+            True,
+            "reported output state 'on'; expected 'off'",
+            "on",
         ),
     ],
 )
@@ -1155,6 +1166,7 @@ def test_configure_pulse_verification_failures(
     responses,
     expected_writes,
     message,
+    expected_output_state,
 ):
     session = FakeSession(responses_by_command=responses)
     manager = FakeManager(session)
@@ -1171,7 +1183,7 @@ def test_configure_pulse_verification_failures(
             resource_manager_factory=RecordingFactory(manager),
         )
 
-    assert error.value.output_state == "off"
+    assert error.value.output_state == expected_output_state
     assert "SYSTem:ERRor?" not in session.queries
     target_edge = "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 3e-08"
     assert (target_edge in session.writes) is expected_writes
@@ -1666,6 +1678,24 @@ def test_control_write_failure_is_domain_error_and_resources_are_closed():
     assert session.writes == ["OUTPut1 OFF"]
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+    pulse_session = FakeSession(write_error=RuntimeError("private pulse write detail"))
+    pulse_manager = FakeManager(pulse_session)
+
+    with pytest.raises(VisaWriteError) as pulse_error:
+        configure_pulse(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            100e-9,
+            resource_manager_factory=RecordingFactory(pulse_manager),
+        )
+
+    assert pulse_error.value.output_state is None
+    assert isinstance(pulse_error.value.__cause__, RuntimeError)
+    assert pulse_session.writes == ["OUTPut1 OFF"]
+    assert pulse_session.close_calls == 1
+    assert pulse_manager.close_calls == 1
 
 
 def test_output_on_cleanup_failure_preserves_possible_output_state():
