@@ -5,7 +5,7 @@ import pytest
 
 import wavegen_tool_cli.cli as cli_module
 from wavegen_tool_cli.cli import ExitCode, main
-from wavegen_tool_core import visa
+from wavegen_tool_core import ErrorQueueQueryError, visa
 
 
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
@@ -1674,6 +1674,198 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
         "load": "50",
         "error": None,
     }
+
+
+def test_read_errors_cli_json_success_with_instrument_error(monkeypatch, capsys):
+    calls = []
+
+    def fake_read_error_queue(resource, backend, *, max_reads, **kwargs):
+        calls.append((resource, backend, max_reads, kwargs))
+        return SimpleNamespace(
+            backend=backend,
+            transport="tcpip",
+            identity=SimpleNamespace(
+                manufacturer="Keysight Technologies",
+                model="33521B",
+            ),
+            errors=(
+                SimpleNamespace(
+                    code=-113,
+                    message="Undefined header",
+                    raw_response='-113,"Undefined header"',
+                ),
+            ),
+            read_count=2,
+            max_reads=max_reads,
+            empty_confirmed=True,
+            limit_reached=False,
+        )
+
+    monkeypatch.setattr(cli_module, "read_error_queue", fake_read_error_queue)
+
+    exit_code = main(
+        [
+            "read-errors",
+            "--resource",
+            TCPIP_RESOURCE,
+            "--backend",
+            "@py",
+            "--max-reads",
+            "7",
+            "--json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == [(TCPIP_RESOURCE, "@py", 7, {})]
+    assert payload == {
+        "success": True,
+        "action": "read-errors",
+        "backend": "@py",
+        "transport": "tcpip",
+        "manufacturer": "Keysight Technologies",
+        "model": "33521B",
+        "errors": [
+            {
+                "code": -113,
+                "message": "Undefined header",
+                "raw_response": '-113,"Undefined header"',
+            }
+        ],
+        "read_count": 2,
+        "max_reads": 7,
+        "has_errors": True,
+        "empty_confirmed": True,
+        "limit_reached": False,
+        "error": None,
+    }
+    assert captured.out.count("\n") == 1
+    assert captured.err == ""
+
+
+def test_read_errors_cli_human_empty_queue_output(monkeypatch, capsys):
+    def fake_read_error_queue(*args, **kwargs):
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Keysight Technologies",
+                model="33521B",
+            ),
+            errors=(),
+            read_count=1,
+            max_reads=20,
+            empty_confirmed=True,
+            limit_reached=False,
+        )
+
+    monkeypatch.setattr(cli_module, "read_error_queue", fake_read_error_queue)
+
+    exit_code = main(["read-errors", "--resource", USB_RESOURCE])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert "Instrument: Keysight Technologies 33521B" in captured.out
+    assert "System error queue: no errors" in captured.out
+    assert "Reads: 1/20" in captured.out
+    assert "Queue empty confirmed: yes" in captured.out
+    assert "Read limit reached: no" in captured.out
+    assert captured.err == ""
+
+
+def test_read_errors_cli_query_error_returns_exit_code_30(monkeypatch, capsys):
+    def fake_read_error_queue(*args, **kwargs):
+        raise ErrorQueueQueryError(
+            "SYSTem:ERRor? query failed",
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Keysight Technologies",
+                model="33521B",
+            ),
+        )
+
+    monkeypatch.setattr(cli_module, "read_error_queue", fake_read_error_queue)
+
+    exit_code = main(
+        [
+            "read-errors",
+            "--resource",
+            USB_RESOURCE,
+            "--max-reads",
+            "4",
+            "--json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.ERROR_QUEUE_QUERY_ERROR
+    assert payload["success"] is False
+    assert payload["action"] == "read-errors"
+    assert payload["backend"] == "system"
+    assert payload["transport"] == "usb"
+    assert payload["manufacturer"] == "Keysight Technologies"
+    assert payload["model"] == "33521B"
+    assert payload["errors"] == []
+    assert payload["read_count"] == 0
+    assert payload["max_reads"] == 4
+    assert payload["has_errors"] is False
+    assert payload["empty_confirmed"] is False
+    assert payload["limit_reached"] is False
+    assert payload["error"] == (
+        "error_queue_query_error: SYSTem:ERRor? query failed"
+    )
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("max_reads", [0, 101])
+def test_read_errors_rejects_invalid_max_reads_before_core(
+    monkeypatch,
+    capsys,
+    max_reads,
+):
+    calls = []
+
+    def fail_read_error_queue(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(cli_module, "read_error_queue", fail_read_error_queue)
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "read-errors",
+                "--resource",
+                USB_RESOURCE,
+                "--max-reads",
+                str(max_reads),
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert calls == []
+    assert "max_reads must be an integer between 1 and 100" in captured.err
+    assert captured.out == ""
+
+
+def test_read_errors_cli_simulation_json_smoke(capsys):
+    exit_code = main(["read-errors", "--simulate", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["success"] is True
+    assert payload["action"] == "read-errors"
+    assert payload["errors"] == []
+    assert payload["read_count"] == 1
+    assert payload["empty_confirmed"] is True
+    assert payload["mode"] == "simulate"
+    assert payload["simulated"] is True
+    assert captured.err == ""
 
 
 @pytest.mark.parametrize(

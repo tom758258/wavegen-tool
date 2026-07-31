@@ -8,6 +8,7 @@ from wavegen_tool_core.backends import (
     validate_backend_transport,
 )
 from wavegen_tool_core.errors import (
+    ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
     ResourceDiscoveryError,
@@ -95,6 +96,7 @@ __all__ = [
     "CANONICAL_MODEL_ID",
     "DEFAULT_TIMEOUT_MS",
     "DcConfigurationResult",
+    "ErrorQueueQueryError",
     "ErrorQueueResult",
     "DcDryRunResult",
     "LIVE_VERIFY_TIMEOUT_MS",

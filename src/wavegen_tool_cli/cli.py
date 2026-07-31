@@ -9,6 +9,7 @@ from enum import IntEnum
 from typing import Any, Sequence
 
 from wavegen_tool_core import (
+    ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
     ResourceDiscoveryError,
@@ -46,6 +47,7 @@ from wavegen_tool_core import (
     list_resources,
     normalize_serial_baud_rate,
     query_status,
+    read_error_queue,
     set_output,
 )
 
@@ -67,6 +69,7 @@ class ExitCode(IntEnum):
     VISA_WRITE_ERROR = 27
     STATUS_QUERY_ERROR = 28
     WAVEFORM_VERIFICATION_ERROR = 29
+    ERROR_QUEUE_QUERY_ERROR = 30
     INTERNAL_ERROR = 70
 
 
@@ -85,6 +88,7 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (VisaWriteError, ExitCode.VISA_WRITE_ERROR),
     (StatusQueryError, ExitCode.STATUS_QUERY_ERROR),
     (WaveformVerificationError, ExitCode.WAVEFORM_VERIFICATION_ERROR),
+    (ErrorQueueQueryError, ExitCode.ERROR_QUEUE_QUERY_ERROR),
 )
 
 
@@ -94,6 +98,20 @@ def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Use the in-memory simulator without hardware VISA I/O.",
     )
+
+
+def _normalize_max_reads_argument(value: str) -> int:
+    try:
+        max_reads = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(
+            "max_reads must be an integer between 1 and 100."
+        ) from exc
+    if not 1 <= max_reads <= 100:
+        raise argparse.ArgumentTypeError(
+            "max_reads must be an integer between 1 and 100."
+        )
+    return max_reads
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -141,6 +159,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="VISA backend name validated by Core (default: system).",
     )
     status_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    read_errors_parser = subparsers.add_parser(
+        "read-errors",
+        help="Read and drain the instrument system error queue.",
+    )
+    _add_simulate_argument(read_errors_parser)
+    read_errors_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    read_errors_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    read_errors_parser.add_argument(
+        "--max-reads",
+        default=20,
+        type=_normalize_max_reads_argument,
+        help="Maximum error-queue queries (default: 20; range: 1-100).",
+    )
+    read_errors_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -635,7 +680,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         parser.error("the following arguments are required: --resource")
     if (
-        args.command in {"identify", "status", "output"}
+        args.command in {"identify", "status", "output", "read-errors"}
         and not args.simulate
         and args.resource is None
     ):
@@ -660,6 +705,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_output(args)
     if args.command == "status":
         return _run_status(args)
+    if args.command == "read-errors":
+        return _run_read_errors(args)
     return _run_identify(args)
 
 
@@ -1317,6 +1364,67 @@ def _run_status(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_read_errors(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
+    try:
+        result = read_error_queue(
+            resource,
+            args.backend,
+            max_reads=args.max_reads,
+            **_factory_injection(args.simulate, factory),
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            payload = _error_queue_error_payload(exc, args.max_reads)
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(
+                _with_simulation_notice(_human_error(exc), args.simulate),
+                file=sys.stderr,
+            )
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            payload = _error_queue_internal_error_payload(args.max_reads)
+            print(
+                json.dumps(
+                    _with_simulation_fields(payload, args.simulate),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            message = "Error [internal_error]: unexpected internal failure."
+            print(
+                _with_simulation_notice(message, args.simulate),
+                file=sys.stderr,
+            )
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        payload = _error_queue_success_payload(result)
+        print(
+            json.dumps(
+                _with_simulation_fields(payload, args.simulate),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(
+            _with_simulation_notice(
+                _human_error_queue_success(result),
+                args.simulate,
+            )
+        )
+    return int(ExitCode.SUCCESS)
+
+
 def _run_control(args: argparse.Namespace, operation: Any) -> int:
     try:
         result = operation()
@@ -1831,6 +1939,72 @@ def _status_success_payload(result: Any) -> dict[str, object]:
     }
 
 
+def _error_queue_success_payload(result: Any) -> dict[str, object]:
+    identity = result.identity
+    return {
+        "success": True,
+        "action": "read-errors",
+        "backend": result.backend,
+        "transport": result.transport,
+        "manufacturer": identity.manufacturer,
+        "model": identity.model,
+        "errors": [
+            {
+                "code": entry.code,
+                "message": entry.message,
+                "raw_response": entry.raw_response,
+            }
+            for entry in result.errors
+        ],
+        "read_count": result.read_count,
+        "max_reads": result.max_reads,
+        "has_errors": bool(result.errors),
+        "empty_confirmed": result.empty_confirmed,
+        "limit_reached": result.limit_reached,
+        "error": None,
+    }
+
+
+def _error_queue_error_payload(
+    error: WavegenError,
+    max_reads: int,
+) -> dict[str, object]:
+    identity = error.identity
+    return {
+        "success": False,
+        "action": "read-errors",
+        "backend": error.backend,
+        "transport": error.transport,
+        "manufacturer": getattr(identity, "manufacturer", None),
+        "model": getattr(identity, "model", None),
+        "errors": [],
+        "read_count": 0,
+        "max_reads": max_reads,
+        "has_errors": False,
+        "empty_confirmed": False,
+        "limit_reached": False,
+        "error": _error_text(error),
+    }
+
+
+def _error_queue_internal_error_payload(max_reads: int) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "read-errors",
+        "backend": None,
+        "transport": None,
+        "manufacturer": None,
+        "model": None,
+        "errors": [],
+        "read_count": 0,
+        "max_reads": max_reads,
+        "has_errors": False,
+        "empty_confirmed": False,
+        "limit_reached": False,
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
 def _status_error_payload(error: WavegenError) -> dict[str, object]:
     identity = error.identity
     return {
@@ -2066,6 +2240,26 @@ def _human_status_success(result: Any) -> str:
             )
         )
     lines.append(f"Output-load setting: {result.load}")
+    return "\n".join(lines)
+
+
+def _human_error_queue_success(result: Any) -> str:
+    lines = [f"Instrument: {result.identity.manufacturer} {result.identity.model}"]
+    if result.errors:
+        lines.append("System error queue:")
+        lines.extend(
+            f"{index}. {entry.code}: {entry.message}"
+            for index, entry in enumerate(result.errors, start=1)
+        )
+    else:
+        lines.append("System error queue: no errors")
+    lines.extend(
+        (
+            f"Reads: {result.read_count}/{result.max_reads}",
+            f"Queue empty confirmed: {'yes' if result.empty_confirmed else 'no'}",
+            f"Read limit reached: {'yes' if result.limit_reached else 'no'}",
+        )
+    )
     return "\n".join(lines)
 
 

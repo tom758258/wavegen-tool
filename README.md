@@ -2,9 +2,10 @@
 
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. The
-current milestone supports identification, read-only Channel 1 status, and
-basic Channel 1 sine/square/ramp/pulse/DC/noise/PRBS/output control for the
-Keysight or Agilent 33521B.
+current milestone supports identification, read-only Channel 1 status, bounded
+instrument error-queue reads, and basic Channel 1
+sine/square/ramp/pulse/DC/noise/PRBS/output control for the Keysight or Agilent
+33521B.
 
 ## Current Scope
 
@@ -23,6 +24,7 @@ Keysight or Agilent 33521B.
 - Hardware-unvalidated, parameter-validated Channel 1 PRBS configuration
 - Explicit Channel 1 output on/off control
 - Hardware-unvalidated, read-only Channel 1 status query
+- Hardware-unvalidated, bounded instrument error queue reads
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
 - The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
@@ -41,8 +43,8 @@ claim that every live backend/transport scope or control feature is
 hardware-validated. Identification has been hardware-validated against an
 Agilent Technologies 33521B through system VISA over USB. Live-only discovery
 has also been validated with USB and ASRL resources. Sine, square, ramp, pulse,
-DC, noise, and PRBS configuration, output control, and status readback have not
-yet been hardware-validated.
+DC, noise, and PRBS configuration, output control, status readback, and error
+queue reads have not yet been hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -62,9 +64,9 @@ reserved WebUI import packages.
 
 ## Stateful Simulator
 
-The simulator supports `list-resources`, `identify`, `status`, all seven
-waveform configuration commands, and explicit output control for one simulated
-Keysight 33521B Channel 1. It uses the fixed resource
+The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
+all seven waveform configuration commands, and explicit output control for one
+simulated Keysight 33521B Channel 1. It uses the fixed resource
 `USB0::SIM::33521B::INSTR` and never creates a real VISA ResourceManager, runs
 real resource discovery, opens hardware, or performs hardware I/O. Supported
 writes update in-memory state, subsequent queries read that state, and
@@ -264,6 +266,31 @@ the ordinary frequency query as bandwidth. In JSON output, fields that do not
 apply to the active function are `null`. Status does not modify settings or turn
 the output on or off. The output-load setting does not detect or verify the
 physically connected load.
+
+## Read the Instrument Error Queue
+
+Read and drain the selected instrument's system error queue:
+
+```powershell
+uv run wavegen-tool read-errors `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE"
+```
+
+Use `--json` for automation:
+
+```powershell
+uv run wavegen-tool read-errors `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --json
+```
+
+The default `--max-reads` is 20, and the allowed range is 1 through 100. The
+command first validates the selected instrument with `*IDN?`, then drains
+`SYSTem:ERRor?` through the same session. Every returned queue entry is removed
+from the instrument. It does not send `*CLS`, `*RST`, or waveform/output writes.
+Successfully reading instrument errors still returns exit code 0. Automation
+should inspect `has_errors`; `limit_reached=true` means the command did not
+confirm that the queue was empty.
 
 ## Configure a Channel 1 Sine Wave
 
