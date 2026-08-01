@@ -405,7 +405,9 @@ def _validate_send(
         return "Worker accepted response must have status=accepted."
     if payload.get("command") != command:
         return "Worker accepted response command does not match the request."
-    if payload.get("job_id") != job_id:
+    if "job_id" not in payload:
+        return "Worker accepted response must contain job_id."
+    if payload["job_id"] != job_id:
         return "Worker accepted response job_id does not match the request."
     if not _nonempty(payload.get("worker_job_id")):
         return "Worker accepted response must contain a worker_job_id."

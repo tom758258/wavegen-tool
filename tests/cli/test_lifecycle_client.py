@@ -120,6 +120,21 @@ def test_lifecycle_local_json_validation_does_not_send_request(
             None,
         ),
         (
+            "send_missing_job_id",
+            _outcome(
+                status=202,
+                payload={
+                    "schema_version": 2,
+                    "status": "accepted",
+                    "command": "status",
+                    "worker_job_id": "worker-1",
+                    "run_id": "run-1",
+                },
+            ),
+            3,
+            "invalid_response",
+        ),
+        (
             "status",
             _outcome(
                 status=200,
@@ -219,6 +234,8 @@ def test_lifecycle_http_outcome_mapping(
     monkeypatch.setattr(client, "_request_json", lambda *args, **kwargs: outcome)
     if operation.startswith("send"):
         args = _send_args()
+        if operation == "send_missing_job_id":
+            args.job_id = None
         code = client.run_send_command(args)
     elif operation == "status" or operation.startswith("status_"):
         args = _status_args()
@@ -242,6 +259,9 @@ def test_lifecycle_http_outcome_mapping(
         assert payload["command"] == "status"
         assert payload["job_id"] == "job-1"
         assert payload["worker_job_id"] == "worker-1"
+    if operation == "send_missing_job_id":
+        assert payload["message"] == "Worker accepted response must contain job_id."
+        assert payload["error_phase"] == "invalid_response"
 
 
 def test_wait_ready_retries_connection_and_busy_then_times_out(
