@@ -261,6 +261,7 @@ def test_worker_status_and_invalid_request_are_memory_only(monkeypatch):
         )
         assert invalid_code == 400
         assert invalid["error"] == "invalid_request"
+        assert invalid["run_id"] == runtime.run_id
         assert executed == []
         assert runtime.simulator_state.error_queue == ['-100,"fixture"']
     finally:
@@ -290,6 +291,9 @@ def test_worker_background_runner_rejects_busy_jobs(monkeypatch):
             runtime, "POST", "/command", _payload("status", job_id="second")
         )
         assert second_code == 409
+        assert second["command"] == "status"
+        assert second["job_id"] == "second"
+        assert second["run_id"] == runtime.run_id
         assert second["reason"] == "busy"
         release.set()
         last_job = _wait_for_job(runtime, first["worker_job_id"], "succeeded")
@@ -417,6 +421,9 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
             runtime, "POST", "/command", _payload("status", job_id="late")
         )
         assert rejected_code == 409
+        assert rejected["command"] == "status"
+        assert rejected["job_id"] == "late"
+        assert rejected["run_id"] == runtime.run_id
         assert rejected["reason"] == "stopping"
         assert calls == ["status"]
         release.set()

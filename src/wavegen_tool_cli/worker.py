@@ -705,7 +705,16 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
     def _handle_command(self) -> None:
         payload, parse_error = self._read_json()
         if parse_error is not None:
-            self._send_json(400, _request_error(None, None, "invalid_request", parse_error))
+            self._send_json(
+                400,
+                _request_error(
+                    None,
+                    None,
+                    "invalid_request",
+                    parse_error,
+                    run_id=self.server.runtime.run_id,
+                ),
+            )
             return
         command = payload.get("command") if isinstance(payload, Mapping) else None
         job_id = payload.get("job_id") if isinstance(payload, Mapping) else None
@@ -722,7 +731,13 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         except WorkerRequestValidationError as exc:
             self._send_json(
                 400,
-                _request_error(command, job_id, exc.code, str(exc)),
+                _request_error(
+                    command,
+                    job_id,
+                    exc.code,
+                    str(exc),
+                    run_id=self.server.runtime.run_id,
+                ),
             )
             return
 
@@ -730,7 +745,14 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         if reason != "accepted" or job is None:
             self._send_json(
                 409,
-                {"schema_version": 2, "status": "rejected", "reason": reason},
+                {
+                    "schema_version": 2,
+                    "status": "rejected",
+                    "command": validated.command,
+                    "job_id": validated.job_id,
+                    "reason": reason,
+                    "run_id": self.server.runtime.run_id,
+                },
             )
             return
         self._send_json(
@@ -823,8 +845,10 @@ def _request_error(
     job_id: str | None,
     code: str,
     message: str,
+    *,
+    run_id: str | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "schema_version": 2,
         "status": "error",
         "command": command,
@@ -832,6 +856,9 @@ def _request_error(
         "error": code,
         "message": message,
     }
+    if run_id is not None:
+        payload["run_id"] = run_id
+    return payload
 
 
 def _job_payload(job: JobRecord | None) -> dict[str, object] | None:
