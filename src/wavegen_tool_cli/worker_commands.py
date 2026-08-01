@@ -147,6 +147,10 @@ def validate_worker_command_request(
         raise WorkerRequestValidationError(
             "invalid_request", "Worker command payload must be an object."
         )
+    if type(allow_output_writes) is not bool:
+        raise WorkerRequestValidationError(
+            "invalid_request", "allow_output_writes must be a boolean."
+        )
 
     unknown_fields = _unknown_fields(payload, _ALLOWED_TOP_LEVEL_FIELDS)
     if unknown_fields:

@@ -231,6 +231,14 @@ def test_command_arguments_validation_rejects_invalid_arguments(
             {"mode": "live"},
             "configure-sine",
             _sine_arguments(),
+            "false",
+            "invalid_request",
+        ),
+        (
+            "live",
+            {"mode": "live"},
+            "configure-sine",
+            _sine_arguments(),
             True,
             None,
         ),
@@ -315,6 +323,8 @@ def test_live_write_safety_and_dry_run_scope(
                 allow_output_writes=allow_output_writes,
             )
         assert error.value.code == expected_code
+        if allow_output_writes == "false":
+            assert str(error.value) == "allow_output_writes must be a boolean."
 
 
 def test_configure_sine_delegates_to_core_and_converts_parameter_errors(monkeypatch):
