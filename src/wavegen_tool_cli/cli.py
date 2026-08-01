@@ -50,6 +50,7 @@ from wavegen_tool_core import (
     read_error_queue,
     set_output,
 )
+from wavegen_tool_cli.worker import run_worker, validate_worker_startup
 
 
 class ExitCode(IntEnum):
@@ -112,6 +113,20 @@ def _normalize_max_reads_argument(value: str) -> int:
             "max_reads must be an integer between 1 and 100."
         )
     return max_reads
+
+
+def _normalize_control_port(value: str) -> int:
+    try:
+        control_port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(
+            "control port must be an integer between 0 and 65535."
+        ) from exc
+    if not 0 <= control_port <= 65535:
+        raise argparse.ArgumentTypeError(
+            "control port must be an integer between 0 and 65535."
+        )
+    return control_port
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -645,6 +660,38 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit exactly one JSON object.",
     )
+
+    worker_parser = subparsers.add_parser(
+        "worker",
+        help="Run the local Wavegen Worker control plane.",
+        allow_abbrev=False,
+    )
+    worker_parser.add_argument(
+        "--mode",
+        choices=("live", "simulate"),
+        required=True,
+        help="Worker execution mode.",
+    )
+    worker_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    worker_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend validated by Core (default: system).",
+    )
+    worker_parser.add_argument(
+        "--control-port",
+        type=_normalize_control_port,
+        default=0,
+        help="Loopback control port; 0 selects an available port.",
+    )
+    worker_parser.add_argument(
+        "--allow-output-writes",
+        action="store_true",
+        help="Allow live waveform configuration and output-on requests.",
+    )
     return parser
 
 
@@ -653,6 +700,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "worker":
+        return _run_worker(args, parser)
     waveform_commands = {
         "configure-sine",
         "configure-square",
@@ -708,6 +757,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "read-errors":
         return _run_read_errors(args)
     return _run_identify(args)
+
+
+def _run_worker(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> int:
+    try:
+        config = validate_worker_startup(
+            mode=args.mode,
+            resource=args.resource,
+            backend=args.backend,
+            control_port=args.control_port,
+            allow_output_writes=args.allow_output_writes,
+        )
+    except (ValueError, WavegenError) as exc:
+        parser.error(str(exc))
+    return run_worker(config)
 
 
 def _simulated_target() -> tuple[str, Any]:

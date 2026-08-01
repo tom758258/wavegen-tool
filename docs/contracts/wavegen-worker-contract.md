@@ -10,8 +10,8 @@ It is used with the [Common Worker Protocol](common-worker-protocol.md), the
 [Common Orchestrator Workflows](common-orchestrator-workflows.md). Common
 envelope and lifecycle rules are not repeated here.
 
-Part 1 implements request admission only. It does not implement the HTTP
-control plane, Worker runtime, lifecycle clients, queues, or artifacts.
+The v1 Worker includes a local HTTP control plane and one background command
+runner. Lifecycle clients and per-job artifacts are not part of v1.
 
 ## Command Envelope
 
@@ -128,3 +128,69 @@ command or perform VISA I/O. Instrument status must be requested with
 
 `POST /stop` follows the Common lifecycle contract and does not change the
 command admission rules above. v1 does not create per-job artifacts.
+
+## Worker Startup
+
+The standalone entry point is `wavegen-tool worker`. Its options are:
+
+- `--mode live|simulate` (required).
+- `--resource`, required for `live` and forbidden for `simulate`.
+- `--backend`, defaulting to `system`; live values use Core backend,
+  transport, and connection-scope validation, while simulation permits only
+  `system`.
+- `--control-port`, an integer from `0` through `65535`, defaulting to `0`.
+- `--allow-output-writes`, disabled by default.
+
+The control plane binds only to `127.0.0.1`. Startup validation does not create
+a ResourceManager, open a session, or probe a live instrument. A `ready` event
+means that the HTTP server is serving lifecycle requests; it does not mean
+that a physical instrument has been connected or identified. Startup usage
+errors exit with code `2`; an unrecoverable bind or runtime failure exits with
+code `3`.
+
+## Runtime and Execution
+
+The Worker has one active job slot. An accepted job is `queued` or `running`;
+while either state is active, another command is rejected with HTTP `409` and
+`reason="busy"`. New commands are rejected with `reason="stopping"` after a
+stop request.
+
+Simulation creates one `Simulated33521BState` for the Worker lifetime. Each
+simulated command creates a new `SimulatedResourceManager` over that shared
+state and executes through the existing Core command functions. State is not
+reset when a manager or session closes. A live Worker retains only its
+resource and backend; each command uses the existing Core per-command VISA
+open, identification, execution, verification, and cleanup lifecycle.
+
+All admitted dry-run commands use the existing Core `dry_run_*` functions and
+do not create a live or simulated session. Results are serialized as stable
+JSON objects and are retained in the terminal job event and `last_job`.
+
+## HTTP Control Plane
+
+`GET /status` is memory-only lifecycle status. It does not execute a Core
+command, perform VISA I/O, or access simulator state. Instrument status must
+be requested with `POST /command` and `command="status"`.
+
+`POST /command` performs P1 admission and returns HTTP `202` only after the
+single active slot has been reserved. The background runner performs the
+domain command. Admission errors return HTTP `400`; busy and stopping
+requests return HTTP `409`.
+
+`POST /stop` accepts an empty body or `{}` and is idempotent while the server
+is reachable. It requests cooperative shutdown, allows an accepted job to
+finish, then stops the runner and HTTP server. It does not reconnect, query
+the instrument, execute `set_output`, or modify simulator output state.
+Output off remains an explicit command and should be submitted before a
+normal live shutdown.
+
+## JSONL Events
+
+Worker stdout contains only compact JSONL event objects. Events are
+`ready`, `job_accepted`, `job_started`, `job_finished`, `job_failed`,
+`stop_requested`, `error`, and `summary`. Every event uses schema version `2`,
+service `wavegen-tool`, the Worker `run_id`, and an UTC timestamp. The `ready`
+event includes the actual control port and loopback URLs. `summary` includes
+the exit code and accepted, succeeded, and failed counters. Human diagnostics
+are written to stderr. Lifecycle client implementation remains deferred to
+Part 3.
