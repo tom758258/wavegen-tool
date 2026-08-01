@@ -51,6 +51,12 @@ from wavegen_tool_core import (
     set_output,
 )
 from wavegen_tool_cli.worker import run_worker, validate_worker_startup
+from wavegen_tool_cli.lifecycle_client import (
+    run_send_command,
+    run_wait_ready,
+    run_worker_status,
+    run_worker_stop,
+)
 
 
 class ExitCode(IntEnum):
@@ -127,6 +133,49 @@ def _normalize_control_port(value: str) -> int:
             "control port must be an integer between 0 and 65535."
         )
     return control_port
+
+
+def _normalize_lifecycle_port(value: str) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(
+            "port must be an integer between 1 and 65535."
+        ) from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be an integer between 1 and 65535.")
+    return port
+
+
+def _normalize_positive_milliseconds(value: str) -> int:
+    try:
+        milliseconds = int(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("value must be a positive integer.") from exc
+    if milliseconds <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive integer.")
+    return milliseconds
+
+
+def _add_lifecycle_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--port",
+        type=_normalize_lifecycle_port,
+        required=True,
+        help="Loopback Worker control port (1-65535).",
+    )
+    parser.add_argument(
+        "--timeout-ms",
+        type=_normalize_positive_milliseconds,
+        default=1000,
+        help="Single HTTP request timeout in milliseconds (default: 1000).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -661,6 +710,63 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    send_parser = subparsers.add_parser(
+        "send-command",
+        help="Submit one command to a local Wavegen Worker.",
+        allow_abbrev=False,
+    )
+    _add_lifecycle_options(send_parser)
+    send_parser.add_argument(
+        "--command",
+        dest="worker_command",
+        required=True,
+        help="Worker command name.",
+    )
+    send_parser.add_argument(
+        "--arguments-json",
+        default="{}",
+        help="Command arguments as a JSON object (default: {}).",
+    )
+    send_parser.add_argument(
+        "--context-json",
+        required=True,
+        help="Worker request context as a JSON object.",
+    )
+    send_parser.add_argument("--job-id", help="Optional client job identifier.")
+
+    worker_status_parser = subparsers.add_parser(
+        "worker-status",
+        help="Read local Wavegen Worker lifecycle status.",
+        allow_abbrev=False,
+    )
+    _add_lifecycle_options(worker_status_parser)
+
+    wait_ready_parser = subparsers.add_parser(
+        "wait-ready",
+        help="Wait for a local Wavegen Worker to become ready.",
+        allow_abbrev=False,
+    )
+    _add_lifecycle_options(wait_ready_parser)
+    wait_ready_parser.add_argument(
+        "--wait-timeout-ms",
+        type=_normalize_positive_milliseconds,
+        default=30000,
+        help="Overall readiness wait timeout in milliseconds (default: 30000).",
+    )
+    wait_ready_parser.add_argument(
+        "--poll-ms",
+        type=_normalize_positive_milliseconds,
+        default=200,
+        help="Delay between readiness requests in milliseconds (default: 200).",
+    )
+
+    worker_stop_parser = subparsers.add_parser(
+        "worker-stop",
+        help="Request cooperative stop of a local Wavegen Worker.",
+        allow_abbrev=False,
+    )
+    _add_lifecycle_options(worker_stop_parser)
+
     worker_parser = subparsers.add_parser(
         "worker",
         help="Run the local Wavegen Worker control plane.",
@@ -702,6 +808,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "worker":
         return _run_worker(args, parser)
+    if args.command == "send-command":
+        return run_send_command(args)
+    if args.command == "worker-status":
+        return run_worker_status(args)
+    if args.command == "wait-ready":
+        return run_wait_ready(args)
+    if args.command == "worker-stop":
+        return run_worker_stop(args)
     waveform_commands = {
         "configure-sine",
         "configure-square",

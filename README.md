@@ -106,14 +106,78 @@ Each standalone CLI invocation creates a fresh simulator environment, so the
 separate commands above do not share state. A caller performing multiple Core
 operations in one Python process can preserve state by reusing the same
 `Simulated33521BState` through simulated ResourceManager factories. Closing a
-simulated session or manager does not clear that shared state. There is no
-cross-process persistence or Worker in this milestone.
+simulated session or manager does not clear that shared state. A simulate
+Worker instead shares one simulator state for its process lifetime; neither
+mode provides cross-process persistence.
 
 Simulator mode is distinct from dry-run: dry-run only previews validated SCPI,
 while the simulator executes supported SCPI against in-memory state. Neither
 mode is hardware validation. Live commands still require an explicit real VISA
 resource. `output --simulate --state on` enables only the simulated Channel 1
 state and never a physical output.
+
+## Worker and Lifecycle Clients
+
+The Worker control plane is loopback-only. A simulate Worker shares simulator
+state across commands in the same process, while each standalone `--simulate`
+CLI invocation starts with fresh state. A live Worker `ready` event means only
+that its local HTTP control plane is accepting requests; it does not mean that
+the physical instrument has been connected or identified.
+
+Start a simulate Worker on a fixed example port:
+
+```powershell
+uv run wavegen-tool worker `
+  --mode simulate `
+  --control-port 8765
+```
+
+In another terminal, wait for the control plane:
+
+```powershell
+uv run wavegen-tool wait-ready `
+  --port 8765 `
+  --json
+```
+
+Submit a representative read-only Worker command:
+
+```powershell
+uv run wavegen-tool send-command `
+  --port 8765 `
+  --command status `
+  --context-json '{"mode":"simulate","planning_model_id":"keysight-33521b"}' `
+  --json
+```
+
+Query lifecycle status:
+
+```powershell
+uv run wavegen-tool worker-status `
+  --port 8765 `
+  --json
+```
+
+Request cooperative stop:
+
+```powershell
+uv run wavegen-tool worker-stop `
+  --port 8765 `
+  --json
+```
+
+For a live Worker, provide an explicit resource:
+
+```powershell
+uv run wavegen-tool worker `
+  --mode live `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --control-port 8765
+```
+
+For normal live shutdown, first submit `output` with `enabled=false`, confirm
+that the job succeeded, and then run `worker-stop`. `worker-stop` never turns
+the instrument output off automatically.
 
 ## List VISA Resources
 

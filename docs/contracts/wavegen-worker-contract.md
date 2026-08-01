@@ -10,8 +10,9 @@ It is used with the [Common Worker Protocol](common-worker-protocol.md), the
 [Common Orchestrator Workflows](common-orchestrator-workflows.md). Common
 envelope and lifecycle rules are not repeated here.
 
-The v1 Worker includes a local HTTP control plane and one background command
-runner. Lifecycle clients and per-job artifacts are not part of v1.
+The v1 Worker includes a local HTTP control plane, one background command
+runner, and minimal local lifecycle clients. Per-job artifacts are not part of
+v1.
 
 ## Command Envelope
 
@@ -192,5 +193,34 @@ Worker stdout contains only compact JSONL event objects. Events are
 service `wavegen-tool`, the Worker `run_id`, and an UTC timestamp. The `ready`
 event includes the actual control port and loopback URLs. `summary` includes
 the exit code and accepted, succeeded, and failed counters. Human diagnostics
-are written to stderr. Lifecycle client implementation remains deferred to
-Part 3.
+are written to stderr.
+
+## Lifecycle Clients
+
+The local lifecycle clients are `send-command`, `worker-status`, `wait-ready`,
+and `worker-stop`. They require a numeric `--port` and connect only to
+`http://127.0.0.1:<port>`; they do not accept arbitrary host, URL, TLS, or
+remote connection options.
+
+`send-command` validates only its local JSON syntax and object shape, submits
+one schema-2 request to `POST /command`, and exits after the Worker accepts or
+rejects it. It does not wait for job completion or retry a busy Worker.
+`worker-status` reads the memory-only `GET /status` response. It returns exit
+code `0` for `ready`, `busy`, and `stopping`, and exit code `3` for `error` or
+client/runtime failures.
+
+`wait-ready` polls `GET /status` until `ready` or its bounded deadline. It may
+retry connection failures and `busy`, but stops immediately for `stopping`,
+`error`, or an invalid response. `worker-stop` submits `{}` to `POST /stop`
+and does not wait for process exit or execute automatic output off.
+
+With `--json`, each client emits exactly one compact schema-2 JSON object.
+Client-created results include `ok`, `exit_code` when unsuccessful, and the
+available `client_command`, `method`, `url`, `endpoint`, `timeout_ms`,
+`elapsed_ms`, `request_sent`, `reachable`, `http_status`, and `error_phase`
+diagnostics. Client usage and HTTP 400 errors use exit code `2`; connection,
+timeout, invalid-response, HTTP 409/404/5xx, fatal Worker status, and readiness
+timeout errors use exit code `3`.
+
+These clients do not provide `wait-job`, cancellation, artifacts, automatic
+busy retry, process termination, resource discovery, or remote URL support.
