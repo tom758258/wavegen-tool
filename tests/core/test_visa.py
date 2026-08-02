@@ -793,6 +793,7 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -834,6 +835,7 @@ def test_dry_run_sine_returns_normalized_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -927,32 +929,39 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "spacing"),
+    ("field", "value", "spacing", "sweep_time", "hold_time", "return_time"),
     [
-        ("stop_frequency_hz", 1000, "linear"),
-        ("stop_frequency_hz", 30_000_001, "linear"),
-        ("sweep_time_s", 8000.1, "linear"),
-        ("sweep_time_s", 500.1, "logarithmic"),
-        ("hold_time_s", -1, "linear"),
-        ("return_time_s", 3600.1, "linear"),
+        ("stop_frequency_hz", 1000, "linear", 1, 0, 0),
+        ("stop_frequency_hz", 30_000_001, "linear", 1, 0, 0),
+        ("sweep_time_s", 8000.1, "linear", 8000.1, 0, 0),
+        ("sweep_time_s", 500.1, "logarithmic", 500.1, 0, 0),
+        ("hold_time_s", -1, "linear", 1, -1, 0),
+        ("return_time_s", 3600.1, "linear", 1, 0, 3600.1),
+        ("total_time_s", 7999, "linear", 7999, 2, 0),
+        ("total_time_s", 499, "logarithmic", 499, 2, 0),
     ],
 )
-def test_invalid_sine_sweep_parameters_fail_before_visa_io(field, value, spacing):
+def test_invalid_sine_sweep_parameters_fail_before_visa_io(
+    field, value, spacing, sweep_time, hold_time, return_time
+):
     manager = FakeManager()
     factory = RecordingFactory(manager)
     arguments = {
         "start_frequency_hz": 1000,
         "stop_frequency_hz": 10000,
         "spacing": spacing,
-        "sweep_time_s": 1,
+        "sweep_time_s": sweep_time,
         "amplitude_vpp": 0.1,
         "offset_v": 0,
-        "hold_time_s": 0,
-        "return_time_s": 0,
+        "hold_time_s": hold_time,
+        "return_time_s": return_time,
         "load": 50,
         "phase_deg": 0,
     }
-    arguments[field] = value
+    if field == "total_time_s":
+        arguments["sweep_time_s"] = value
+    else:
+        arguments[field] = value
 
     with pytest.raises(WaveformParameterError):
         configure_sine_sweep(
@@ -1082,6 +1091,7 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SQUare",
@@ -1131,6 +1141,7 @@ def test_dry_run_square_returns_normalized_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SQUare",
@@ -1198,6 +1209,7 @@ def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FREQuency MINimum",
@@ -1248,6 +1260,7 @@ def test_dry_run_ramp_returns_normalized_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FREQuency MINimum",
@@ -1281,6 +1294,7 @@ def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FREQuency MINimum",
@@ -1394,6 +1408,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     ]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
@@ -1411,6 +1426,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert session.events == [
         ("query", IDN_QUERY),
         ("write", "OUTPut1 OFF"),
+        ("write", "SOURce1:FREQuency:MODE CW"),
         ("write", "OUTPut1:LOAD 50"),
         ("write", "SOURce1:VOLTage:UNIT VPP"),
         ("write", "SOURce1:FUNCtion:PULSe:HOLD WIDTh"),
@@ -1487,6 +1503,7 @@ def test_configure_pulse_supports_independent_edges_and_hardware_free_preview():
     ]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
@@ -1664,6 +1681,7 @@ def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion:PULSe:HOLD WIDTh",

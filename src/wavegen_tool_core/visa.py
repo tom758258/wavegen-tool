@@ -1258,6 +1258,7 @@ def _prepare_sine_sweep(
         offset_v,
         load,
         phase_deg,
+        include_cw_mode=False,
     )
     stop_frequency = _normalize_finite_number(
         stop_frequency_hz,
@@ -1310,6 +1311,13 @@ def _prepare_sine_sweep(
         raise WaveformParameterError(
             "Sine sweep return time must be between 0 s and 3600 s."
         )
+    total_time_s = sweep_time + hold_time + return_time
+    if total_time_s > maximum_sweep_time:
+        raise WaveformParameterError(
+            "Sine sweep total time must not exceed "
+            f"{_format_scpi_number(maximum_sweep_time)} s for "
+            f"{normalized_spacing} spacing."
+        )
 
     spacing_command = "LINear" if normalized_spacing == "linear" else "LOGarithmic"
     commands = (
@@ -1357,6 +1365,7 @@ def _prepare_sine(
     offset_v: object,
     load: object,
     phase_deg: object,
+    include_cw_mode: bool = True,
 ) -> tuple[float, float, float, str, float, tuple[str, ...]]:
     frequency = _normalize_finite_number(frequency_hz, "frequency")
     amplitude = _normalize_finite_number(amplitude_vpp, "amplitude")
@@ -1372,8 +1381,12 @@ def _prepare_sine(
     _validate_vpp_levels(amplitude, offset, normalized_load, "Sine")
 
     load_command = "50" if normalized_load == "50" else "INF"
+    frequency_mode_command = (
+        ("SOURce1:FREQuency:MODE CW",) if include_cw_mode else ()
+    )
     commands = (
         "OUTPut1 OFF",
+        *frequency_mode_command,
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -1536,6 +1549,7 @@ def _prepare_square(
     load_command = "50" if normalized_load == "50" else "INF"
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SQUare",
@@ -1690,6 +1704,7 @@ def _prepare_ramp(
     load_command = "50" if normalized_load == "50" else "INF"
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FREQuency MINimum",
@@ -1813,6 +1828,7 @@ def _prepare_triangle(
     load_command = "50" if normalized_load == "50" else "INF"
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FREQuency MINimum",
@@ -1880,7 +1896,7 @@ def configure_pulse(
                 ) from exc
 
         write_pulse_command(commands[0], None)
-        for command in commands[1:9]:
+        for command in commands[1:10]:
             write_pulse_command(command, "off")
 
         if edge_time is not None:
@@ -1896,7 +1912,7 @@ def configure_pulse(
                 "BOTH",
                 context,
             )
-            remaining_commands = commands[9:]
+            remaining_commands = commands[10:]
         else:
             leading_maximum = _query_pulse_verification(
                 session,
@@ -1910,7 +1926,7 @@ def configure_pulse(
                 "leading",
                 context,
             )
-            write_pulse_command(commands[9], "off")
+            write_pulse_command(commands[10], "off")
 
             trailing_maximum = _query_pulse_verification(
                 session,
@@ -1924,7 +1940,7 @@ def configure_pulse(
                 "trailing",
                 context,
             )
-            remaining_commands = commands[10:]
+            remaining_commands = commands[11:]
 
         for command in remaining_commands:
             write_pulse_command(command, "off")
@@ -2246,6 +2262,7 @@ def _prepare_pulse(
     )
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion:PULSe:HOLD WIDTh",

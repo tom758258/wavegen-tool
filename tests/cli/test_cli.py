@@ -471,6 +471,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion SIN",
@@ -528,6 +529,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FUNCtion SIN",
@@ -650,6 +652,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion SQUare",
@@ -709,6 +712,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FUNCtion SQUare",
@@ -832,6 +836,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FREQuency MINimum",
@@ -894,6 +899,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FREQuency MINimum",
@@ -979,6 +985,7 @@ def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
         "load": "high-z",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD INF",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FREQuency MINimum",
@@ -1284,6 +1291,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion PULSe",
@@ -1362,6 +1370,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FUNCtion PULSe",

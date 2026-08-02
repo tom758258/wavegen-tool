@@ -446,6 +446,8 @@ uv run wavegen-tool configure-sine-sweep `
 
 The dry-run previews the start/stop, spacing, sweep/hold/return time, Immediate
 trigger, and sweep-mode SCPI commands without VISA I/O.
+Normal sine, square, ramp, triangle, and pulse configuration explicitly restores
+CW frequency mode after a sweep while leaving output off.
 
 ## Configure a Channel 1 Square Wave
 

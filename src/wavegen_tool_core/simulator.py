@@ -131,6 +131,7 @@ class SimulatedResource:
             "SOURce1:FUNCtion NOISe": ("active_function", "NOISE"),
             "SOURce1:FUNCtion PRBS": ("active_function", "PRBS"),
             "TRIGger1:SOURce IMMediate": ("trigger_source", "immediate"),
+            "SOURce1:FREQuency:MODE CW": ("frequency_mode", "CW"),
             "SOURce1:FREQuency:MODE SWEep": ("frequency_mode", "SWEep"),
             "SOURce1:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
             "SOURce1:SWEep:SPACing LOGarithmic": (

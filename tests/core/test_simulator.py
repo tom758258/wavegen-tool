@@ -253,6 +253,26 @@ def test_simulator_state_persists_across_manager_and_session_lifecycles() -> Non
     assert state.frequency_hz == 2500.0
     session.close()
 
+    configure_sine_sweep(
+        SIMULATED_33521B_RESOURCE,
+        1000,
+        10000,
+        "linear",
+        1,
+        0.2,
+        resource_manager_factory=factory,
+    )
+    assert state.frequency_mode == "SWEep"
+
+    configure_sine(
+        SIMULATED_33521B_RESOURCE,
+        2500,
+        0.4,
+        resource_manager_factory=factory,
+    )
+    assert state.frequency_mode == "CW"
+    assert state.output_enabled is False
+
     configure_triangle(
         SIMULATED_33521B_RESOURCE,
         2500,
