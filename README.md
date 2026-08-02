@@ -403,7 +403,7 @@ uv run wavegen-tool configure-sine `
   --load 50
 ```
 
-Dry-run supports sine, square, ramp, pulse, DC, noise, and PRBS configuration.
+Dry-run supports sine, square, ramp, triangle, pulse, DC, noise, and PRBS configuration.
 Each dry-run uses the same Core parameter normalization, waveform-specific
 validation, and SCPI command planning as its live command, but does not create
 a ResourceManager, open a session, query, or write. The command list is only a
