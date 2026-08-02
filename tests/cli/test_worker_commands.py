@@ -63,6 +63,16 @@ def _sine_arguments() -> dict[str, object]:
             },
         ),
         (
+            "configure-triangle",
+            {"frequency_hz": 1000, "amplitude_vpp": 0.1},
+            {
+                "frequency_hz": 1000,
+                "amplitude_vpp": 0.1,
+                "offset_v": 0,
+                "load": "50",
+            },
+        ),
+        (
             "configure-pulse",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1, "pulse_width_s": 0.0001},
             {

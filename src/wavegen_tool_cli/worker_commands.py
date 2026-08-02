@@ -15,6 +15,7 @@ from wavegen_tool_core.visa import (
     dry_run_ramp,
     dry_run_sine,
     dry_run_square,
+    dry_run_triangle,
 )
 
 __all__ = [
@@ -60,6 +61,7 @@ _SUPPORTED_COMMANDS = frozenset(
         "configure-sine",
         "configure-square",
         "configure-ramp",
+        "configure-triangle",
         "configure-pulse",
         "configure-dc",
         "configure-noise",
@@ -72,6 +74,7 @@ _CONFIGURE_COMMANDS = frozenset(
         "configure-sine",
         "configure-square",
         "configure-ramp",
+        "configure-triangle",
         "configure-pulse",
         "configure-dc",
         "configure-noise",
@@ -93,6 +96,9 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "configure-ramp": frozenset(
         {"frequency_hz", "amplitude_vpp", "offset_v", "symmetry_percent", "load"}
     ),
+    "configure-triangle": frozenset(
+        {"frequency_hz", "amplitude_vpp", "offset_v", "load"}
+    ),
     "configure-pulse": frozenset(
         {"frequency_hz", "amplitude_vpp", "pulse_width_s", "offset_v", "edge_time_s", "load"}
     ),
@@ -110,6 +116,7 @@ _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "configure-sine": frozenset({"frequency_hz", "amplitude_vpp"}),
     "configure-square": frozenset({"frequency_hz", "amplitude_vpp"}),
     "configure-ramp": frozenset({"frequency_hz", "amplitude_vpp"}),
+    "configure-triangle": frozenset({"frequency_hz", "amplitude_vpp"}),
     "configure-pulse": frozenset(
         {"frequency_hz", "amplitude_vpp", "pulse_width_s"}
     ),
@@ -123,6 +130,7 @@ _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
     "configure-sine": {"offset_v": 0, "load": "50"},
     "configure-square": {"offset_v": 0, "duty_cycle_percent": 50, "load": "50"},
     "configure-ramp": {"offset_v": 0, "symmetry_percent": 100, "load": "50"},
+    "configure-triangle": {"offset_v": 0, "load": "50"},
     "configure-pulse": {"offset_v": 0, "edge_time_s": 1e-8, "load": "50"},
     "configure-dc": {"load": "50"},
     "configure-noise": {"offset_v": 0, "load": "50"},
@@ -393,6 +401,14 @@ def _validate_waveform_arguments(
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
                 arguments["symmetry_percent"],
+                arguments["load"],
+            )
+        elif command == "configure-triangle":
+            dry_run_triangle(
+                model_id,
+                arguments["frequency_hz"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
                 arguments["load"],
             )
         elif command == "configure-pulse":

@@ -60,6 +60,7 @@ Supported commands are:
 - `configure-sine`
 - `configure-square`
 - `configure-ramp`
+- `configure-triangle`
 - `configure-pulse`
 - `configure-dc`
 - `configure-noise`
@@ -69,7 +70,7 @@ Supported commands are:
 `list-resources`, arbitrary SCPI, and waveform, sweep, burst, or sequence
 commands not listed above are unsupported.
 
-In `dry_run` context, only the seven `configure-*` commands are supported.
+In `dry_run` context, only the eight `configure-*` commands are supported.
 `identify`, `status`, `read-errors`, and `output` do not receive invented
 dry-run behavior in v1.
 
@@ -91,6 +92,7 @@ Waveform arguments and defaults are:
 | `configure-sine` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `load="50"` |
 | `configure-square` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `duty_cycle_percent=50`, `load="50"` |
 | `configure-ramp` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `symmetry_percent=100`, `load="50"` |
+| `configure-triangle` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `load="50"` |
 | `configure-pulse` | `frequency_hz`, `amplitude_vpp`, `pulse_width_s` | `offset_v=0`, `edge_time_s=1e-8`, `load="50"` |
 | `configure-dc` | `voltage_v` | `load="50"` |
 | `configure-noise` | `amplitude_vpp`, `bandwidth_hz` | `offset_v=0`, `load="50"` |

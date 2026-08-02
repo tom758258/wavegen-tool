@@ -17,6 +17,7 @@ from wavegen_tool_core import (
     configure_ramp,
     configure_sine,
     configure_square,
+    configure_triangle,
     identify_instrument,
     list_resources,
     query_status,
@@ -98,6 +99,19 @@ def test_simulator_exposes_one_deterministic_recognized_resource() -> None:
             40.0,
         ),
         (
+            lambda factory: configure_triangle(
+                SIMULATED_33521B_RESOURCE,
+                2000,
+                0.2,
+                0.1,
+                "high-z",
+                resource_manager_factory=factory,
+            ),
+            "TRIANGLE",
+            "offset_v",
+            0.1,
+        ),
+        (
             lambda factory: configure_pulse(
                 SIMULATED_33521B_RESOURCE,
                 2000,
@@ -165,12 +179,11 @@ def test_simulator_state_persists_across_manager_and_session_lifecycles() -> Non
     state = Simulated33521BState()
     factory = _factory_for(state)
 
-    configure_square(
+    configure_triangle(
         SIMULATED_33521B_RESOURCE,
         2500,
         0.4,
         0.1,
-        30,
         "high-z",
         resource_manager_factory=factory,
     )
@@ -184,7 +197,7 @@ def test_simulator_state_persists_across_manager_and_session_lifecycles() -> Non
         resource_manager_factory=factory,
     )
 
-    assert status.function == "SQUARE"
+    assert status.function == "TRIANGLE"
     assert status.frequency_hz == 2500.0
     assert status.amplitude == 0.4
     assert status.offset_v == 0.1

@@ -4,7 +4,7 @@ Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. The
 current milestone supports identification, read-only Channel 1 status, bounded
 instrument error-queue reads, and basic Channel 1
-sine/square/ramp/pulse/DC/noise/PRBS/output control for the Keysight or Agilent
+sine/square/ramp/triangle/pulse/DC/noise/PRBS/output control for the Keysight or Agilent
 33521B.
 
 ## Current Scope
@@ -13,11 +13,12 @@ sine/square/ramp/pulse/DC/noise/PRBS/output control for the Keysight or Agilent
   and Agilent Technologies 33521B
 - Parameter-validated Channel 1 sine configuration with explicit load, frequency,
   amplitude, and offset
-- Hardware-free Channel 1 dry-run preview for all seven waveform configurations
+- Hardware-free Channel 1 dry-run preview for all eight waveform configurations
 - Stateful, hardware-free Keysight 33521B Channel 1 simulator for all public CLI
   commands
 - Hardware-unvalidated, parameter-validated Channel 1 square configuration
 - Hardware-unvalidated, parameter-validated Channel 1 ramp configuration
+- Hardware-unvalidated, parameter-validated Channel 1 triangle configuration
 - Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
 - Hardware-unvalidated, parameter-validated Channel 1 DC voltage configuration
 - Hardware-unvalidated, parameter-validated Channel 1 noise configuration
@@ -42,9 +43,9 @@ reported by the instrument while normalizing the model to `33521B`. It does not
 claim that every live backend/transport scope or control feature is
 hardware-validated. Identification has been hardware-validated against an
 Agilent Technologies 33521B through system VISA over USB. Live-only discovery
-has also been validated with USB and ASRL resources. Sine, square, ramp, pulse,
-DC, noise, and PRBS configuration, output control, status readback, and error
-queue reads have not yet been hardware-validated.
+has also been validated with USB and ASRL resources. Sine, square, ramp,
+triangle, pulse, DC, noise, and PRBS configuration, output control, status
+readback, and error queue reads have not yet been hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -65,7 +66,7 @@ reserved WebUI import packages.
 ## Stateful Simulator
 
 The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
-all seven waveform configuration commands, and explicit output control for one
+all eight waveform configuration commands, and explicit output control for one
 simulated Keysight 33521B Channel 1. It uses the fixed resource
 `USB0::SIM::33521B::INSTR` and never creates a real VISA ResourceManager, runs
 real resource discovery, opens hardware, or performs hardware I/O. Supported
@@ -498,6 +499,42 @@ only a preview and is not executed. Dry-run is neither a simulator nor hardware
 validation. Live `configure-ramp` continues to require an explicit VISA
 resource.
 
+## Configure a Channel 1 Triangle Wave
+
+Configure a 1 kHz, 0.1 Vpp triangle wave with zero offset and a 50-ohm
+instrument output-load setting:
+
+```powershell
+uv run wavegen-tool configure-triangle `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --load 50
+```
+
+Triangle frequency must be from 0.000001 Hz to 200000 Hz. The amplitude,
+offset, and output-load setting limits are the same as for sine and square
+configuration. Triangle configuration uses the instrument's dedicated
+`TRIangle` function and has not yet been hardware-validated. Configuration
+first turns Channel 1 output off and leaves it off; it never enables output.
+
+Preview the validated Triangle SCPI plan without a VISA resource or instrument:
+
+```powershell
+uv run wavegen-tool configure-triangle `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --load 50
+```
+
+Triangle dry-run uses the same Core validation and SCPI planning as live
+configuration, but performs no VISA I/O. Live `configure-triangle` continues
+to require an explicit VISA resource.
+
 ## Configure a Channel 1 Pulse Wave
 
 Configure a 1 kHz, 0.1 Vpp pulse with a 100 us width, zero offset, equal 10 ns
@@ -723,11 +760,11 @@ The `status` command resolves the exact manufacturer/model identity before its
 read-only Channel 1 queries. It does not write, reset, clear, inspect the error
 queue, or change output state.
 
-`configure-sine`, `configure-square`, `configure-ramp`, `configure-pulse`,
-`configure-dc`, `configure-noise`, and `configure-prbs` first turn Channel 1
-off and leave it off after configuration. They cannot enable output. The
-`output` command changes only the Channel 1 output state and does not
-reconfigure or reset the instrument.
+`configure-sine`, `configure-square`, `configure-ramp`, `configure-triangle`,
+`configure-pulse`, `configure-dc`, `configure-noise`, and `configure-prbs`
+first turn Channel 1 off and leave it off after configuration. They cannot
+enable output. The `output` command changes only the Channel 1 output state
+and does not reconfigure or reset the instrument.
 
 For identify, the `@py` plus USB combination is rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain
@@ -752,6 +789,7 @@ uv run wavegen-tool status --help
 uv run wavegen-tool configure-sine --help
 uv run wavegen-tool configure-square --help
 uv run wavegen-tool configure-ramp --help
+uv run wavegen-tool configure-triangle --help
 uv run wavegen-tool configure-pulse --help
 uv run wavegen-tool configure-dc --help
 uv run wavegen-tool configure-noise --help

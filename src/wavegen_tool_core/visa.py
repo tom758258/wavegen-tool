@@ -243,6 +243,36 @@ class RampDryRunResult:
 
 
 @dataclass(frozen=True)
+class TriangleConfigurationResult:
+    """A successful Channel 1 triangle configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
+class TriangleDryRunResult:
+    """A hardware-free preview of a Channel 1 triangle configuration."""
+
+    model: str
+    canonical_model_id: str
+    frequency_hz: float
+    amplitude_vpp: float
+    offset_v: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
 class PulseConfigurationResult:
     """A successful Channel 1 pulse configuration."""
 
@@ -1327,6 +1357,108 @@ def _prepare_ramp(
         normalized_load,
         commands,
     )
+
+
+def configure_triangle(
+    resource: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> TriangleConfigurationResult:
+    """Validate and configure a Channel 1 triangle wave while keeping output off."""
+
+    frequency, amplitude, offset, normalized_load, commands = _prepare_triangle(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        load,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return TriangleConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        load=normalized_load,
+    )
+
+
+def dry_run_triangle(
+    model: str,
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+) -> TriangleDryRunResult:
+    """Preview a validated Channel 1 triangle configuration without VISA I/O."""
+
+    _validate_dry_run_model(model, "triangle")
+    frequency, amplitude, offset, normalized_load, commands = _prepare_triangle(
+        frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        load,
+    )
+    return TriangleDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        frequency_hz=frequency,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
+def _prepare_triangle(
+    frequency_hz: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    load: object,
+) -> tuple[float, float, float, str, tuple[str, ...]]:
+    frequency = _normalize_finite_number(
+        frequency_hz,
+        "frequency",
+        waveform="Triangle",
+    )
+    amplitude = _normalize_finite_number(
+        amplitude_vpp,
+        "amplitude",
+        waveform="Triangle",
+    )
+    offset = _normalize_finite_number(offset_v, "offset", waveform="Triangle")
+    normalized_load = _normalize_load(load, waveform="Triangle")
+
+    if not 0.000001 <= frequency <= 200_000:
+        raise WaveformParameterError(
+            "Triangle frequency must be between 0.000001 Hz and 200000 Hz."
+        )
+    _validate_vpp_levels(amplitude, offset, normalized_load, "Triangle")
+
+    load_command = "50" if normalized_load == "50" else "INF"
+    commands = (
+        "OUTPut1 OFF",
+        f"OUTPut1:LOAD {load_command}",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion TRIangle",
+        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
+        f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
+        f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+    )
+    return frequency, amplitude, offset, normalized_load, commands
 
 
 def configure_pulse(

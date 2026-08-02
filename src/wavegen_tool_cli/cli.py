@@ -36,6 +36,7 @@ from wavegen_tool_core import (
     configure_ramp,
     configure_sine,
     configure_square,
+    configure_triangle,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
@@ -43,6 +44,7 @@ from wavegen_tool_core import (
     dry_run_ramp,
     dry_run_sine,
     dry_run_square,
+    dry_run_triangle,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -415,6 +417,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target model for dry-run (default: keysight-33521b).",
     )
     ramp_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    triangle_parser = subparsers.add_parser(
+        "configure-triangle",
+        help="Configure a validated Channel 1 triangle waveform with output off.",
+    )
+    _add_simulate_argument(triangle_parser)
+    triangle_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    triangle_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    triangle_parser.add_argument(
+        "--frequency-hz",
+        required=True,
+        help="Triangle frequency in Hz.",
+    )
+    triangle_parser.add_argument(
+        "--amplitude-vpp",
+        required=True,
+        help="Triangle amplitude in Vpp.",
+    )
+    triangle_parser.add_argument(
+        "--offset-v",
+        default="0",
+        help="DC offset in volts (default: 0).",
+    )
+    triangle_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    triangle_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    triangle_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
+    )
+    triangle_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -820,6 +875,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-sine",
         "configure-square",
         "configure-ramp",
+        "configure-triangle",
         "configure-pulse",
         "configure-dc",
         "configure-noise",
@@ -856,6 +912,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_square(args)
     if args.command == "configure-ramp":
         return _run_configure_ramp(args)
+    if args.command == "configure-triangle":
+        return _run_configure_triangle(args)
     if args.command == "configure-pulse":
         return _run_configure_pulse(args)
     if args.command == "configure-dc":
@@ -1210,6 +1268,70 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
         )
     else:
         print(_human_ramp_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_configure_triangle(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_triangle_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
+    return _run_control(
+        args,
+        lambda: configure_triangle(
+            resource,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.offset_v,
+            args.load,
+            args.backend,
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_triangle_dry_run(args: argparse.Namespace) -> int:
+    try:
+        result = dry_run_triangle(
+            args.model,
+            args.frequency_hz,
+            args.amplitude_vpp,
+            args.offset_v,
+            args.load,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _triangle_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _triangle_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _triangle_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_triangle_dry_run_success(result))
     return int(ExitCode.SUCCESS)
 
 
@@ -1775,6 +1897,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "configure-sine",
         "configure-square",
         "configure-ramp",
+        "configure-triangle",
         "configure-pulse",
     }:
         payload.update(
@@ -1921,6 +2044,42 @@ def _ramp_dry_run_internal_error_payload() -> dict[str, object]:
     return {
         "success": False,
         "action": "configure-ramp",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _triangle_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-triangle",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "frequency_hz": result.frequency_hz,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _triangle_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-triangle",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _triangle_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-triangle",
         "mode": "dry-run",
         "error": "internal_error: unexpected internal failure",
     }
@@ -2266,6 +2425,8 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 square waveform configured with output off."
     elif action == "configure-ramp":
         heading = "Channel 1 ramp waveform configured with output off."
+    elif action == "configure-triangle":
+        heading = "Channel 1 triangle waveform configured with output off."
     elif action == "configure-pulse":
         heading = "Channel 1 pulse waveform configured with output off."
     elif action == "configure-dc":
@@ -2323,6 +2484,21 @@ def _human_ramp_dry_run_success(result: Any) -> str:
     return "\n".join(
         (
             "Channel 1 ramp dry-run completed; no VISA I/O was performed.",
+            f"Target model: {result.model}",
+            f"Canonical model ID: {result.canonical_model_id}",
+            "Executed: no",
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+
+
+def _human_triangle_dry_run_success(result: Any) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    return "\n".join(
+        (
+            "Channel 1 triangle dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",

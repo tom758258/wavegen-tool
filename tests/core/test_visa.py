@@ -2,6 +2,7 @@ from inspect import signature
 
 import pytest
 
+import wavegen_tool_core.visa as visa_module
 from wavegen_tool_core.errors import (
     ErrorQueueQueryError,
     IdnQueryError,
@@ -30,6 +31,7 @@ from wavegen_tool_core.visa import (
     configure_ramp,
     configure_sine,
     configure_square,
+    configure_triangle,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
@@ -37,6 +39,7 @@ from wavegen_tool_core.visa import (
     dry_run_ramp,
     dry_run_sine,
     dry_run_square,
+    dry_run_triangle,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -1070,6 +1073,64 @@ def test_dry_run_ramp_returns_normalized_hardware_free_command_preview():
     )
     assert result.executed is False
     assert result.output_state == "off"
+
+
+def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
+    monkeypatch,
+):
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_triangle(
+        USB_RESOURCE,
+        "1000",
+        "0.1",
+        "0.2",
+        "high-z",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD INF",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion TRIangle",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0.2",
+    ]
+    assert "OUTPut1 ON" not in session.writes
+    assert not any("RAMP" in command for command in session.writes)
+    assert result.frequency_hz == 1000.0
+    assert result.amplitude_vpp == 0.1
+    assert result.offset_v == 0.2
+    assert result.load == "high-z"
+    assert result.output_state == "off"
+
+    def fail_resource_manager(_library):
+        raise AssertionError("dry-run must not create a ResourceManager")
+
+    monkeypatch.setattr(visa_module, "create_resource_manager", fail_resource_manager)
+    dry_run = dry_run_triangle("  KEYSIGHT-33521B  ", 1000, 0.1, 0.2, "high-z")
+
+    assert dry_run.model == "33521B"
+    assert dry_run.canonical_model_id == "keysight-33521b"
+    assert dry_run.frequency_hz == 1000.0
+    assert dry_run.amplitude_vpp == 0.1
+    assert dry_run.offset_v == 0.2
+    assert dry_run.load == "high-z"
+    assert dry_run.commands == tuple(session.writes)
+    assert dry_run.executed is False
+    assert dry_run.output_state == "off"
+
+    with pytest.raises(WaveformParameterError, match="Triangle frequency"):
+        configure_triangle(
+            USB_RESOURCE,
+            200_001,
+            0.1,
+            resource_manager_factory=RecordingFactory(FakeManager()),
+        )
 
 
 def test_dry_run_ramp_rejects_invalid_symmetry():

@@ -184,6 +184,11 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
             "simulate",
         ),
         (
+            "configure-triangle",
+            {"frequency_hz": 1000, "amplitude_vpp": 0.1},
+            "simulate",
+        ),
+        (
             "configure-pulse",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1, "pulse_width_s": 0.0001},
             "simulate",
@@ -201,6 +206,11 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
         ),
         ("output", {"enabled": True, "confirm_output": True}, "simulate"),
         ("configure-sine", _sine_arguments(), "dry_run"),
+        (
+            "configure-triangle",
+            {"frequency_hz": 1000, "amplitude_vpp": 0.1},
+            "dry_run",
+        ),
         ("identify", {}, "live"),
     ],
 )

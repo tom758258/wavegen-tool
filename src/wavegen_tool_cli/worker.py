@@ -28,6 +28,7 @@ from wavegen_tool_core import (
     configure_ramp,
     configure_sine,
     configure_square,
+    configure_triangle,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
@@ -35,6 +36,7 @@ from wavegen_tool_core import (
     dry_run_ramp,
     dry_run_sine,
     dry_run_square,
+    dry_run_triangle,
     identify_instrument,
     normalize_backend,
     query_status,
@@ -476,6 +478,16 @@ class WorkerRuntime:
                 backend,
                 **factory_kwargs,
             )
+        if job.command == "configure-triangle":
+            return configure_triangle(
+                resource,
+                arguments["frequency_hz"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["load"],
+                backend,
+                **factory_kwargs,
+            )
         if job.command == "configure-pulse":
             return configure_pulse(
                 resource,
@@ -558,6 +570,14 @@ class WorkerRuntime:
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
                 arguments["symmetry_percent"],
+                arguments["load"],
+            )
+        if command == "configure-triangle":
+            return dry_run_triangle(
+                model,
+                arguments["frequency_hz"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
                 arguments["load"],
             )
         if command == "configure-pulse":

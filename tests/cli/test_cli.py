@@ -905,6 +905,60 @@ def test_configure_ramp_live_missing_resource_is_usage_error(
     assert "Traceback" not in captured.err
 
 
+def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
+    monkeypatch, capsys
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-triangle",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--offset-v",
+            "0.2",
+            "--load",
+            "high-z",
+            "--json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.SUCCESS
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload == {
+        "success": True,
+        "action": "configure-triangle",
+        "mode": "dry-run",
+        "model": "33521B",
+        "canonical_model_id": "keysight-33521b",
+        "frequency_hz": 1000.0,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0.2,
+        "load": "high-z",
+        "commands": [
+            "OUTPut1 OFF",
+            "OUTPut1:LOAD INF",
+            "SOURce1:VOLTage:UNIT VPP",
+            "SOURce1:FUNCtion TRIangle",
+            "SOURce1:FREQuency 1000",
+            "SOURce1:VOLTage 0.1",
+            "SOURce1:VOLTage:OFFSet 0.2",
+        ],
+        "executed": False,
+        "output_state": "off",
+        "error": None,
+    }
+
+
 def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
     monkeypatch, capsys
 ):
@@ -1940,6 +1994,22 @@ def test_read_errors_cli_simulation_json_smoke(capsys):
             "configure-ramp",
             "symmetry_percent",
             25.0,
+        ),
+        (
+            [
+                "configure-triangle",
+                "--simulate",
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+                "--offset-v",
+                "0.2",
+                "--json",
+            ],
+            "configure-triangle",
+            "frequency_hz",
+            1000.0,
         ),
         (
             [

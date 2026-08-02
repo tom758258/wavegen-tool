@@ -105,6 +105,7 @@ class SimulatedResource:
             "SOURce1:FUNCtion SIN": ("active_function", "SIN"),
             "SOURce1:FUNCtion SQUare": ("active_function", "SQUARE"),
             "SOURce1:FUNCtion RAMP": ("active_function", "RAMP"),
+            "SOURce1:FUNCtion TRIangle": ("active_function", "TRIANGLE"),
             "SOURce1:FUNCtion PULSe": ("active_function", "PULSE"),
             "SOURce1:FUNCtion DC": ("active_function", "DC"),
             "SOURce1:FUNCtion NOISe": ("active_function", "NOISE"),
