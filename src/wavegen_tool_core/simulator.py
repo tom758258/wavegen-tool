@@ -25,7 +25,9 @@ class Simulated33521BState:
     square_duty_cycle_percent: float = 50.0
     ramp_symmetry_percent: float = 100.0
     pulse_width_s: float = 0.0001
-    pulse_edge_time_s: float = 1e-8
+    pulse_edge_time_s: float | None = 1e-8
+    pulse_leading_edge_s: float = 1e-8
+    pulse_trailing_edge_s: float = 1e-8
     noise_bandwidth_hz: float = 100000.0
     prbs_bit_rate_bps: float = 1000000.0
     prbs_pattern: str = "PN7"
@@ -100,6 +102,11 @@ class SimulatedResource:
             "UNIT:ANGLe DEGree",
         }:
             return
+        if command == "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum":
+            self.state.pulse_edge_time_s = 8.4e-9
+            self.state.pulse_leading_edge_s = 8.4e-9
+            self.state.pulse_trailing_edge_s = 8.4e-9
+            return
         exact_updates = {
             "OUTPut1 OFF": ("output_enabled", False),
             "OUTPut1 ON": ("output_enabled", True),
@@ -115,10 +122,6 @@ class SimulatedResource:
             "SOURce1:FUNCtion DC": ("active_function", "DC"),
             "SOURce1:FUNCtion NOISe": ("active_function", "NOISE"),
             "SOURce1:FUNCtion PRBS": ("active_function", "PRBS"),
-            "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum": (
-                "pulse_edge_time_s",
-                8.4e-9,
-            ),
             "SOURce1:FUNCtion:PULSe:WIDTh MINimum": (
                 "pulse_width_s",
                 16e-9,
@@ -129,6 +132,22 @@ class SimulatedResource:
             setattr(self.state, update[0], update[1])
             return
 
+        edge_prefixes = (
+            (
+                "SOURce1:FUNCtion:PULSe:TRANsition:LEADing ",
+                "pulse_leading_edge_s",
+            ),
+            (
+                "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling ",
+                "pulse_trailing_edge_s",
+            ),
+        )
+        for prefix, field in edge_prefixes:
+            if command.startswith(prefix):
+                self.state.pulse_edge_time_s = None
+                setattr(self.state, field, _parse_finite_number(command[len(prefix) :]))
+                return
+
         numeric_updates = (
             ("SOURce1:FREQuency ", "frequency_hz"),
             ("SOURce1:PHASe ", "phase_deg"),
@@ -137,10 +156,6 @@ class SimulatedResource:
             ("SOURce1:FUNCtion:SQUare:DCYCle ", "square_duty_cycle_percent"),
             ("SOURce1:FUNCtion:RAMP:SYMMetry ", "ramp_symmetry_percent"),
             ("SOURce1:FUNCtion:PULSe:WIDTh ", "pulse_width_s"),
-            (
-                "SOURce1:FUNCtion:PULSe:TRANsition:BOTH ",
-                "pulse_edge_time_s",
-            ),
             ("SOURce1:FUNCtion:NOISe:BANDwidth ", "noise_bandwidth_hz"),
             ("SOURce1:FUNCtion:PRBS:BRATe ", "prbs_bit_rate_bps"),
             (
@@ -152,6 +167,14 @@ class SimulatedResource:
             if command.startswith(prefix):
                 setattr(self.state, field, _parse_finite_number(command[len(prefix) :]))
                 return
+
+        both_edge_prefix = "SOURce1:FUNCtion:PULSe:TRANsition:BOTH "
+        if command.startswith(both_edge_prefix):
+            edge_time = _parse_finite_number(command[len(both_edge_prefix) :])
+            self.state.pulse_edge_time_s = edge_time
+            self.state.pulse_leading_edge_s = edge_time
+            self.state.pulse_trailing_edge_s = edge_time
+            return
 
         pattern_prefix = "SOURce1:FUNCtion:PRBS:DATA "
         if command.startswith(pattern_prefix):
@@ -171,11 +194,21 @@ class SimulatedResource:
             "SOURce1:FREQuency?": _format_number(self.state.frequency_hz),
             "SOURce1:PHASe?": _format_number(self.state.phase_deg),
             "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum": "1e-6",
+            "SOURce1:FUNCtion:PULSe:TRANsition:LEADing? MAXimum": "1e-6",
+            "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling? MAXimum": "1e-6",
             "SOURce1:FUNCtion:PULSe:WIDTh?": _format_number(
                 self.state.pulse_width_s
             ),
             "SOURce1:FUNCtion:PULSe:TRANsition?": _format_number(
                 self.state.pulse_edge_time_s
+                if self.state.pulse_edge_time_s is not None
+                else self.state.pulse_leading_edge_s
+            ),
+            "SOURce1:FUNCtion:PULSe:TRANsition:LEADing?": _format_number(
+                self.state.pulse_leading_edge_s
+            ),
+            "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling?": _format_number(
+                self.state.pulse_trailing_edge_s
             ),
             "SOURce1:FUNCtion:NOISe:BANDwidth?": _format_number(
                 self.state.noise_bandwidth_hz

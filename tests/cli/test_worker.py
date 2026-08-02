@@ -190,7 +190,13 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
         ),
         (
             "configure-pulse",
-            {"frequency_hz": 1000, "amplitude_vpp": 0.1, "pulse_width_s": 0.0001},
+            {
+                "frequency_hz": 1000,
+                "amplitude_vpp": 0.1,
+                "pulse_width_s": 0.0001,
+                "leading_edge_s": 1e-8,
+                "trailing_edge_s": 2e-8,
+            },
             "simulate",
         ),
         ("configure-dc", {"voltage_v": 1.0}, "simulate"),

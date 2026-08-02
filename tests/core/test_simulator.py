@@ -175,6 +175,32 @@ def test_all_waveform_configurations_update_simulated_state_with_output_off(
     assert result.output_state == "off"
 
 
+def test_simulator_preserves_independent_pulse_edges_and_readback():
+    state = Simulated33521BState(output_enabled=True)
+
+    result = configure_pulse(
+        SIMULATED_33521B_RESOURCE,
+        1000,
+        0.2,
+        0.0001,
+        leading_edge_s=10e-9,
+        trailing_edge_s=20e-9,
+        resource_manager_factory=_factory_for(state),
+    )
+
+    session = SimulatedResourceManager(state).open_resource(
+        SIMULATED_33521B_RESOURCE
+    )
+    assert result.edge_time_s is None
+    assert state.pulse_edge_time_s is None
+    assert state.pulse_leading_edge_s == 10e-9
+    assert state.pulse_trailing_edge_s == 20e-9
+    assert session.query("SOURce1:FUNCtion:PULSe:TRANsition:LEADing?") == "1e-08"
+    assert session.query("SOURce1:FUNCtion:PULSe:TRANsition:TRAiling?") == "2e-08"
+    assert state.output_enabled is False
+    session.close()
+
+
 def test_simulator_state_persists_across_manager_and_session_lifecycles() -> None:
     state = Simulated33521BState()
     factory = _factory_for(state)

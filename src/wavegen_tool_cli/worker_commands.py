@@ -120,6 +120,8 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
             "pulse_width_s",
             "offset_v",
             "edge_time_s",
+            "leading_edge_s",
+            "trailing_edge_s",
             "phase_deg",
             "load",
         }
@@ -166,7 +168,6 @@ _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
     "configure-pulse": {
         "offset_v": 0,
         "phase_deg": 0.0,
-        "edge_time_s": 1e-8,
         "load": "50",
     },
     "configure-dc": {"load": "50"},
@@ -361,6 +362,24 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
     for field, default in _DEFAULT_ARGUMENTS.get(command, {}).items():
         arguments.setdefault(field, default)
 
+    if command == "configure-pulse":
+        has_shared = "edge_time_s" in arguments
+        has_leading = "leading_edge_s" in arguments
+        has_trailing = "trailing_edge_s" in arguments
+        if has_leading != has_trailing:
+            raise WorkerRequestValidationError(
+                "invalid_arguments",
+                "Pulse leading_edge_s and trailing_edge_s must be provided together.",
+            )
+        if has_shared and (has_leading or has_trailing):
+            raise WorkerRequestValidationError(
+                "invalid_arguments",
+                "Pulse edge_time_s cannot be combined with leading_edge_s "
+                "or trailing_edge_s.",
+            )
+        if not has_shared and not has_leading:
+            arguments["edge_time_s"] = 1e-8
+
     if command == "read-errors":
         max_reads = arguments["max_reads"]
         if isinstance(max_reads, bool) or not isinstance(max_reads, int) or not 1 <= max_reads <= 100:
@@ -459,9 +478,11 @@ def _validate_waveform_arguments(
                 arguments["amplitude_vpp"],
                 arguments["pulse_width_s"],
                 arguments["offset_v"],
-                arguments["edge_time_s"],
+                arguments.get("edge_time_s"),
                 arguments["load"],
                 arguments["phase_deg"],
+                arguments.get("leading_edge_s"),
+                arguments.get("trailing_edge_s"),
             )
         elif command == "configure-dc":
             dry_run_dc(

@@ -1275,11 +1275,90 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert result.pulse_width_s == 5.005e-08
     assert result.offset_v == 0.0
     assert result.edge_time_s == 2.005e-08
+    assert result.leading_edge_s == 2.005e-08
+    assert result.trailing_edge_s == 2.005e-08
     assert result.phase_deg == 90.0
     assert result.load == "50"
     assert result.output_state == "off"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_configure_pulse_supports_independent_edges_and_hardware_free_preview():
+    session = FakeSession(
+        responses_by_command={
+            "SOURce1:FUNCtion:PULSe:TRANsition:LEADing? MAXimum": "1e-6",
+            "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling? MAXimum": "1e-6",
+            "OUTPut1?": "0",
+            "SOURce1:FUNCtion?": "PULS",
+            "SOURce1:FREQuency?": "1000000",
+            "SOURce1:FUNCtion:PULSe:WIDTh?": "4e-7",
+            "SOURce1:FUNCtion:PULSe:TRANsition:LEADing?": "1e-7",
+            "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling?": "5e-7",
+            "SOURce1:PHASe?": "0",
+        }
+    )
+    manager = FakeManager(session)
+
+    result = configure_pulse(
+        USB_RESOURCE,
+        1_000_000,
+        0.1,
+        400e-9,
+        leading_edge_s=100e-9,
+        trailing_edge_s=500e-9,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [
+        IDN_QUERY,
+        "SOURce1:FUNCtion:PULSe:TRANsition:LEADing? MAXimum",
+        "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling? MAXimum",
+        "OUTPut1?",
+        "SOURce1:FUNCtion?",
+        "SOURce1:FREQuency?",
+        "SOURce1:FUNCtion:PULSe:WIDTh?",
+        "SOURce1:FUNCtion:PULSe:TRANsition:LEADing?",
+        "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling?",
+        "SOURce1:PHASe?",
+    ]
+    assert session.writes == [
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD 50",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
+        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH MINimum",
+        "SOURce1:FUNCtion:PULSe:WIDTh MINimum",
+        "SOURce1:FUNCtion PULSe",
+        "SOURce1:FREQuency 1000000",
+        "SOURce1:FUNCtion:PULSe:WIDTh 4e-07",
+        "SOURce1:FUNCtion:PULSe:TRANsition:LEADing 1e-07",
+        "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling 5e-07",
+        "SOURce1:VOLTage 0.1",
+        "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
+    ]
+    assert "OUTPut1 ON" not in session.writes
+    assert result.edge_time_s is None
+    assert result.leading_edge_s == 1e-7
+    assert result.trailing_edge_s == 5e-7
+    assert result.output_state == "off"
+
+    preview = dry_run_pulse(
+        "keysight-33521b",
+        1_000_000,
+        0.1,
+        400e-9,
+        leading_edge_s=100e-9,
+        trailing_edge_s=500e-9,
+    )
+    assert preview.edge_time_s is None
+    assert preview.leading_edge_s == 100e-9
+    assert preview.trailing_edge_s == 500e-9
+    assert "SOURce1:FUNCtion:PULSe:TRANsition:LEADing 1e-07" in preview.commands
+    assert "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling 5e-07" in preview.commands
+    assert preview.executed is False
 
 
 @pytest.mark.parametrize(
@@ -1407,6 +1486,8 @@ def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
         "edge_time_s",
         "load",
         "phase_deg",
+        "leading_edge_s",
+        "trailing_edge_s",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1415,6 +1496,8 @@ def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
     assert result.offset_v == 0.0
     assert result.pulse_width_s == 0.0001
     assert result.edge_time_s == 1e-8
+    assert result.leading_edge_s == 1e-8
+    assert result.trailing_edge_s == 1e-8
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
@@ -1492,16 +1575,19 @@ def test_configure_pulse_accepts_float_equal_width_window_boundary():
 
 
 @pytest.mark.parametrize(
-    ("frequency", "pulse_width", "edge_time"),
+    ("frequency", "pulse_width", "edge_time", "leading_edge", "trailing_edge"),
     [
-        (30_000_001, 0.0001, 1e-8),
-        (1_000_000, 15e-9, 10e-9),
-        (1000, 0.0001, 8e-9),
-        (1_000_000, 100e-9, 100e-9),
+        (30_000_001, 0.0001, 1e-8, None, None),
+        (1_000_000, 15e-9, 10e-9, None, None),
+        (1000, 0.0001, 8e-9, None, None),
+        (1_000_000, 100e-9, 100e-9, None, None),
+        (1000, 0.0001, None, 20e-9, None),
+        (1000, 0.0001, None, None, 20e-9),
+        (1000, 0.0001, 10e-9, 20e-9, 20e-9),
     ],
 )
 def test_invalid_pulse_parameters_fail_before_visa_io(
-    frequency, pulse_width, edge_time
+    frequency, pulse_width, edge_time, leading_edge, trailing_edge
 ):
     manager = FakeManager()
     factory = RecordingFactory(manager)
@@ -1515,6 +1601,8 @@ def test_invalid_pulse_parameters_fail_before_visa_io(
             0,
             edge_time,
             50,
+            leading_edge_s=leading_edge,
+            trailing_edge_s=trailing_edge,
             resource_manager_factory=factory,
         )
 

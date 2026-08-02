@@ -542,8 +542,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pulse_parser.add_argument(
         "--edge-time-s",
-        default="0.00000001",
-        help="Leading and trailing edge time in seconds (default: 0.00000001).",
+        default=None,
+        help="Shared leading and trailing edge time in seconds.",
+    )
+    pulse_parser.add_argument(
+        "--leading-edge-s",
+        default=None,
+        help="Independent leading edge time in seconds.",
+    )
+    pulse_parser.add_argument(
+        "--trailing-edge-s",
+        default=None,
+        help="Independent trailing edge time in seconds.",
     )
     pulse_parser.add_argument(
         "--load",
@@ -1391,6 +1401,8 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            args.leading_edge_s,
+            args.trailing_edge_s,
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1407,6 +1419,8 @@ def _run_pulse_dry_run(args: argparse.Namespace) -> int:
             args.edge_time_s,
             args.load,
             args.phase_deg,
+            args.leading_edge_s,
+            args.trailing_edge_s,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1955,6 +1969,8 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         payload.update(
             pulse_width_s=result.pulse_width_s,
             edge_time_s=result.edge_time_s,
+            leading_edge_s=result.leading_edge_s,
+            trailing_edge_s=result.trailing_edge_s,
         )
     if action == "configure-dc":
         payload.update(
@@ -2143,6 +2159,8 @@ def _pulse_dry_run_success_payload(result: Any) -> dict[str, object]:
         "phase_deg": result.phase_deg,
         "pulse_width_s": result.pulse_width_s,
         "edge_time_s": result.edge_time_s,
+        "leading_edge_s": result.leading_edge_s,
+        "trailing_edge_s": result.trailing_edge_s,
         "load": result.load,
         "commands": list(result.commands),
         "executed": result.executed,
@@ -2499,6 +2517,16 @@ def _human_control_success(action: str, result: Any) -> str:
         "configure-pulse",
     }:
         lines.append(f"Phase (degrees): {result.phase_deg}")
+    if action == "configure-pulse":
+        if result.edge_time_s is not None:
+            lines.append(f"Edge time (seconds): {result.edge_time_s}")
+        else:
+            lines.extend(
+                (
+                    f"Leading edge (seconds): {result.leading_edge_s}",
+                    f"Trailing edge (seconds): {result.trailing_edge_s}",
+                )
+            )
     return "\n".join(lines)
 
 
@@ -2568,6 +2596,14 @@ def _human_triangle_dry_run_success(result: Any) -> str:
 
 def _human_pulse_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
+    edge_lines = (
+        (f"Edge time (seconds): {result.edge_time_s}",)
+        if result.edge_time_s is not None
+        else (
+            f"Leading edge (seconds): {result.leading_edge_s}",
+            f"Trailing edge (seconds): {result.trailing_edge_s}",
+        )
+    )
     return "\n".join(
         (
             "Channel 1 pulse dry-run completed; no VISA I/O was performed.",
@@ -2575,6 +2611,7 @@ def _human_pulse_dry_run_success(result: Any) -> str:
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
             f"Phase (degrees): {result.phase_deg}",
+            *edge_lines,
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,

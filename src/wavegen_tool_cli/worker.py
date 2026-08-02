@@ -499,10 +499,12 @@ class WorkerRuntime:
                 arguments["amplitude_vpp"],
                 arguments["pulse_width_s"],
                 arguments["offset_v"],
-                arguments["edge_time_s"],
+                arguments.get("edge_time_s"),
                 arguments["load"],
                 backend,
                 arguments["phase_deg"],
+                arguments.get("leading_edge_s"),
+                arguments.get("trailing_edge_s"),
                 **factory_kwargs,
             )
         if job.command == "configure-dc":
@@ -596,9 +598,11 @@ class WorkerRuntime:
                 arguments["amplitude_vpp"],
                 arguments["pulse_width_s"],
                 arguments["offset_v"],
-                arguments["edge_time_s"],
+                arguments.get("edge_time_s"),
                 arguments["load"],
                 arguments["phase_deg"],
+                arguments.get("leading_edge_s"),
+                arguments.get("trailing_edge_s"),
             )
         if command == "configure-dc":
             return dry_run_dc(model, arguments["voltage_v"], arguments["load"])

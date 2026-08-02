@@ -549,7 +549,8 @@ to require an explicit VISA resource.
 ## Configure a Channel 1 Pulse Wave
 
 Configure a 1 kHz, 0.1 Vpp pulse with a 100 us width, zero offset, equal 10 ns
-leading and trailing edge times, and a 50-ohm instrument output-load setting:
+leading and trailing edge times, and a 50-ohm instrument output-load setting
+using shared-edge mode:
 
 ```powershell
 uv run wavegen-tool configure-pulse `
@@ -562,24 +563,41 @@ uv run wavegen-tool configure-pulse `
   --load 50
 ```
 
+Use independent edge control by providing both options together:
+
+```powershell
+uv run wavegen-tool configure-pulse `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --pulse-width-s 0.0001 `
+  --leading-edge-s 0.00000001 `
+  --trailing-edge-s 0.00000002 `
+  --load 50
+```
+
 Pulse frequency must be from 0.000001 Hz to 30000000 Hz, pulse width is at
-least 16 ns, and edge time must be from 8.4 ns to 1 us. This command applies
-the same edge time to the leading and trailing edges. Width must also fit
-within the waveform period and the selected edge-time constraints. The
-amplitude, offset, and output-load setting limits are the same as for the
-other waveform configuration commands. Pulse accepts `--phase-deg` with a
-default of 0 degrees and an inclusive range of -360 through +360 degrees.
+least 16 ns, and each documented leading/trailing edge range is 8.4 ns to
+1 us. `--edge-time-s` sets both edges; `--leading-edge-s` and
+`--trailing-edge-s` must be provided together, and shared and independent
+edge options cannot be mixed. Width must also fit within the waveform period
+and the selected edge-time constraints. The amplitude, offset, and
+output-load setting limits are the same as for the other waveform
+configuration commands. Pulse accepts `--phase-deg` with a default of 0
+degrees and an inclusive range of -360 through +360 degrees.
 
 Live configuration first turns Channel 1 output off and applies safe
-intermediate pulse width and edge settings before selecting Pulse mode. It then
-queries the instrument's dynamic BOTH-edge maximum for the requested frequency
-and width. Before reporting success, it reads back the function, frequency,
-width, edge time, and output state; the output must still be off. If the
-instrument limit rejects or clips the requested edge time, the command fails
-instead of reporting a false success. Configuration never enables output; only
-an explicit `output --state on` command can do that. The load value is the
-instrument output-load setting and does not detect or verify the physically
-connected load.
+intermediate pulse width and edge settings before selecting Pulse mode. Shared
+mode queries the dynamic BOTH-edge maximum; independent mode queries the
+leading maximum, writes the leading edge, then queries the trailing maximum
+before writing the trailing edge. Before reporting success, it reads back the
+function, frequency, width, applicable edge values, and output state; the
+output must still be off. If the instrument limit rejects or clips an edge,
+the command fails instead of reporting a false success. Configuration never
+enables output; only an explicit `output --state on` command can do that. The
+load value is the instrument output-load setting and does not detect or
+verify the physically connected load. Independent edge control has not yet
+been hardware-validated.
 
 Preview the pulse plan without a VISA resource:
 
@@ -595,11 +613,10 @@ uv run wavegen-tool configure-pulse `
   --load 50
 ```
 
-Pulse dry-run applies the live frequency, edge-time, and pulse-width
-relationship validation and previews the safe intermediate SCPI plan. It does
-not query the instrument's dynamic edge maximum or perform readback
-verification because no VISA I/O occurs; live `configure-pulse` still requires
-an explicit resource.
+Pulse dry-run applies the live frequency, edge, and pulse-width relationship
+validation and previews the safe intermediate SCPI plan. It does not query
+the instrument's dynamic edge maximum or perform readback verification because
+no VISA I/O occurs; live `configure-pulse` still requires an explicit resource.
 
 ## Configure a Channel 1 DC Voltage
 

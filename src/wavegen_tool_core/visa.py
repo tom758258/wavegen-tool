@@ -292,10 +292,12 @@ class PulseConfigurationResult:
     amplitude_vpp: float
     offset_v: float
     pulse_width_s: float
-    edge_time_s: float
+    edge_time_s: float | None
     load: str
     output_state: str = "off"
     phase_deg: float = 0.0
+    leading_edge_s: float | None = None
+    trailing_edge_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -308,12 +310,14 @@ class PulseDryRunResult:
     amplitude_vpp: float
     offset_v: float
     pulse_width_s: float
-    edge_time_s: float
+    edge_time_s: float | None
     load: str
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
     phase_deg: float = 0.0
+    leading_edge_s: float | None = None
+    trailing_edge_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1525,10 +1529,12 @@ def configure_pulse(
     amplitude_vpp: object,
     pulse_width_s: object,
     offset_v: object = 0,
-    edge_time_s: object = 10e-9,
+    edge_time_s: object = None,
     load: object = 50,
     backend: str | None = None,
     phase_deg: object = 0.0,
+    leading_edge_s: object = None,
+    trailing_edge_s: object = None,
     *,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> PulseConfigurationResult:
@@ -1540,6 +1546,8 @@ def configure_pulse(
         offset,
         pulse_width,
         edge_time,
+        leading_edge,
+        trailing_edge,
         normalized_load,
         phase,
         commands,
@@ -1551,12 +1559,14 @@ def configure_pulse(
         edge_time_s,
         load,
         phase_deg,
+        leading_edge_s,
+        trailing_edge_s,
     )
 
     def operate(
         session: VisaSession,
         context: IdentificationResult,
-    ) -> tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float, float]:
         def write_pulse_command(command: str, output_state: str | None) -> None:
             try:
                 session.write(command)
@@ -1570,29 +1580,50 @@ def configure_pulse(
         for command in commands[1:9]:
             write_pulse_command(command, "off")
 
-        maximum = _query_pulse_verification(
-            session,
-            "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum",
-            "dynamic BOTH edge maximum",
-            _parse_pulse_verification_number,
-        )
-        if edge_time > maximum and not math.isclose(
-            edge_time,
-            maximum,
-            rel_tol=PULSE_TIMING_REL_TOLERANCE,
-            abs_tol=PULSE_TIMING_ABS_TOLERANCE_S,
-        ):
-            raise WaveformVerificationError(
-                "Requested BOTH edge time "
-                f"{_format_scpi_number(edge_time)} s exceeds instrument maximum "
-                f"{_format_scpi_number(maximum)} s.",
-                backend=context.backend,
-                transport=context.transport,
-                identity=context.identity,
-                output_state="off",
+        if edge_time is not None:
+            maximum = _query_pulse_verification(
+                session,
+                "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum",
+                "dynamic BOTH edge maximum",
+                _parse_pulse_verification_number,
             )
+            _validate_pulse_edge_maximum(
+                edge_time,
+                maximum,
+                "BOTH",
+                context,
+            )
+            remaining_commands = commands[9:]
+        else:
+            leading_maximum = _query_pulse_verification(
+                session,
+                "SOURce1:FUNCtion:PULSe:TRANsition:LEADing? MAXimum",
+                "dynamic leading edge maximum",
+                _parse_pulse_verification_number,
+            )
+            _validate_pulse_edge_maximum(
+                leading_edge,
+                leading_maximum,
+                "leading",
+                context,
+            )
+            write_pulse_command(commands[9], "off")
 
-        for command in commands[9:]:
+            trailing_maximum = _query_pulse_verification(
+                session,
+                "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling? MAXimum",
+                "dynamic trailing edge maximum",
+                _parse_pulse_verification_number,
+            )
+            _validate_pulse_edge_maximum(
+                trailing_edge,
+                trailing_maximum,
+                "trailing",
+                context,
+            )
+            remaining_commands = commands[10:]
+
+        for command in remaining_commands:
             write_pulse_command(command, "off")
 
         output_state = _query_pulse_verification(
@@ -1619,12 +1650,28 @@ def configure_pulse(
             "pulse width",
             _parse_pulse_verification_number,
         )
-        readback_edge = _query_pulse_verification(
-            session,
-            "SOURce1:FUNCtion:PULSe:TRANsition?",
-            "BOTH edge",
-            _parse_pulse_verification_number,
-        )
+        if edge_time is not None:
+            readback_edge = _query_pulse_verification(
+                session,
+                "SOURce1:FUNCtion:PULSe:TRANsition?",
+                "BOTH edge",
+                _parse_pulse_verification_number,
+            )
+            readback_leading = readback_edge
+            readback_trailing = readback_edge
+        else:
+            readback_leading = _query_pulse_verification(
+                session,
+                "SOURce1:FUNCtion:PULSe:TRANsition:LEADing?",
+                "leading edge",
+                _parse_pulse_verification_number,
+            )
+            readback_trailing = _query_pulse_verification(
+                session,
+                "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling?",
+                "trailing edge",
+                _parse_pulse_verification_number,
+            )
         readback_phase = _query_pulse_verification(
             session,
             "SOURce1:PHASe?",
@@ -1664,14 +1711,32 @@ def configure_pulse(
             abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
             context=context,
         )
-        _verify_pulse_readback(
-            "BOTH edge",
-            edge_time,
-            readback_edge,
-            rel_tolerance=PULSE_TIMING_REL_TOLERANCE,
-            abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
-            context=context,
-        )
+        if edge_time is not None:
+            _verify_pulse_readback(
+                "BOTH edge",
+                edge_time,
+                readback_leading,
+                rel_tolerance=PULSE_TIMING_REL_TOLERANCE,
+                abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
+                context=context,
+            )
+        else:
+            _verify_pulse_readback(
+                "leading edge",
+                leading_edge,
+                readback_leading,
+                rel_tolerance=PULSE_TIMING_REL_TOLERANCE,
+                abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
+                context=context,
+            )
+            _verify_pulse_readback(
+                "trailing edge",
+                trailing_edge,
+                readback_trailing,
+                rel_tolerance=PULSE_TIMING_REL_TOLERANCE,
+                abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
+                context=context,
+            )
         _verify_pulse_readback(
             "phase",
             phase,
@@ -1680,7 +1745,13 @@ def configure_pulse(
             abs_tolerance=0.0,
             context=context,
         )
-        return readback_frequency, readback_width, readback_edge, readback_phase
+        return (
+            readback_frequency,
+            readback_width,
+            readback_leading,
+            readback_trailing,
+            readback_phase,
+        )
 
     context, readback = _run_on_supported_33521b(
         resource,
@@ -1689,7 +1760,14 @@ def configure_pulse(
         output_state_after_operation="off",
         resource_manager_factory=resource_manager_factory,
     )
-    readback_frequency, readback_width, readback_edge, readback_phase = readback
+    (
+        readback_frequency,
+        readback_width,
+        readback_leading,
+        readback_trailing,
+        readback_phase,
+    ) = readback
+    shared_edge = readback_leading if edge_time is not None else None
     return PulseConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -1699,9 +1777,11 @@ def configure_pulse(
         amplitude_vpp=amplitude,
         offset_v=offset,
         pulse_width_s=readback_width,
-        edge_time_s=readback_edge,
+        edge_time_s=shared_edge,
         load=normalized_load,
         phase_deg=readback_phase,
+        leading_edge_s=readback_leading,
+        trailing_edge_s=readback_trailing,
     )
 
 
@@ -1711,9 +1791,11 @@ def dry_run_pulse(
     amplitude_vpp: object,
     pulse_width_s: object,
     offset_v: object = 0,
-    edge_time_s: object = 10e-9,
+    edge_time_s: object = None,
     load: object = 50,
     phase_deg: object = 0.0,
+    leading_edge_s: object = None,
+    trailing_edge_s: object = None,
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
@@ -1724,6 +1806,8 @@ def dry_run_pulse(
         offset,
         pulse_width,
         edge_time,
+        leading_edge,
+        trailing_edge,
         normalized_load,
         phase,
         commands,
@@ -1735,6 +1819,8 @@ def dry_run_pulse(
         edge_time_s,
         load,
         phase_deg,
+        leading_edge_s,
+        trailing_edge_s,
     )
     return PulseDryRunResult(
         model=CANONICAL_MODEL,
@@ -1746,6 +1832,8 @@ def dry_run_pulse(
         edge_time_s=edge_time,
         load=normalized_load,
         phase_deg=phase,
+        leading_edge_s=leading_edge,
+        trailing_edge_s=trailing_edge,
         commands=commands,
     )
 
@@ -1758,7 +1846,20 @@ def _prepare_pulse(
     edge_time_s: object,
     load: object,
     phase_deg: object,
-) -> tuple[float, float, float, float, float, str, float, tuple[str, ...]]:
+    leading_edge_s: object,
+    trailing_edge_s: object,
+) -> tuple[
+    float,
+    float,
+    float,
+    float,
+    float | None,
+    float,
+    float,
+    str,
+    float,
+    tuple[str, ...],
+]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -1775,10 +1876,10 @@ def _prepare_pulse(
         waveform="Pulse",
     )
     offset = _normalize_finite_number(offset_v, "offset", waveform="Pulse")
-    edge_time = _normalize_finite_number(
+    edge_time, leading_edge, trailing_edge = _normalize_pulse_edges(
         edge_time_s,
-        "edge time",
-        waveform="Pulse",
+        leading_edge_s,
+        trailing_edge_s,
     )
     normalized_load = _normalize_load(load, waveform="Pulse")
     phase = _normalize_phase_deg(phase_deg, waveform="Pulse")
@@ -1787,14 +1888,10 @@ def _prepare_pulse(
         raise WaveformParameterError(
             "Pulse frequency must be between 0.000001 Hz and 30000000 Hz."
         )
-    if not 8.4e-9 <= edge_time <= 1e-6:
-        raise WaveformParameterError(
-            "Pulse edge time must be between 0.0000000084 s and 0.000001 s."
-        )
     _validate_vpp_levels(amplitude, offset, normalized_load, "Pulse")
 
     period = 1 / frequency
-    edge_margin = 1.25 * edge_time
+    edge_margin = 0.625 * (leading_edge + trailing_edge)
     minimum_width = max(16e-9, edge_margin)
     maximum_width = period - max(16e-9, edge_margin)
     invalid_width_window = (
@@ -1831,6 +1928,19 @@ def _prepare_pulse(
         )
 
     load_command = "50" if normalized_load == "50" else "INF"
+    edge_commands = (
+        (
+            f"SOURce1:FUNCtion:PULSe:TRANsition:LEADing "
+            f"{_format_scpi_number(leading_edge)}",
+            f"SOURce1:FUNCtion:PULSe:TRANsition:TRAiling "
+            f"{_format_scpi_number(trailing_edge)}",
+        )
+        if edge_time is None
+        else (
+            "SOURce1:FUNCtion:PULSe:TRANsition:BOTH "
+            f"{_format_scpi_number(edge_time)}",
+        )
+    )
     commands = (
         "OUTPut1 OFF",
         f"OUTPut1:LOAD {load_command}",
@@ -1842,8 +1952,7 @@ def _prepare_pulse(
         f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
         "SOURce1:FUNCtion:PULSe:WIDTh "
         f"{_format_scpi_number(pulse_width)}",
-        "SOURce1:FUNCtion:PULSe:TRANsition:BOTH "
-        f"{_format_scpi_number(edge_time)}",
+        *edge_commands,
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
         "UNIT:ANGLe DEGree",
@@ -1855,6 +1964,8 @@ def _prepare_pulse(
         offset,
         pulse_width,
         edge_time,
+        leading_edge,
+        trailing_edge,
         normalized_load,
         phase,
         commands,
@@ -2276,6 +2387,57 @@ def _normalize_phase_deg(value: object, *, waveform: str) -> float:
     return phase
 
 
+def _normalize_pulse_edges(
+    edge_time_s: object,
+    leading_edge_s: object,
+    trailing_edge_s: object,
+) -> tuple[float | None, float, float]:
+    has_independent_edge = (
+        leading_edge_s is not None or trailing_edge_s is not None
+    )
+    if has_independent_edge:
+        if edge_time_s is not None:
+            raise WaveformParameterError(
+                "Pulse edge_time_s cannot be combined with leading_edge_s "
+                "or trailing_edge_s."
+            )
+        if leading_edge_s is None or trailing_edge_s is None:
+            raise WaveformParameterError(
+                "Pulse leading_edge_s and trailing_edge_s must be provided together."
+            )
+        leading = _normalize_finite_number(
+            leading_edge_s,
+            "leading edge time",
+            waveform="Pulse",
+        )
+        trailing = _normalize_finite_number(
+            trailing_edge_s,
+            "trailing edge time",
+            waveform="Pulse",
+        )
+        _validate_pulse_edge_range(leading, "leading")
+        _validate_pulse_edge_range(trailing, "trailing")
+        return None, leading, trailing
+
+    edge = 10e-9 if edge_time_s is None else _normalize_finite_number(
+        edge_time_s,
+        "edge time",
+        waveform="Pulse",
+    )
+    _validate_pulse_edge_range(edge, "")
+    return edge, edge, edge
+
+
+def _validate_pulse_edge_range(edge_time: float, label: str) -> None:
+    if 8.4e-9 <= edge_time <= 1e-6:
+        return
+    edge_label = f" {label}" if label else ""
+    raise WaveformParameterError(
+        f"Pulse{edge_label} edge time must be between "
+        "0.0000000084 s and 0.000001 s."
+    )
+
+
 def _normalize_load(value: object, *, waveform: str = "Sine") -> str:
     if isinstance(value, bool):
         raise WaveformParameterError(f"{waveform} load must be 50 or high-z.")
@@ -2334,6 +2496,30 @@ def _query_pulse_verification(
             f"Malformed Pulse verification response for {field}.",
             output_state="off",
         ) from exc
+
+
+def _validate_pulse_edge_maximum(
+    requested: float,
+    maximum: float,
+    label: str,
+    context: IdentificationResult,
+) -> None:
+    if requested <= maximum or math.isclose(
+        requested,
+        maximum,
+        rel_tol=PULSE_TIMING_REL_TOLERANCE,
+        abs_tol=PULSE_TIMING_ABS_TOLERANCE_S,
+    ):
+        return
+    raise WaveformVerificationError(
+        f"Requested {label} edge time "
+        f"{_format_scpi_number(requested)} s exceeds instrument maximum "
+        f"{_format_scpi_number(maximum)} s.",
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        output_state="off",
+    )
 
 
 def _parse_pulse_verification_number(response: object) -> float:

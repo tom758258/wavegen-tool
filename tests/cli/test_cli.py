@@ -1011,7 +1011,9 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
             amplitude_vpp=0.1,
             pulse_width_s=0.0001,
             offset_v=0.0,
-            edge_time_s=1e-8,
+            edge_time_s=None,
+            leading_edge_s=1e-8,
+            trailing_edge_s=2e-8,
             load="50",
             phase_deg=0.0,
             output_state="off",
@@ -1030,8 +1032,10 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
             "0.1",
             "--pulse-width-s",
             "0.0001",
-            "--edge-time-s",
+            "--leading-edge-s",
             "0.00000001",
+            "--trailing-edge-s",
+            "0.00000002",
             "--json",
         ]
     )
@@ -1045,10 +1049,12 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
             "0.1",
             "0.0001",
             "0",
-            "0.00000001",
+            None,
             "50",
             "system",
             0.0,
+            "0.00000001",
+            "0.00000002",
         )
     ]
     assert payload == {
@@ -1063,7 +1069,9 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
         "offset_v": 0.0,
         "phase_deg": 0.0,
         "pulse_width_s": 0.0001,
-        "edge_time_s": 1e-8,
+        "edge_time_s": None,
+        "leading_edge_s": 1e-8,
+        "trailing_edge_s": 2e-8,
         "load": "50",
         "output_state": "off",
         "error": None,
@@ -1268,6 +1276,8 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             offset_v=0.0,
             pulse_width_s=0.0001,
             edge_time_s=1e-8,
+            leading_edge_s=1e-8,
+            trailing_edge_s=1e-8,
             load="50",
             phase_deg=0.0,
             commands=(
@@ -1327,6 +1337,8 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             "0.00000001",
             "50",
             0.0,
+            None,
+            None,
         )
     ]
     assert manager_calls == []
@@ -1343,6 +1355,8 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         "phase_deg": 0.0,
         "pulse_width_s": 0.0001,
         "edge_time_s": 1e-8,
+        "leading_edge_s": 1e-8,
+        "trailing_edge_s": 1e-8,
         "load": "50",
         "commands": [
             "OUTPut1 OFF",

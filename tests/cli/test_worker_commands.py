@@ -220,6 +220,28 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
         ("read-errors", {"max_reads": True}, "invalid_arguments"),
         ("output", {"enabled": "true"}, "invalid_arguments"),
         ("output", {"enabled": False, "confirm_output": "yes"}, "invalid_arguments"),
+        (
+            "configure-pulse",
+            {
+                "frequency_hz": 1000,
+                "amplitude_vpp": 0.1,
+                "pulse_width_s": 0.0001,
+                "leading_edge_s": 1e-8,
+            },
+            "invalid_arguments",
+        ),
+        (
+            "configure-pulse",
+            {
+                "frequency_hz": 1000,
+                "amplitude_vpp": 0.1,
+                "pulse_width_s": 0.0001,
+                "edge_time_s": 1e-8,
+                "leading_edge_s": 1e-8,
+                "trailing_edge_s": 1e-8,
+            },
+            "invalid_arguments",
+        ),
     ],
 )
 def test_command_arguments_validation_rejects_invalid_arguments(
