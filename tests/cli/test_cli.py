@@ -404,8 +404,8 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
                 model="33521B",
             ),
             frequency_hz=1000.0,
-            amplitude_vpp=0.1,
-            offset_v=0.0,
+            amplitude_vpp=3.3,
+            offset_v=1.65,
             load="50",
             phase_deg=45.0,
             output_state="off",
@@ -420,8 +420,10 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
             USB_RESOURCE,
             "--frequency-hz",
             "1000",
-            "--amplitude-vpp",
-            "0.1",
+            "--high-level-v",
+            "3.3",
+            "--low-level-v",
+            "0",
             "--phase-deg",
             "45",
             "--json",
@@ -431,7 +433,7 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert calls == [
-        (USB_RESOURCE, "1000", "0.1", "0", "50", "system", 45.0)
+        (USB_RESOURCE, "1000", 3.3, 1.65, "50", "system", 45.0)
     ]
     assert payload == {
         "success": True,
@@ -441,8 +443,8 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
         "manufacturer": "Keysight Technologies",
         "model": "33521B",
         "frequency_hz": 1000.0,
-        "amplitude_vpp": 0.1,
-        "offset_v": 0.0,
+        "amplitude_vpp": 3.3,
+        "offset_v": 1.65,
         "phase_deg": 45.0,
         "load": "50",
         "output_state": "off",
@@ -509,7 +511,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "1000", "0.1", "0", "50", 0.0)
+        ("keysight-33521b", "1000", 0.1, 0.0, "50", 0.0)
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -608,7 +610,7 @@ def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert calls == [
-        (USB_RESOURCE, "1000", "0.1", "0", "50", "50", "system", 0.0)
+        (USB_RESOURCE, "1000", 0.1, 0.0, "50", "50", "system", 0.0)
     ]
     assert payload == {
         "success": True,
@@ -689,7 +691,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "1000", "0.1", "0", "50", "50", 0.0)
+        ("keysight-33521b", "1000", 0.1, 0.0, "50", "50", 0.0)
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -790,7 +792,7 @@ def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert calls == [
-        (USB_RESOURCE, "1000", "0.1", "0", "100", "50", "system", 0.0)
+        (USB_RESOURCE, "1000", 0.1, 0.0, "100", "50", "system", 0.0)
     ]
     assert payload == {
         "success": True,
@@ -874,7 +876,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "1000", "0.1", "0", "25", "50", 0.0)
+        ("keysight-33521b", "1000", 0.1, 0.0, "25", "50", 0.0)
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -1046,9 +1048,9 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
         (
             USB_RESOURCE,
             "1000",
-            "0.1",
+            0.1,
             "0.0001",
-            "0",
+            0.0,
             None,
             "50",
             "system",
@@ -1166,7 +1168,7 @@ def test_configure_noise_cli_parses_arguments_calls_core_and_emits_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert calls == [
-        (USB_RESOURCE, "0.1", "100000", "0", "50", "system")
+        (USB_RESOURCE, 0.1, "100000", 0.0, "50", "system")
     ]
     assert payload == {
         "success": True,
@@ -1233,9 +1235,9 @@ def test_configure_prbs_cli_parses_arguments_calls_core_and_emits_json(
         (
             USB_RESOURCE,
             "1000000",
-            "0.1",
+            0.1,
             "PN9",
-            "0",
+            0.0,
             "0.00000001",
             "50",
             "system",
@@ -1331,9 +1333,9 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         (
             "keysight-33521b",
             "1000",
-            "0.1",
+            0.1,
             "0.0001",
-            "0",
+            0.0,
             "0.00000001",
             "50",
             0.0,
@@ -1500,7 +1502,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "0.1", "1000000", "0", "50")
+        ("keysight-33521b", 0.1, "1000000", 0.0, "50")
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -1596,9 +1598,9 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
         (
             "keysight-33521b",
             "1000000",
-            "0.1",
+            0.1,
             "PN9",
-            "0",
+            0.0,
             "0.0000000084",
             "50",
         )
@@ -2013,13 +2015,15 @@ def test_read_errors_cli_simulation_json_smoke(capsys):
                 "--simulate",
                 "--frequency-hz",
                 "1000",
-                "--amplitude-vpp",
-                "0.1",
+                "--high-level-v",
+                "3.3",
+                "--low-level-v",
+                "0",
                 "--json",
             ],
             "configure-sine",
-            "frequency_hz",
-            1000.0,
+            "amplitude_vpp",
+            3.3,
         ),
         (
             [

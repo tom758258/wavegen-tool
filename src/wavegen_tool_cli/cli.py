@@ -50,6 +50,7 @@ from wavegen_tool_core import (
     normalize_serial_baud_rate,
     query_status,
     read_error_queue,
+    resolve_voltage_inputs,
     set_output,
 )
 from wavegen_tool_cli.worker import run_worker, validate_worker_startup
@@ -106,6 +107,33 @@ def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
         "--simulate",
         action="store_true",
         help="Use the in-memory simulator without hardware VISA I/O.",
+    )
+
+
+def _add_voltage_input_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    amplitude_help: str,
+) -> None:
+    parser.add_argument(
+        "--amplitude-vpp",
+        default=None,
+        help=amplitude_help,
+    )
+    parser.add_argument(
+        "--offset-v",
+        default=None,
+        help="DC offset in volts (default: 0 in amplitude mode).",
+    )
+    parser.add_argument(
+        "--high-level-v",
+        default=None,
+        help="High voltage level in volts; use with --low-level-v.",
+    )
+    parser.add_argument(
+        "--low-level-v",
+        default=None,
+        help="Low voltage level in volts; use with --high-level-v.",
     )
 
 
@@ -273,15 +301,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="VISA backend name validated by Core (default: system).",
     )
     sine_parser.add_argument("--frequency-hz", required=True, help="Sine frequency in Hz.")
-    sine_parser.add_argument(
-        "--amplitude-vpp",
-        required=True,
-        help="Sine amplitude in Vpp.",
-    )
-    sine_parser.add_argument(
-        "--offset-v",
-        default="0",
-        help="DC offset in volts (default: 0).",
+    _add_voltage_input_arguments(
+        sine_parser,
+        amplitude_help="Sine amplitude in Vpp.",
     )
     sine_parser.add_argument(
         "--phase-deg",
@@ -332,15 +354,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Square frequency in Hz.",
     )
-    square_parser.add_argument(
-        "--amplitude-vpp",
-        required=True,
-        help="Square amplitude in Vpp.",
-    )
-    square_parser.add_argument(
-        "--offset-v",
-        default="0",
-        help="DC offset in volts (default: 0).",
+    _add_voltage_input_arguments(
+        square_parser,
+        amplitude_help="Square amplitude in Vpp.",
     )
     square_parser.add_argument(
         "--phase-deg",
@@ -396,15 +412,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Ramp frequency in Hz.",
     )
-    ramp_parser.add_argument(
-        "--amplitude-vpp",
-        required=True,
-        help="Ramp amplitude in Vpp.",
-    )
-    ramp_parser.add_argument(
-        "--offset-v",
-        default="0",
-        help="DC offset in volts (default: 0).",
+    _add_voltage_input_arguments(
+        ramp_parser,
+        amplitude_help="Ramp amplitude in Vpp.",
     )
     ramp_parser.add_argument(
         "--phase-deg",
@@ -460,15 +470,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Triangle frequency in Hz.",
     )
-    triangle_parser.add_argument(
-        "--amplitude-vpp",
-        required=True,
-        help="Triangle amplitude in Vpp.",
-    )
-    triangle_parser.add_argument(
-        "--offset-v",
-        default="0",
-        help="DC offset in volts (default: 0).",
+    _add_voltage_input_arguments(
+        triangle_parser,
+        amplitude_help="Triangle amplitude in Vpp.",
     )
     triangle_parser.add_argument(
         "--phase-deg",
@@ -520,19 +524,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pulse frequency in Hz.",
     )
     pulse_parser.add_argument(
-        "--amplitude-vpp",
-        required=True,
-        help="Pulse amplitude in Vpp.",
-    )
-    pulse_parser.add_argument(
         "--pulse-width-s",
         required=True,
         help="Pulse width in seconds.",
     )
-    pulse_parser.add_argument(
-        "--offset-v",
-        default="0",
-        help="DC offset in volts (default: 0).",
+    _add_voltage_input_arguments(
+        pulse_parser,
+        amplitude_help="Pulse amplitude in Vpp.",
     )
     pulse_parser.add_argument(
         "--phase-deg",
@@ -636,15 +634,9 @@ def build_parser() -> argparse.ArgumentParser:
         default="system",
         help="VISA backend name validated by Core (default: system).",
     )
-    noise_parser.add_argument(
-        "--amplitude-vpp",
-        required=True,
-        help="Noise amplitude in Vpp.",
-    )
-    noise_parser.add_argument(
-        "--offset-v",
-        default="0",
-        help="DC offset in volts (default: 0).",
+    _add_voltage_input_arguments(
+        noise_parser,
+        amplitude_help="Noise amplitude in Vpp.",
     )
     noise_parser.add_argument(
         "--bandwidth-hz",
@@ -694,10 +686,9 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="PRBS bit rate in bits per second.",
     )
-    prbs_parser.add_argument(
-        "--amplitude-vpp",
-        required=True,
-        help="PRBS amplitude in Vpp.",
+    _add_voltage_input_arguments(
+        prbs_parser,
+        amplitude_help="PRBS amplitude in Vpp.",
     )
     prbs_parser.add_argument(
         "--pattern",
@@ -705,11 +696,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("PN7", "PN9", "PN11", "PN15", "PN20", "PN23"),
         default="PN7",
         help="PRBS pattern (default: PN7).",
-    )
-    prbs_parser.add_argument(
-        "--offset-v",
-        default="0",
-        help="DC offset in volts (default: 0).",
     )
     prbs_parser.add_argument(
         "--edge-time-s",
@@ -1003,6 +989,20 @@ def _factory_injection(simulated: bool, factory: Any) -> dict[str, Any]:
     return {}
 
 
+def _resolve_cli_voltage_inputs(
+    args: argparse.Namespace,
+    waveform: str,
+) -> tuple[float, float]:
+    return resolve_voltage_inputs(
+        args.amplitude_vpp,
+        args.offset_v,
+        args.high_level_v,
+        args.low_level_v,
+        args.load,
+        waveform,
+    )
+
+
 def _run_identify(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
@@ -1121,13 +1121,14 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
     )
-    return _run_control(
+    return _run_control_with_voltage(
         args,
-        lambda: configure_sine(
+        "Sine",
+        lambda amplitude, offset: configure_sine(
             resource,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.load,
             args.backend,
             args.phase_deg,
@@ -1138,11 +1139,12 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
 
 def _run_sine_dry_run(args: argparse.Namespace) -> int:
     try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Sine")
         result = dry_run_sine(
             args.model,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.load,
             args.phase_deg,
         )
@@ -1187,13 +1189,14 @@ def _run_configure_square(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
     )
-    return _run_control(
+    return _run_control_with_voltage(
         args,
-        lambda: configure_square(
+        "Square",
+        lambda amplitude, offset: configure_square(
             resource,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.duty_cycle_percent,
             args.load,
             args.backend,
@@ -1205,11 +1208,12 @@ def _run_configure_square(args: argparse.Namespace) -> int:
 
 def _run_square_dry_run(args: argparse.Namespace) -> int:
     try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Square")
         result = dry_run_square(
             args.model,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.duty_cycle_percent,
             args.load,
             args.phase_deg,
@@ -1255,13 +1259,14 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
     )
-    return _run_control(
+    return _run_control_with_voltage(
         args,
-        lambda: configure_ramp(
+        "Ramp",
+        lambda amplitude, offset: configure_ramp(
             resource,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.symmetry_percent,
             args.load,
             args.backend,
@@ -1273,11 +1278,12 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
 
 def _run_ramp_dry_run(args: argparse.Namespace) -> int:
     try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Ramp")
         result = dry_run_ramp(
             args.model,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.symmetry_percent,
             args.load,
             args.phase_deg,
@@ -1323,13 +1329,14 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
     )
-    return _run_control(
+    return _run_control_with_voltage(
         args,
-        lambda: configure_triangle(
+        "Triangle",
+        lambda amplitude, offset: configure_triangle(
             resource,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.load,
             args.backend,
             args.phase_deg,
@@ -1340,11 +1347,12 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
 
 def _run_triangle_dry_run(args: argparse.Namespace) -> int:
     try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Triangle")
         result = dry_run_triangle(
             args.model,
             args.frequency_hz,
-            args.amplitude_vpp,
-            args.offset_v,
+            amplitude,
+            offset,
             args.load,
             args.phase_deg,
         )
@@ -1389,14 +1397,15 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
     )
-    return _run_control(
+    return _run_control_with_voltage(
         args,
-        lambda: configure_pulse(
+        "Pulse",
+        lambda amplitude, offset: configure_pulse(
             resource,
             args.frequency_hz,
-            args.amplitude_vpp,
+            amplitude,
             args.pulse_width_s,
-            args.offset_v,
+            offset,
             args.edge_time_s,
             args.load,
             args.backend,
@@ -1410,12 +1419,13 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
 
 def _run_pulse_dry_run(args: argparse.Namespace) -> int:
     try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Pulse")
         result = dry_run_pulse(
             args.model,
             args.frequency_hz,
-            args.amplitude_vpp,
+            amplitude,
             args.pulse_width_s,
-            args.offset_v,
+            offset,
             args.edge_time_s,
             args.load,
             args.phase_deg,
@@ -1519,13 +1529,14 @@ def _run_configure_noise(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
     )
-    return _run_control(
+    return _run_control_with_voltage(
         args,
-        lambda: configure_noise(
+        "Noise",
+        lambda amplitude, offset: configure_noise(
             resource,
-            args.amplitude_vpp,
+            amplitude,
             args.bandwidth_hz,
-            args.offset_v,
+            offset,
             args.load,
             args.backend,
             **_factory_injection(args.simulate, factory),
@@ -1535,11 +1546,12 @@ def _run_configure_noise(args: argparse.Namespace) -> int:
 
 def _run_noise_dry_run(args: argparse.Namespace) -> int:
     try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Noise")
         result = dry_run_noise(
             args.model,
-            args.amplitude_vpp,
+            amplitude,
             args.bandwidth_hz,
-            args.offset_v,
+            offset,
             args.load,
         )
     except WavegenError as exc:
@@ -1583,14 +1595,15 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
     )
-    return _run_control(
+    return _run_control_with_voltage(
         args,
-        lambda: configure_prbs(
+        "PRBS",
+        lambda amplitude, offset: configure_prbs(
             resource,
             args.bit_rate_bps,
-            args.amplitude_vpp,
+            amplitude,
             args.pattern,
-            args.offset_v,
+            offset,
             args.edge_time_s,
             args.load,
             args.backend,
@@ -1601,12 +1614,13 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
 
 def _run_prbs_dry_run(args: argparse.Namespace) -> int:
     try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "PRBS")
         result = dry_run_prbs(
             args.model,
             args.bit_rate_bps,
-            args.amplitude_vpp,
+            amplitude,
             args.pattern,
-            args.offset_v,
+            offset,
             args.edge_time_s,
             args.load,
         )
@@ -1832,6 +1846,17 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
             )
         )
     return int(ExitCode.SUCCESS)
+
+
+def _run_control_with_voltage(
+    args: argparse.Namespace,
+    waveform: str,
+    operation: Any,
+) -> int:
+    return _run_control(
+        args,
+        lambda: operation(*_resolve_cli_voltage_inputs(args, waveform)),
+    )
 
 
 def _with_simulation_fields(

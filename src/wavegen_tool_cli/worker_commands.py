@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from wavegen_tool_core import resolve_voltage_inputs
 from wavegen_tool_core.errors import WaveformParameterError
 from wavegen_tool_core.identity import CANONICAL_MODEL_ID
 from wavegen_tool_core.visa import (
@@ -88,13 +89,23 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "status": frozenset(),
     "read-errors": frozenset({"max_reads"}),
     "configure-sine": frozenset(
-        {"frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load"}
+        {
+            "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "phase_deg",
+            "load",
+        }
     ),
     "configure-square": frozenset(
         {
             "frequency_hz",
             "amplitude_vpp",
             "offset_v",
+            "high_level_v",
+            "low_level_v",
             "phase_deg",
             "duty_cycle_percent",
             "load",
@@ -105,13 +116,23 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
             "frequency_hz",
             "amplitude_vpp",
             "offset_v",
+            "high_level_v",
+            "low_level_v",
             "phase_deg",
             "symmetry_percent",
             "load",
         }
     ),
     "configure-triangle": frozenset(
-        {"frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load"}
+        {
+            "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "phase_deg",
+            "load",
+        }
     ),
     "configure-pulse": frozenset(
         {
@@ -119,6 +140,8 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
             "amplitude_vpp",
             "pulse_width_s",
             "offset_v",
+            "high_level_v",
+            "low_level_v",
             "edge_time_s",
             "leading_edge_s",
             "trailing_edge_s",
@@ -128,53 +151,65 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     ),
     "configure-dc": frozenset({"voltage_v", "load"}),
     "configure-noise": frozenset(
-        {"amplitude_vpp", "bandwidth_hz", "offset_v", "load"}
+        {
+            "amplitude_vpp",
+            "bandwidth_hz",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "load",
+        }
     ),
     "configure-prbs": frozenset(
-        {"bit_rate_bps", "amplitude_vpp", "pattern", "offset_v", "edge_time_s", "load"}
+        {
+            "bit_rate_bps",
+            "amplitude_vpp",
+            "pattern",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "edge_time_s",
+            "load",
+        }
     ),
     "output": frozenset({"enabled", "confirm_output"}),
 }
 _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "read-errors": frozenset(),
-    "configure-sine": frozenset({"frequency_hz", "amplitude_vpp"}),
-    "configure-square": frozenset({"frequency_hz", "amplitude_vpp"}),
-    "configure-ramp": frozenset({"frequency_hz", "amplitude_vpp"}),
-    "configure-triangle": frozenset({"frequency_hz", "amplitude_vpp"}),
+    "configure-sine": frozenset({"frequency_hz"}),
+    "configure-square": frozenset({"frequency_hz"}),
+    "configure-ramp": frozenset({"frequency_hz"}),
+    "configure-triangle": frozenset({"frequency_hz"}),
     "configure-pulse": frozenset(
-        {"frequency_hz", "amplitude_vpp", "pulse_width_s"}
+        {"frequency_hz", "pulse_width_s"}
     ),
     "configure-dc": frozenset({"voltage_v"}),
-    "configure-noise": frozenset({"amplitude_vpp", "bandwidth_hz"}),
-    "configure-prbs": frozenset({"bit_rate_bps", "amplitude_vpp"}),
+    "configure-noise": frozenset({"bandwidth_hz"}),
+    "configure-prbs": frozenset({"bit_rate_bps"}),
     "output": frozenset({"enabled"}),
 }
 _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
     "read-errors": {"max_reads": 20},
-    "configure-sine": {"offset_v": 0, "phase_deg": 0.0, "load": "50"},
+    "configure-sine": {"phase_deg": 0.0, "load": "50"},
     "configure-square": {
-        "offset_v": 0,
         "phase_deg": 0.0,
         "duty_cycle_percent": 50,
         "load": "50",
     },
     "configure-ramp": {
-        "offset_v": 0,
         "phase_deg": 0.0,
         "symmetry_percent": 100,
         "load": "50",
     },
-    "configure-triangle": {"offset_v": 0, "phase_deg": 0.0, "load": "50"},
+    "configure-triangle": {"phase_deg": 0.0, "load": "50"},
     "configure-pulse": {
-        "offset_v": 0,
         "phase_deg": 0.0,
         "load": "50",
     },
     "configure-dc": {"load": "50"},
-    "configure-noise": {"offset_v": 0, "load": "50"},
+    "configure-noise": {"load": "50"},
     "configure-prbs": {
         "pattern": "PN7",
-        "offset_v": 0,
         "edge_time_s": 8.4e-9,
         "load": "50",
     },
@@ -256,6 +291,7 @@ def validate_worker_command_request(
     )
 
     if command in _CONFIGURE_COMMANDS:
+        _canonicalize_voltage_arguments(command, arguments)
         planning_model_id = (
             CANONICAL_MODEL_ID
             if request_mode == "live"
@@ -425,6 +461,76 @@ def _validate_live_write_safety(
             "output_confirmation_required",
             "live output enable requires confirm_output=True.",
         )
+
+
+_VOLTAGE_WAVEFORMS = {
+    "configure-sine": "Sine",
+    "configure-square": "Square",
+    "configure-ramp": "Ramp",
+    "configure-triangle": "Triangle",
+    "configure-pulse": "Pulse",
+    "configure-noise": "Noise",
+    "configure-prbs": "PRBS",
+}
+
+
+def _canonicalize_voltage_arguments(
+    command: str,
+    arguments: dict[str, object],
+) -> None:
+    waveform = _VOLTAGE_WAVEFORMS.get(command)
+    if waveform is None:
+        return
+
+    has_amplitude = "amplitude_vpp" in arguments
+    has_offset = "offset_v" in arguments
+    has_high = "high_level_v" in arguments
+    has_low = "low_level_v" in arguments
+    if has_high != has_low:
+        raise WorkerRequestValidationError(
+            "invalid_arguments",
+            f"{waveform} high_level_v and low_level_v must be provided together.",
+        )
+    if has_high and (has_amplitude or has_offset):
+        raise WorkerRequestValidationError(
+            "invalid_arguments",
+            f"{waveform} high/low voltage cannot be combined with "
+            "amplitude_vpp or offset_v.",
+        )
+    if has_high and (
+        arguments["high_level_v"] is None or arguments["low_level_v"] is None
+    ):
+        raise WorkerRequestValidationError(
+            "invalid_arguments",
+            f"{waveform} high_level_v and low_level_v must be finite numbers.",
+        )
+    if has_amplitude and arguments["amplitude_vpp"] is None:
+        raise WorkerRequestValidationError(
+            "invalid_arguments",
+            f"{waveform} amplitude_vpp must be a finite number.",
+        )
+    if has_offset and arguments["offset_v"] is None:
+        raise WorkerRequestValidationError(
+            "invalid_arguments",
+            f"{waveform} offset_v must be a finite number.",
+        )
+
+    try:
+        amplitude, offset = resolve_voltage_inputs(
+            arguments.get("amplitude_vpp"),
+            arguments.get("offset_v"),
+            arguments.get("high_level_v"),
+            arguments.get("low_level_v"),
+            arguments["load"],
+            waveform,
+        )
+    except WaveformParameterError as exc:
+        raise WorkerRequestValidationError("invalid_arguments", str(exc)) from exc
+
+    arguments["amplitude_vpp"] = amplitude
+    arguments["offset_v"] = offset
+    arguments.pop("high_level_v", None)
+    arguments.pop("low_level_v", None)
 
 
 def _validate_waveform_arguments(

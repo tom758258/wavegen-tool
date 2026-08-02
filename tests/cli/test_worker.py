@@ -172,7 +172,11 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
         ("identify", {}, "simulate"),
         ("status", {}, "simulate"),
         ("read-errors", {}, "simulate"),
-        ("configure-sine", _sine_arguments(), "simulate"),
+        (
+            "configure-sine",
+            {"frequency_hz": 1000, "high_level_v": 3.3, "low_level_v": 0.0},
+            "simulate",
+        ),
         (
             "configure-square",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1},
@@ -251,6 +255,9 @@ def test_worker_command_execution_mapping(
         assert runtime.simulator_state.output_enabled is True
     if command == "configure-triangle" and arguments.get("phase_deg") == 90.0:
         assert result.phase_deg == 90.0
+    if command == "configure-sine" and "high_level_v" in arguments:
+        assert result.amplitude_vpp == 3.3
+        assert result.offset_v == 1.65
     if request_mode == "dry_run":
         assert result.commands
 

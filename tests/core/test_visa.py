@@ -46,6 +46,7 @@ from wavegen_tool_core.visa import (
     normalize_serial_termination,
     query_status,
     read_error_queue,
+    resolve_voltage_inputs,
     set_output,
 )
 
@@ -900,6 +901,46 @@ def test_invalid_sine_parameters_fail_before_visa_io(
     assert manager.opened_resources == []
     assert manager.session.queries == []
     assert manager.session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("amplitude", "offset", "high", "low", "expected", "error_match"),
+    [
+        (None, None, 3.3, 0.0, (3.3, 1.65), None),
+        (None, None, 2.0, -3.0, (5.0, -0.5), None),
+        (None, None, 0.0, 0.0, None, "greater than low"),
+        (None, None, 1.0, None, None, "provided together"),
+        (0.1, None, 1.0, 0.0, None, "cannot be combined"),
+    ],
+)
+def test_resolve_voltage_inputs_canonicalizes_and_rejects_invalid_modes(
+    amplitude,
+    offset,
+    high,
+    low,
+    expected,
+    error_match,
+):
+    if error_match is not None:
+        with pytest.raises(WaveformParameterError, match=error_match):
+            resolve_voltage_inputs(
+                amplitude,
+                offset,
+                high,
+                low,
+                50,
+                "Sine",
+            )
+        return
+
+    assert resolve_voltage_inputs(
+        amplitude,
+        offset,
+        high,
+        low,
+        50,
+        "Sine",
+    ) == expected
 
 
 def test_configure_square_identifies_then_writes_safe_channel_one_sequence():

@@ -91,6 +91,7 @@ from wavegen_tool_core.visa import (
     normalize_serial_termination,
     query_status,
     read_error_queue,
+    resolve_voltage_inputs,
     set_output,
 )
 
@@ -176,6 +177,7 @@ __all__ = [
     "parse_idn",
     "query_status",
     "read_error_queue",
+    "resolve_voltage_inputs",
     "resolve_supported_identity",
     "set_output",
     "validate_backend_transport",

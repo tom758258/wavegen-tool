@@ -382,6 +382,14 @@ It never turns the output on. Sine, square, ramp, triangle, and pulse accept
 `--phase-deg`, defaulting to 0 degrees and allowing -360 through +360 degrees.
 Phase configuration has not yet been hardware-validated.
 
+Sine, square, ramp, triangle, pulse, noise, and PRBS configuration accept either
+`--amplitude-vpp` with optional `--offset-v`, or a complete
+`--high-level-v`/`--low-level-v` pair. These forms cannot be mixed, and the
+High/Low pair must have a high level greater than its low level. For example,
+`--high-level-v 3.3 --low-level-v 0` is canonicalized to `3.3 Vpp` with a
+`1.65 V` offset. Results and dry-run previews continue to report and command
+the canonical amplitude and offset values.
+
 The supported 33521B sine limits are:
 
 - Frequency: 0.000001 Hz to 30000000 Hz

@@ -2387,6 +2387,66 @@ def _normalize_phase_deg(value: object, *, waveform: str) -> float:
     return phase
 
 
+def resolve_voltage_inputs(
+    amplitude_vpp: object,
+    offset_v: object | None,
+    high_level_v: object | None,
+    low_level_v: object | None,
+    load: object,
+    waveform: str,
+) -> tuple[float, float]:
+    """Resolve one waveform voltage representation to amplitude and offset."""
+
+    has_high = high_level_v is not None
+    has_low = low_level_v is not None
+    if has_high != has_low:
+        raise WaveformParameterError(
+            f"{waveform} high_level_v and low_level_v must be provided together."
+        )
+
+    if has_high:
+        if amplitude_vpp is not None or offset_v is not None:
+            raise WaveformParameterError(
+                f"{waveform} high/low voltage cannot be combined with "
+                "amplitude_vpp or offset_v."
+            )
+        high = _normalize_finite_number(
+            high_level_v,
+            "high level",
+            waveform=waveform,
+        )
+        low = _normalize_finite_number(
+            low_level_v,
+            "low level",
+            waveform=waveform,
+        )
+        if high <= low:
+            raise WaveformParameterError(
+                f"{waveform} high level must be greater than low level."
+            )
+        amplitude = high - low
+        offset = (high + low) / 2
+    else:
+        if amplitude_vpp is None:
+            raise WaveformParameterError(
+                f"{waveform} requires amplitude_vpp or a complete high/low pair."
+            )
+        amplitude = _normalize_finite_number(
+            amplitude_vpp,
+            "amplitude",
+            waveform=waveform,
+        )
+        offset = (
+            0.0
+            if offset_v is None
+            else _normalize_finite_number(offset_v, "offset", waveform=waveform)
+        )
+
+    normalized_load = _normalize_load(load, waveform=waveform)
+    _validate_vpp_levels(amplitude, offset, normalized_load, waveform)
+    return amplitude, offset
+
+
 def _normalize_pulse_edges(
     edge_time_s: object,
     leading_edge_s: object,
