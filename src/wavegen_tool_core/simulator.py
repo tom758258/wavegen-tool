@@ -102,6 +102,7 @@ class SimulatedResource:
             "OUTPut1:LOAD 50": ("output_load", "50"),
             "OUTPut1:LOAD INF": ("output_load", "high-z"),
             "SOURce1:VOLTage:UNIT VPP": ("voltage_unit", "VPP"),
+            "SOURce1:FREQuency MINimum": ("frequency_hz", 0.000001),
             "SOURce1:FUNCtion SIN": ("active_function", "SIN"),
             "SOURce1:FUNCtion SQUare": ("active_function", "SQUARE"),
             "SOURce1:FUNCtion RAMP": ("active_function", "RAMP"),

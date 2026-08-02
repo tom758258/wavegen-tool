@@ -179,6 +179,14 @@ def test_simulator_state_persists_across_manager_and_session_lifecycles() -> Non
     state = Simulated33521BState()
     factory = _factory_for(state)
 
+    session = SimulatedResource(state)
+    session.write("SOURce1:FREQuency MINimum")
+    assert state.frequency_hz == 0.000001
+    session.write("SOURce1:FUNCtion TRIangle")
+    session.write("SOURce1:FREQuency 2500")
+    assert state.frequency_hz == 2500.0
+    session.close()
+
     configure_triangle(
         SIMULATED_33521B_RESOURCE,
         2500,

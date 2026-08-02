@@ -1342,8 +1342,9 @@ def _prepare_ramp(
         "OUTPut1 OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
-        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
+        "SOURce1:FREQuency MINimum",
         "SOURce1:FUNCtion RAMP",
+        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
         "SOURce1:FUNCtion:RAMP:SYMMetry "
         f"{_format_scpi_number(symmetry)}",
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
@@ -1453,8 +1454,9 @@ def _prepare_triangle(
         "OUTPut1 OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
-        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
+        "SOURce1:FREQuency MINimum",
         "SOURce1:FUNCtion TRIangle",
+        f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
     )
