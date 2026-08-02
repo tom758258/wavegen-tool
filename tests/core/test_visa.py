@@ -30,6 +30,7 @@ from wavegen_tool_core.visa import (
     configure_pulse,
     configure_ramp,
     configure_sine,
+    configure_sine_sweep,
     configure_square,
     configure_triangle,
     dry_run_dc,
@@ -38,6 +39,7 @@ from wavegen_tool_core.visa import (
     dry_run_pulse,
     dry_run_ramp,
     dry_run_sine,
+    dry_run_sine_sweep,
     dry_run_square,
     dry_run_triangle,
     identify_instrument,
@@ -843,6 +845,126 @@ def test_dry_run_sine_returns_normalized_hardware_free_command_preview():
     )
     assert result.executed is False
     assert result.output_state == "off"
+
+
+@pytest.mark.parametrize(
+    ("spacing", "sweep_time", "spacing_command"),
+    [
+        ("linear", 1, "LINear"),
+        ("LOGARITHMIC", 2, "LOGarithmic"),
+    ],
+)
+def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
+    spacing, sweep_time, spacing_command
+):
+    session = FakeSession()
+    manager = FakeManager(session)
+    result = configure_sine_sweep(
+        USB_RESOURCE,
+        1000,
+        10000,
+        spacing,
+        sweep_time,
+        0.2,
+        0.1,
+        3,
+        4,
+        "high-z",
+        phase_deg=90,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+    expected_commands = (
+        "OUTPut1 OFF",
+        "OUTPut1:LOAD INF",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion SIN",
+        "SOURce1:FREQuency 1000",
+        "SOURce1:VOLTage 0.2",
+        "SOURce1:VOLTage:OFFSet 0.1",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 90",
+        "SOURce1:FREQuency:STARt 1000",
+        "SOURce1:FREQuency:STOP 10000",
+        f"SOURce1:SWEep:SPACing {spacing_command}",
+        f"SOURce1:SWEep:TIME {sweep_time}",
+        "SOURce1:SWEep:HTIMe 3",
+        "SOURce1:SWEep:RTIMe 4",
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:FREQuency:MODE SWEep",
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == list(expected_commands)
+    assert result.start_frequency_hz == 1000.0
+    assert result.stop_frequency_hz == 10000.0
+    assert result.spacing == spacing.casefold()
+    assert result.sweep_time_s == float(sweep_time)
+    assert result.hold_time_s == 3.0
+    assert result.return_time_s == 4.0
+    assert result.trigger_source == "immediate"
+    assert result.amplitude_vpp == 0.2
+    assert result.offset_v == 0.1
+    assert result.phase_deg == 90.0
+    assert result.load == "high-z"
+    assert result.output_state == "off"
+
+    preview = dry_run_sine_sweep(
+        "keysight-33521b",
+        1000,
+        10000,
+        spacing,
+        sweep_time,
+        0.2,
+        0.1,
+        3,
+        4,
+        "high-z",
+        90,
+    )
+    assert preview.commands == expected_commands
+    assert preview.executed is False
+    assert preview.output_state == "off"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "spacing"),
+    [
+        ("stop_frequency_hz", 1000, "linear"),
+        ("stop_frequency_hz", 30_000_001, "linear"),
+        ("sweep_time_s", 8000.1, "linear"),
+        ("sweep_time_s", 500.1, "logarithmic"),
+        ("hold_time_s", -1, "linear"),
+        ("return_time_s", 3600.1, "linear"),
+    ],
+)
+def test_invalid_sine_sweep_parameters_fail_before_visa_io(field, value, spacing):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+    arguments = {
+        "start_frequency_hz": 1000,
+        "stop_frequency_hz": 10000,
+        "spacing": spacing,
+        "sweep_time_s": 1,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0,
+        "hold_time_s": 0,
+        "return_time_s": 0,
+        "load": 50,
+        "phase_deg": 0,
+    }
+    arguments[field] = value
+
+    with pytest.raises(WaveformParameterError):
+        configure_sine_sweep(
+            USB_RESOURCE,
+            resource_manager_factory=factory,
+            **arguments,
+        )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
 
 
 @pytest.mark.parametrize(

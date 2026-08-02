@@ -15,6 +15,7 @@ from wavegen_tool_core.visa import (
     dry_run_pulse,
     dry_run_ramp,
     dry_run_sine,
+    dry_run_sine_sweep,
     dry_run_square,
     dry_run_triangle,
 )
@@ -60,6 +61,7 @@ _SUPPORTED_COMMANDS = frozenset(
         "status",
         "read-errors",
         "configure-sine",
+        "configure_sine_sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -73,6 +75,7 @@ _SUPPORTED_COMMANDS = frozenset(
 _CONFIGURE_COMMANDS = frozenset(
     {
         "configure-sine",
+        "configure_sine_sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -91,6 +94,22 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "configure-sine": frozenset(
         {
             "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "phase_deg",
+            "load",
+        }
+    ),
+    "configure_sine_sweep": frozenset(
+        {
+            "start_frequency_hz",
+            "stop_frequency_hz",
+            "spacing",
+            "sweep_time_s",
+            "hold_time_s",
+            "return_time_s",
             "amplitude_vpp",
             "offset_v",
             "high_level_v",
@@ -177,6 +196,9 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
 _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "read-errors": frozenset(),
     "configure-sine": frozenset({"frequency_hz"}),
+    "configure_sine_sweep": frozenset(
+        {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
+    ),
     "configure-square": frozenset({"frequency_hz"}),
     "configure-ramp": frozenset({"frequency_hz"}),
     "configure-triangle": frozenset({"frequency_hz"}),
@@ -191,6 +213,12 @@ _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
 _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
     "read-errors": {"max_reads": 20},
     "configure-sine": {"phase_deg": 0.0, "load": "50"},
+    "configure_sine_sweep": {
+        "hold_time_s": 0,
+        "return_time_s": 0,
+        "phase_deg": 0.0,
+        "load": "50",
+    },
     "configure-square": {
         "phase_deg": 0.0,
         "duty_cycle_percent": 50,
@@ -465,6 +493,7 @@ def _validate_live_write_safety(
 
 _VOLTAGE_WAVEFORMS = {
     "configure-sine": "Sine",
+    "configure_sine_sweep": "Sine sweep",
     "configure-square": "Square",
     "configure-ramp": "Ramp",
     "configure-triangle": "Triangle",
@@ -545,6 +574,20 @@ def _validate_waveform_arguments(
                 arguments["frequency_hz"],
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
+                arguments["load"],
+                arguments["phase_deg"],
+            )
+        elif command == "configure_sine_sweep":
+            dry_run_sine_sweep(
+                model_id,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
                 arguments["load"],
                 arguments["phase_deg"],
             )

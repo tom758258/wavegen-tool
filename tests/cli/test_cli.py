@@ -2027,6 +2027,26 @@ def test_read_errors_cli_simulation_json_smoke(capsys):
         ),
         (
             [
+                "configure-sine-sweep",
+                "--simulate",
+                "--start-frequency-hz",
+                "1000",
+                "--stop-frequency-hz",
+                "10000",
+                "--spacing",
+                "linear",
+                "--sweep-time-s",
+                "1",
+                "--amplitude-vpp",
+                "0.1",
+                "--json",
+            ],
+            "configure-sine-sweep",
+            "spacing",
+            "linear",
+        ),
+        (
+            [
                 "configure-square",
                 "--simulate",
                 "--frequency-hz",

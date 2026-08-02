@@ -16,6 +16,7 @@ from wavegen_tool_core import (
     configure_pulse,
     configure_ramp,
     configure_sine,
+    configure_sine_sweep,
     configure_square,
     configure_triangle,
     identify_instrument,
@@ -73,6 +74,22 @@ def test_simulator_exposes_one_deterministic_recognized_resource() -> None:
             "SIN",
             "frequency_hz",
             2000.0,
+        ),
+        (
+            lambda factory: configure_sine_sweep(
+                SIMULATED_33521B_RESOURCE,
+                1000,
+                10000,
+                "linear",
+                1,
+                0.2,
+                hold_time_s=2,
+                return_time_s=3,
+                resource_manager_factory=factory,
+            ),
+            "SIN",
+            "frequency_mode",
+            "SWEep",
         ),
         (
             lambda factory: configure_square(
@@ -171,6 +188,24 @@ def test_all_waveform_configurations_update_simulated_state_with_output_off(
 
     assert state.active_function == expected_function
     assert getattr(state, state_field) == expected_value
+    if state_field == "frequency_mode":
+        assert state.sweep_start_frequency_hz == 1000.0
+        assert state.sweep_stop_frequency_hz == 10000.0
+        assert state.sweep_spacing == "linear"
+        assert state.sweep_time_s == 1.0
+        assert state.sweep_hold_time_s == 2.0
+        assert state.sweep_return_time_s == 3.0
+        assert state.trigger_source == "immediate"
+        session = SimulatedResource(state)
+        assert session.query("SOURce1:FREQuency:MODE?") == "SWEep"
+        assert session.query("SOURce1:FREQuency:STARt?") == "1000"
+        assert session.query("SOURce1:FREQuency:STOP?") == "10000"
+        assert session.query("SOURce1:SWEep:SPACing?") == "linear"
+        assert session.query("SOURce1:SWEep:TIME?") == "1"
+        assert session.query("SOURce1:SWEep:HTIMe?") == "2"
+        assert session.query("SOURce1:SWEep:RTIMe?") == "3"
+        assert session.query("TRIGger1:SOURce?") == "immediate"
+        session.close()
     assert state.output_enabled is False
     assert result.output_state == "off"
 

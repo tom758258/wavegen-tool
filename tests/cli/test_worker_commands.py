@@ -58,6 +58,29 @@ def _sine_arguments() -> dict[str, object]:
             },
         ),
         (
+            "configure_sine_sweep",
+            {
+                "start_frequency_hz": 1000,
+                "stop_frequency_hz": 10000,
+                "spacing": "linear",
+                "sweep_time_s": 1,
+                "high_level_v": 3.3,
+                "low_level_v": 0.0,
+            },
+            {
+                "start_frequency_hz": 1000,
+                "stop_frequency_hz": 10000,
+                "spacing": "linear",
+                "sweep_time_s": 1,
+                "hold_time_s": 0,
+                "return_time_s": 0,
+                "amplitude_vpp": 3.3,
+                "offset_v": 1.65,
+                "phase_deg": 0.0,
+                "load": "50",
+            },
+        ),
+        (
             "configure-square",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1},
             {
@@ -226,6 +249,17 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
         ("list-resources", {}, "unsupported_command"),
         ("status", {"extra": True}, "invalid_arguments"),
         ("configure-sine", {"frequency_hz": 1000}, "invalid_arguments"),
+        (
+            "configure_sine_sweep",
+            {
+                "start_frequency_hz": 1000,
+                "stop_frequency_hz": 10000,
+                "spacing": "linear",
+                "sweep_time_s": 1,
+                "high_level_v": 1.0,
+            },
+            "invalid_arguments",
+        ),
         ("read-errors", {"max_reads": 0}, "invalid_arguments"),
         ("read-errors", {"max_reads": 101}, "invalid_arguments"),
         ("read-errors", {"max_reads": True}, "invalid_arguments"),

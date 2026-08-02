@@ -19,6 +19,14 @@ class Simulated33521BState:
     voltage_unit: str = "VPP"
     active_function: str = "SIN"
     frequency_hz: float = 1000.0
+    frequency_mode: str = "CW"
+    sweep_start_frequency_hz: float = 1000.0
+    sweep_stop_frequency_hz: float = 10000.0
+    sweep_spacing: str = "linear"
+    sweep_time_s: float = 1.0
+    sweep_hold_time_s: float = 0.0
+    sweep_return_time_s: float = 0.0
+    trigger_source: str = "immediate"
     phase_deg: float = 0.0
     amplitude_vpp: float = 0.1
     offset_v: float = 0.0
@@ -122,6 +130,13 @@ class SimulatedResource:
             "SOURce1:FUNCtion DC": ("active_function", "DC"),
             "SOURce1:FUNCtion NOISe": ("active_function", "NOISE"),
             "SOURce1:FUNCtion PRBS": ("active_function", "PRBS"),
+            "TRIGger1:SOURce IMMediate": ("trigger_source", "immediate"),
+            "SOURce1:FREQuency:MODE SWEep": ("frequency_mode", "SWEep"),
+            "SOURce1:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
+            "SOURce1:SWEep:SPACing LOGarithmic": (
+                "sweep_spacing",
+                "logarithmic",
+            ),
             "SOURce1:FUNCtion:PULSe:WIDTh MINimum": (
                 "pulse_width_s",
                 16e-9,
@@ -150,9 +165,14 @@ class SimulatedResource:
 
         numeric_updates = (
             ("SOURce1:FREQuency ", "frequency_hz"),
+            ("SOURce1:FREQuency:STARt ", "sweep_start_frequency_hz"),
+            ("SOURce1:FREQuency:STOP ", "sweep_stop_frequency_hz"),
             ("SOURce1:PHASe ", "phase_deg"),
             ("SOURce1:VOLTage:OFFSet ", "offset_v"),
             ("SOURce1:VOLTage ", "amplitude_vpp"),
+            ("SOURce1:SWEep:TIME ", "sweep_time_s"),
+            ("SOURce1:SWEep:HTIMe ", "sweep_hold_time_s"),
+            ("SOURce1:SWEep:RTIMe ", "sweep_return_time_s"),
             ("SOURce1:FUNCtion:SQUare:DCYCle ", "square_duty_cycle_percent"),
             ("SOURce1:FUNCtion:RAMP:SYMMetry ", "ramp_symmetry_percent"),
             ("SOURce1:FUNCtion:PULSe:WIDTh ", "pulse_width_s"),
@@ -192,6 +212,18 @@ class SimulatedResource:
             "OUTPut1?": "1" if self.state.output_enabled else "0",
             "SOURce1:FUNCtion?": self.state.active_function,
             "SOURce1:FREQuency?": _format_number(self.state.frequency_hz),
+            "SOURce1:FREQuency:MODE?": self.state.frequency_mode,
+            "SOURce1:FREQuency:STARt?": _format_number(
+                self.state.sweep_start_frequency_hz
+            ),
+            "SOURce1:FREQuency:STOP?": _format_number(
+                self.state.sweep_stop_frequency_hz
+            ),
+            "SOURce1:SWEep:SPACing?": self.state.sweep_spacing,
+            "SOURce1:SWEep:TIME?": _format_number(self.state.sweep_time_s),
+            "SOURce1:SWEep:HTIMe?": _format_number(self.state.sweep_hold_time_s),
+            "SOURce1:SWEep:RTIMe?": _format_number(self.state.sweep_return_time_s),
+            "TRIGger1:SOURce?": self.state.trigger_source,
             "SOURce1:PHASe?": _format_number(self.state.phase_deg),
             "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum": "1e-6",
             "SOURce1:FUNCtion:PULSe:TRANsition:LEADing? MAXimum": "1e-6",

@@ -77,6 +77,9 @@ PULSE_TIMING_ABS_TOLERANCE_S = 100e-12
 PULSE_FREQUENCY_ABS_TOLERANCE_HZ = 1e-6
 DEFAULT_TIMEOUT_MS = 5000
 LIVE_VERIFY_TIMEOUT_MS = 1000
+SINE_SWEEP_LINEAR_MAX_TIME_S = 8000.0
+SINE_SWEEP_LOGARITHMIC_MAX_TIME_S = 500.0
+SINE_SWEEP_HOLD_RETURN_MAX_TIME_S = 3600.0
 SERIAL_TERMINATIONS = ("CR", "LF", "CRLF", "NONE")
 _SERIAL_TERMINATION_VALUES = {
     "CR": "\r",
@@ -178,6 +181,50 @@ class SineDryRunResult:
     executed: bool = False
     output_state: str = "off"
     phase_deg: float = 0.0
+
+
+@dataclass(frozen=True)
+class SineSweepConfigurationResult:
+    """A successful Channel 1 sine frequency sweep configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    start_frequency_hz: float
+    stop_frequency_hz: float
+    spacing: str
+    sweep_time_s: float
+    hold_time_s: float
+    return_time_s: float
+    trigger_source: str
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    load: str
+    output_state: str = "off"
+
+
+@dataclass(frozen=True)
+class SineSweepDryRunResult:
+    """A hardware-free preview of a Channel 1 sine frequency sweep."""
+
+    model: str
+    canonical_model_id: str
+    start_frequency_hz: float
+    stop_frequency_hz: float
+    spacing: str
+    sweep_time_s: float
+    hold_time_s: float
+    return_time_s: float
+    trigger_source: str
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
 
 
 @dataclass(frozen=True)
@@ -1037,6 +1084,132 @@ def dry_run_sine(
     )
 
 
+def configure_sine_sweep(
+    resource: str,
+    start_frequency_hz: object,
+    stop_frequency_hz: object,
+    spacing: object,
+    sweep_time_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    hold_time_s: object = 0,
+    return_time_s: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    phase_deg: object = 0.0,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> SineSweepConfigurationResult:
+    """Validate and configure a Channel 1 sine frequency sweep."""
+
+    (
+        start_frequency,
+        stop_frequency,
+        normalized_spacing,
+        sweep_time,
+        hold_time,
+        return_time,
+        amplitude,
+        offset,
+        normalized_load,
+        phase,
+        commands,
+    ) = _prepare_sine_sweep(
+        start_frequency_hz,
+        stop_frequency_hz,
+        spacing,
+        sweep_time_s,
+        hold_time_s,
+        return_time_s,
+        amplitude_vpp,
+        offset_v,
+        load,
+        phase_deg,
+    )
+    context = _write_to_supported_33521b(
+        resource,
+        backend,
+        commands,
+        output_state_after_writes="off",
+        resource_manager_factory=resource_manager_factory,
+    )
+    return SineSweepConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        start_frequency_hz=start_frequency,
+        stop_frequency_hz=stop_frequency,
+        spacing=normalized_spacing,
+        sweep_time_s=sweep_time,
+        hold_time_s=hold_time,
+        return_time_s=return_time,
+        trigger_source="immediate",
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        load=normalized_load,
+    )
+
+
+def dry_run_sine_sweep(
+    model: str,
+    start_frequency_hz: object,
+    stop_frequency_hz: object,
+    spacing: object,
+    sweep_time_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    hold_time_s: object = 0,
+    return_time_s: object = 0,
+    load: object = 50,
+    phase_deg: object = 0.0,
+) -> SineSweepDryRunResult:
+    """Preview a validated Channel 1 sine sweep without VISA I/O."""
+
+    _validate_dry_run_model(model, "sine sweep")
+    (
+        start_frequency,
+        stop_frequency,
+        normalized_spacing,
+        sweep_time,
+        hold_time,
+        return_time,
+        amplitude,
+        offset,
+        normalized_load,
+        phase,
+        commands,
+    ) = _prepare_sine_sweep(
+        start_frequency_hz,
+        stop_frequency_hz,
+        spacing,
+        sweep_time_s,
+        hold_time_s,
+        return_time_s,
+        amplitude_vpp,
+        offset_v,
+        load,
+        phase_deg,
+    )
+    return SineSweepDryRunResult(
+        model=CANONICAL_MODEL,
+        canonical_model_id=CANONICAL_MODEL_ID,
+        start_frequency_hz=start_frequency,
+        stop_frequency_hz=stop_frequency,
+        spacing=normalized_spacing,
+        sweep_time_s=sweep_time,
+        hold_time_s=hold_time,
+        return_time_s=return_time,
+        trigger_source="immediate",
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        load=normalized_load,
+        commands=commands,
+    )
+
+
 def _validate_dry_run_model(model: object, waveform: str) -> None:
     if (
         not isinstance(model, str)
@@ -1046,6 +1219,136 @@ def _validate_dry_run_model(model: object, waveform: str) -> None:
             f"Unsupported {waveform} dry-run model; "
             "expected 'keysight-33521b'."
         )
+
+
+def _prepare_sine_sweep(
+    start_frequency_hz: object,
+    stop_frequency_hz: object,
+    spacing: object,
+    sweep_time_s: object,
+    hold_time_s: object,
+    return_time_s: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    load: object,
+    phase_deg: object,
+) -> tuple[
+    float,
+    float,
+    str,
+    float,
+    float,
+    float,
+    float,
+    float,
+    str,
+    float,
+    tuple[str, ...],
+]:
+    (
+        start_frequency,
+        amplitude,
+        offset,
+        normalized_load,
+        phase,
+        base_commands,
+    ) = _prepare_sine(
+        start_frequency_hz,
+        amplitude_vpp,
+        offset_v,
+        load,
+        phase_deg,
+    )
+    stop_frequency = _normalize_finite_number(
+        stop_frequency_hz,
+        "stop frequency",
+        waveform="Sine sweep",
+    )
+    if not 0.000001 <= stop_frequency <= 30_000_000:
+        raise WaveformParameterError(
+            "Sine sweep stop frequency must be between "
+            "0.000001 Hz and 30000000 Hz."
+        )
+    if start_frequency == stop_frequency:
+        raise WaveformParameterError(
+            "Sine sweep start and stop frequencies must not be equal."
+        )
+
+    normalized_spacing = _normalize_sine_sweep_spacing(spacing)
+    sweep_time = _normalize_finite_number(
+        sweep_time_s,
+        "sweep time",
+        waveform="Sine sweep",
+    )
+    maximum_sweep_time = (
+        SINE_SWEEP_LINEAR_MAX_TIME_S
+        if normalized_spacing == "linear"
+        else SINE_SWEEP_LOGARITHMIC_MAX_TIME_S
+    )
+    if not 0.001 <= sweep_time <= maximum_sweep_time:
+        raise WaveformParameterError(
+            "Sine sweep time must be between 0.001 s and "
+            f"{_format_scpi_number(maximum_sweep_time)} s for "
+            f"{normalized_spacing} spacing."
+        )
+
+    hold_time = _normalize_finite_number(
+        hold_time_s,
+        "hold time",
+        waveform="Sine sweep",
+    )
+    return_time = _normalize_finite_number(
+        return_time_s,
+        "return time",
+        waveform="Sine sweep",
+    )
+    if not 0 <= hold_time <= SINE_SWEEP_HOLD_RETURN_MAX_TIME_S:
+        raise WaveformParameterError(
+            "Sine sweep hold time must be between 0 s and 3600 s."
+        )
+    if not 0 <= return_time <= SINE_SWEEP_HOLD_RETURN_MAX_TIME_S:
+        raise WaveformParameterError(
+            "Sine sweep return time must be between 0 s and 3600 s."
+        )
+
+    spacing_command = "LINear" if normalized_spacing == "linear" else "LOGarithmic"
+    commands = (
+        *base_commands,
+        f"SOURce1:FREQuency:STARt {_format_scpi_number(start_frequency)}",
+        f"SOURce1:FREQuency:STOP {_format_scpi_number(stop_frequency)}",
+        f"SOURce1:SWEep:SPACing {spacing_command}",
+        f"SOURce1:SWEep:TIME {_format_scpi_number(sweep_time)}",
+        f"SOURce1:SWEep:HTIMe {_format_scpi_number(hold_time)}",
+        f"SOURce1:SWEep:RTIMe {_format_scpi_number(return_time)}",
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:FREQuency:MODE SWEep",
+    )
+    return (
+        start_frequency,
+        stop_frequency,
+        normalized_spacing,
+        sweep_time,
+        hold_time,
+        return_time,
+        amplitude,
+        offset,
+        normalized_load,
+        phase,
+        commands,
+    )
+
+
+def _normalize_sine_sweep_spacing(value: object) -> str:
+    if not isinstance(value, str):
+        raise WaveformParameterError(
+            "Sine sweep spacing must be linear or logarithmic."
+        )
+    normalized = value.strip().casefold()
+    if normalized not in {"linear", "logarithmic"}:
+        raise WaveformParameterError(
+            "Sine sweep spacing must be linear or logarithmic."
+        )
+    return normalized
 
 
 def _prepare_sine(

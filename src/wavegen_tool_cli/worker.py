@@ -27,6 +27,7 @@ from wavegen_tool_core import (
     configure_pulse,
     configure_ramp,
     configure_sine,
+    configure_sine_sweep,
     configure_square,
     configure_triangle,
     dry_run_dc,
@@ -35,6 +36,7 @@ from wavegen_tool_core import (
     dry_run_pulse,
     dry_run_ramp,
     dry_run_sine,
+    dry_run_sine_sweep,
     dry_run_square,
     dry_run_triangle,
     identify_instrument,
@@ -457,6 +459,22 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 **factory_kwargs,
             )
+        if job.command == "configure_sine_sweep":
+            return configure_sine_sweep(
+                resource,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                backend,
+                arguments["phase_deg"],
+                **factory_kwargs,
+            )
         if job.command == "configure-square":
             return configure_square(
                 resource,
@@ -559,6 +577,20 @@ class WorkerRuntime:
                 arguments["frequency_hz"],
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
+                arguments["load"],
+                arguments["phase_deg"],
+            )
+        if command == "configure_sine_sweep":
+            return dry_run_sine_sweep(
+                model,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
                 arguments["load"],
                 arguments["phase_deg"],
             )

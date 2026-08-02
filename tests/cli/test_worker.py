@@ -178,6 +178,17 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
             "simulate",
         ),
         (
+            "configure_sine_sweep",
+            {
+                "start_frequency_hz": 1000,
+                "stop_frequency_hz": 10000,
+                "spacing": "linear",
+                "sweep_time_s": 1,
+                "amplitude_vpp": 0.1,
+            },
+            "simulate",
+        ),
+        (
             "configure-square",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1},
             "simulate",
@@ -258,6 +269,11 @@ def test_worker_command_execution_mapping(
     if command == "configure-sine" and "high_level_v" in arguments:
         assert result.amplitude_vpp == 3.3
         assert result.offset_v == 1.65
+    if command == "configure_sine_sweep":
+        assert result.spacing == "linear"
+        assert result.trigger_source == "immediate"
+        assert runtime.simulator_state is not None
+        assert runtime.simulator_state.frequency_mode == "SWEep"
     if request_mode == "dry_run":
         assert result.commands
 
