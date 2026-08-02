@@ -19,6 +19,7 @@ class Simulated33521BState:
     voltage_unit: str = "VPP"
     active_function: str = "SIN"
     frequency_hz: float = 1000.0
+    phase_deg: float = 0.0
     amplitude_vpp: float = 0.1
     offset_v: float = 0.0
     square_duty_cycle_percent: float = 50.0
@@ -94,7 +95,10 @@ class SimulatedResource:
             raise RuntimeError("Simulated VISA session is closed.")
 
     def _apply_write(self, command: str) -> None:
-        if command == "SOURce1:FUNCtion:PULSe:HOLD WIDTh":
+        if command in {
+            "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
+            "UNIT:ANGLe DEGree",
+        }:
             return
         exact_updates = {
             "OUTPut1 OFF": ("output_enabled", False),
@@ -127,6 +131,7 @@ class SimulatedResource:
 
         numeric_updates = (
             ("SOURce1:FREQuency ", "frequency_hz"),
+            ("SOURce1:PHASe ", "phase_deg"),
             ("SOURce1:VOLTage:OFFSet ", "offset_v"),
             ("SOURce1:VOLTage ", "amplitude_vpp"),
             ("SOURce1:FUNCtion:SQUare:DCYCle ", "square_duty_cycle_percent"),
@@ -164,6 +169,7 @@ class SimulatedResource:
             "OUTPut1?": "1" if self.state.output_enabled else "0",
             "SOURce1:FUNCtion?": self.state.active_function,
             "SOURce1:FREQuency?": _format_number(self.state.frequency_hz),
+            "SOURce1:PHASe?": _format_number(self.state.phase_deg),
             "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum": "1e-6",
             "SOURce1:FUNCtion:PULSe:WIDTh?": _format_number(
                 self.state.pulse_width_s

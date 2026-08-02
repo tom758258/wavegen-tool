@@ -38,7 +38,13 @@ def _sine_arguments() -> dict[str, object]:
         (
             "configure-sine",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1},
-            {"frequency_hz": 1000, "amplitude_vpp": 0.1, "offset_v": 0, "load": "50"},
+            {
+                "frequency_hz": 1000,
+                "amplitude_vpp": 0.1,
+                "offset_v": 0,
+                "phase_deg": 0.0,
+                "load": "50",
+            },
         ),
         (
             "configure-square",
@@ -47,6 +53,7 @@ def _sine_arguments() -> dict[str, object]:
                 "frequency_hz": 1000,
                 "amplitude_vpp": 0.1,
                 "offset_v": 0,
+                "phase_deg": 0.0,
                 "duty_cycle_percent": 50,
                 "load": "50",
             },
@@ -58,6 +65,7 @@ def _sine_arguments() -> dict[str, object]:
                 "frequency_hz": 1000,
                 "amplitude_vpp": 0.1,
                 "offset_v": 0,
+                "phase_deg": 0.0,
                 "symmetry_percent": 100,
                 "load": "50",
             },
@@ -69,6 +77,7 @@ def _sine_arguments() -> dict[str, object]:
                 "frequency_hz": 1000,
                 "amplitude_vpp": 0.1,
                 "offset_v": 0,
+                "phase_deg": 0.0,
                 "load": "50",
             },
         ),
@@ -81,6 +90,7 @@ def _sine_arguments() -> dict[str, object]:
                 "pulse_width_s": 0.0001,
                 "offset_v": 0,
                 "edge_time_s": 1e-8,
+                "phase_deg": 0.0,
                 "load": "50",
             },
         ),
@@ -348,13 +358,16 @@ def test_configure_sine_delegates_to_core_and_converts_parameter_errors(monkeypa
     monkeypatch.setattr(worker_commands, "dry_run_sine", spy)
 
     result = validate_worker_command_request(
-        _payload("configure-sine", _sine_arguments()),
+        _payload(
+            "configure-sine",
+            {**_sine_arguments(), "phase_deg": 90.0},
+        ),
         worker_mode="live",
         allow_output_writes=True,
     )
     assert isinstance(result, ValidatedWorkerCommand)
     assert calls[0][0] == "keysight-33521b"
-    assert calls[0][1:] == (1000, 0.1, 0, "50")
+    assert calls[0][1:] == (1000, 0.1, 0, "50", 90.0)
 
     with pytest.raises(WorkerRequestValidationError) as error:
         validate_worker_command_request(
@@ -384,6 +397,7 @@ def test_validation_does_not_mutate_arguments_or_add_live_identity_guard():
         "frequency_hz": 1000,
         "amplitude_vpp": 0.1,
         "offset_v": 0,
+        "phase_deg": 0.0,
         "load": "50",
     }
     assert result.arguments is not payload["arguments"]

@@ -284,6 +284,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="DC offset in volts (default: 0).",
     )
     sine_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    sine_parser.add_argument(
         "--load",
         choices=("50", "high-z"),
         default="50",
@@ -335,6 +341,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--offset-v",
         default="0",
         help="DC offset in volts (default: 0).",
+    )
+    square_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
     )
     square_parser.add_argument(
         "--duty-cycle-percent",
@@ -395,6 +407,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="DC offset in volts (default: 0).",
     )
     ramp_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    ramp_parser.add_argument(
         "--symmetry-percent",
         default="100",
         help="Ramp symmetry percentage (default: 100).",
@@ -453,6 +471,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="DC offset in volts (default: 0).",
     )
     triangle_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    triangle_parser.add_argument(
         "--load",
         choices=("50", "high-z"),
         default="50",
@@ -509,6 +533,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--offset-v",
         default="0",
         help="DC offset in volts (default: 0).",
+    )
+    pulse_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
     )
     pulse_parser.add_argument(
         "--edge-time-s",
@@ -1090,6 +1120,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             args.offset_v,
             args.load,
             args.backend,
+            args.phase_deg,
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1103,6 +1134,7 @@ def _run_sine_dry_run(args: argparse.Namespace) -> int:
             args.amplitude_vpp,
             args.offset_v,
             args.load,
+            args.phase_deg,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1155,6 +1187,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             args.duty_cycle_percent,
             args.load,
             args.backend,
+            args.phase_deg,
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1169,6 +1202,7 @@ def _run_square_dry_run(args: argparse.Namespace) -> int:
             args.offset_v,
             args.duty_cycle_percent,
             args.load,
+            args.phase_deg,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1221,6 +1255,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             args.symmetry_percent,
             args.load,
             args.backend,
+            args.phase_deg,
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1235,6 +1270,7 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
             args.offset_v,
             args.symmetry_percent,
             args.load,
+            args.phase_deg,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1286,6 +1322,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             args.offset_v,
             args.load,
             args.backend,
+            args.phase_deg,
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1299,6 +1336,7 @@ def _run_triangle_dry_run(args: argparse.Namespace) -> int:
             args.amplitude_vpp,
             args.offset_v,
             args.load,
+            args.phase_deg,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1352,6 +1390,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.edge_time_s,
             args.load,
             args.backend,
+            args.phase_deg,
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1367,6 +1406,7 @@ def _run_pulse_dry_run(args: argparse.Namespace) -> int:
             args.offset_v,
             args.edge_time_s,
             args.load,
+            args.phase_deg,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1904,6 +1944,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             frequency_hz=result.frequency_hz,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
+            phase_deg=result.phase_deg,
             load=result.load,
         )
     if action == "configure-square":
@@ -1949,6 +1990,7 @@ def _sine_dry_run_success_payload(result: Any) -> dict[str, object]:
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
         "load": result.load,
         "commands": list(result.commands),
         "executed": result.executed,
@@ -1985,6 +2027,7 @@ def _square_dry_run_success_payload(result: Any) -> dict[str, object]:
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
         "duty_cycle_percent": result.duty_cycle_percent,
         "load": result.load,
         "commands": list(result.commands),
@@ -2022,6 +2065,7 @@ def _ramp_dry_run_success_payload(result: Any) -> dict[str, object]:
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
         "symmetry_percent": result.symmetry_percent,
         "load": result.load,
         "commands": list(result.commands),
@@ -2059,6 +2103,7 @@ def _triangle_dry_run_success_payload(result: Any) -> dict[str, object]:
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
         "load": result.load,
         "commands": list(result.commands),
         "executed": result.executed,
@@ -2095,6 +2140,7 @@ def _pulse_dry_run_success_payload(result: Any) -> dict[str, object]:
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
         "pulse_width_s": result.pulse_width_s,
         "edge_time_s": result.edge_time_s,
         "load": result.load,
@@ -2437,16 +2483,23 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 PRBS waveform configured with output off."
     else:
         heading = f"Channel 1 output set to {result.output_state}."
-    return "\n".join(
-        (
-            heading,
-            f"Backend: {result.backend}",
-            f"Transport: {result.transport}",
-            f"Manufacturer: {result.identity.manufacturer}",
-            f"Model: {result.identity.model}",
-            f"Output state: {result.output_state}",
-        )
-    )
+    lines = [
+        heading,
+        f"Backend: {result.backend}",
+        f"Transport: {result.transport}",
+        f"Manufacturer: {result.identity.manufacturer}",
+        f"Model: {result.identity.model}",
+        f"Output state: {result.output_state}",
+    ]
+    if action in {
+        "configure-sine",
+        "configure-square",
+        "configure-ramp",
+        "configure-triangle",
+        "configure-pulse",
+    }:
+        lines.append(f"Phase (degrees): {result.phase_deg}")
+    return "\n".join(lines)
 
 
 def _human_sine_dry_run_success(result: Any) -> str:
@@ -2457,6 +2510,7 @@ def _human_sine_dry_run_success(result: Any) -> str:
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
+            f"Phase (degrees): {result.phase_deg}",
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -2472,6 +2526,7 @@ def _human_square_dry_run_success(result: Any) -> str:
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
+            f"Phase (degrees): {result.phase_deg}",
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -2487,6 +2542,7 @@ def _human_ramp_dry_run_success(result: Any) -> str:
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
+            f"Phase (degrees): {result.phase_deg}",
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -2502,6 +2558,7 @@ def _human_triangle_dry_run_success(result: Any) -> str:
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
+            f"Phase (degrees): {result.phase_deg}",
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -2517,6 +2574,7 @@ def _human_pulse_dry_run_success(result: Any) -> str:
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
+            f"Phase (degrees): {result.phase_deg}",
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,

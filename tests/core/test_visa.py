@@ -70,6 +70,7 @@ PULSE_RESPONSES = {
     "SOURce1:FREQuency?": "10000000.0000005",
     "SOURce1:FUNCtion:PULSe:WIDTh?": "5.005e-08",
     "SOURce1:FUNCtion:PULSe:TRANsition?": "2.005e-08",
+    "SOURce1:PHASe?": "0",
 }
 
 
@@ -795,6 +796,8 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FREQuency 1000",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     ]
     assert "OUTPut1 ON" not in session.writes
     assert result.output_state == "off"
@@ -818,6 +821,7 @@ def test_dry_run_sine_returns_normalized_hardware_free_command_preview():
         "amplitude_vpp",
         "offset_v",
         "load",
+        "phase_deg",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -833,6 +837,8 @@ def test_dry_run_sine_returns_normalized_hardware_free_command_preview():
         "SOURce1:FREQuency 1000",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     )
     assert result.executed is False
     assert result.output_state == "off"
@@ -853,22 +859,28 @@ def test_invalid_sine_dry_run_input_raises_domain_error(
 
 
 @pytest.mark.parametrize(
-    ("frequency", "amplitude", "offset", "load"),
+    ("frequency", "amplitude", "offset", "load", "phase"),
     [
-        (0, 0.1, 0, 50),
-        (30_000_001, 0.1, 0, 50),
-        (1000, 0.0009, 0, 50),
-        (1000, 10.1, 0, 50),
-        (1000, 10, 0.001, 50),
-        (True, 0.1, 0, 50),
-        (float("nan"), 0.1, 0, 50),
-        (float("inf"), 0.1, 0, 50),
-        (float("-inf"), 0.1, 0, 50),
-        ("not-a-number", 0.1, 0, 50),
+        (0, 0.1, 0, 50, 0.0),
+        (30_000_001, 0.1, 0, 50, 0.0),
+        (1000, 0.0009, 0, 50, 0.0),
+        (1000, 10.1, 0, 50, 0.0),
+        (1000, 10, 0.001, 50, 0.0),
+        (True, 0.1, 0, 50, 0.0),
+        (float("nan"), 0.1, 0, 50, 0.0),
+        (float("inf"), 0.1, 0, 50, 0.0),
+        (float("-inf"), 0.1, 0, 50, 0.0),
+        ("not-a-number", 0.1, 0, 50, 0.0),
+        (1000, 0.1, 0, 50, -361.0),
+        (1000, 0.1, 0, 50, 361.0),
+        (1000, 0.1, 0, 50, True),
+        (1000, 0.1, 0, 50, float("nan")),
+        (1000, 0.1, 0, 50, float("inf")),
+        (1000, 0.1, 0, 50, float("-inf")),
     ],
 )
 def test_invalid_sine_parameters_fail_before_visa_io(
-    frequency, amplitude, offset, load
+    frequency, amplitude, offset, load, phase
 ):
     manager = FakeManager()
     factory = RecordingFactory(manager)
@@ -880,6 +892,7 @@ def test_invalid_sine_parameters_fail_before_visa_io(
             amplitude,
             offset,
             load,
+            phase_deg=phase,
             resource_manager_factory=factory,
         )
 
@@ -913,6 +926,8 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FUNCtion:SQUare:DCYCle 48",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     ]
     assert "OUTPut1 ON" not in session.writes
     assert result.frequency_hz == 30_000_000.0
@@ -942,6 +957,7 @@ def test_dry_run_square_returns_normalized_hardware_free_command_preview():
         "offset_v",
         "duty_cycle_percent",
         "load",
+        "phase_deg",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -959,6 +975,8 @@ def test_dry_run_square_returns_normalized_hardware_free_command_preview():
         "SOURce1:FUNCtion:SQUare:DCYCle 50",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     )
     assert result.executed is False
     assert result.output_state == "off"
@@ -1025,6 +1043,8 @@ def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FUNCtion:RAMP:SYMMetry 25",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     ]
     assert "OUTPut1 ON" not in session.writes
     assert result.frequency_hz == 1000.0
@@ -1054,6 +1074,7 @@ def test_dry_run_ramp_returns_normalized_hardware_free_command_preview():
         "offset_v",
         "symmetry_percent",
         "load",
+        "phase_deg",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1072,6 +1093,8 @@ def test_dry_run_ramp_returns_normalized_hardware_free_command_preview():
         "SOURce1:FUNCtion:RAMP:SYMMetry 25",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     )
     assert result.executed is False
     assert result.output_state == "off"
@@ -1102,6 +1125,8 @@ def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
         "SOURce1:FREQuency 1000",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0.2",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     ]
     assert "OUTPut1 ON" not in session.writes
     assert not any("RAMP" in command for command in session.writes)
@@ -1174,7 +1199,12 @@ def test_invalid_ramp_parameters_fail_before_visa_io(
 
 
 def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
-    session = FakeSession(responses_by_command=PULSE_RESPONSES)
+    session = FakeSession(
+        responses_by_command={
+            **PULSE_RESPONSES,
+            "SOURce1:PHASe?": "90",
+        }
+    )
     manager = FakeManager(session)
 
     result = configure_pulse(
@@ -1185,6 +1215,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         0,
         20e-9,
         50,
+        phase_deg=90,
         resource_manager_factory=RecordingFactory(manager),
     )
 
@@ -1196,6 +1227,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FREQuency?",
         "SOURce1:FUNCtion:PULSe:WIDTh?",
         "SOURce1:FUNCtion:PULSe:TRANsition?",
+        "SOURce1:PHASe?",
     ]
     assert session.writes == [
         "OUTPut1 OFF",
@@ -1210,6 +1242,8 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 2e-08",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 90",
     ]
     assert session.events == [
         ("query", IDN_QUERY),
@@ -1226,11 +1260,14 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         ("write", "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 2e-08"),
         ("write", "SOURce1:VOLTage 0.1"),
         ("write", "SOURce1:VOLTage:OFFSet 0"),
+        ("write", "UNIT:ANGLe DEGree"),
+        ("write", "SOURce1:PHASe 90"),
         ("query", "OUTPut1?"),
         ("query", "SOURce1:FUNCtion?"),
         ("query", "SOURce1:FREQuency?"),
         ("query", "SOURce1:FUNCtion:PULSe:WIDTh?"),
         ("query", "SOURce1:FUNCtion:PULSe:TRANsition?"),
+        ("query", "SOURce1:PHASe?"),
     ]
     assert "OUTPut1 ON" not in session.writes
     assert result.frequency_hz == 10_000_000.0000005
@@ -1238,6 +1275,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert result.pulse_width_s == 5.005e-08
     assert result.offset_v == 0.0
     assert result.edge_time_s == 2.005e-08
+    assert result.phase_deg == 90.0
     assert result.load == "50"
     assert result.output_state == "off"
     assert session.close_calls == 1
@@ -1368,6 +1406,7 @@ def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
         "offset_v",
         "edge_time_s",
         "load",
+        "phase_deg",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1390,6 +1429,8 @@ def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
         "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
         "SOURce1:VOLTage 0.1",
         "SOURce1:VOLTage:OFFSet 0",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 0",
     )
     assert result.executed is False
     assert result.output_state == "off"
@@ -1437,12 +1478,14 @@ def test_configure_pulse_accepts_float_equal_width_window_boundary():
         "SOURce1:FREQuency?",
         "SOURce1:FUNCtion:PULSe:WIDTh?",
         "SOURce1:FUNCtion:PULSe:TRANsition?",
+        "SOURce1:PHASe?",
     ]
     assert session.writes[0] == "OUTPut1 OFF"
     assert "OUTPut1 ON" not in session.writes
     assert result.frequency_hz == 13_333_333.333333336
     assert result.pulse_width_s == 37.5e-9
     assert result.edge_time_s == 30e-9
+    assert result.phase_deg == 0.0
     assert result.output_state == "off"
     assert session.close_calls == 1
     assert manager.close_calls == 1

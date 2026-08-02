@@ -88,19 +88,41 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "status": frozenset(),
     "read-errors": frozenset({"max_reads"}),
     "configure-sine": frozenset(
-        {"frequency_hz", "amplitude_vpp", "offset_v", "load"}
+        {"frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load"}
     ),
     "configure-square": frozenset(
-        {"frequency_hz", "amplitude_vpp", "offset_v", "duty_cycle_percent", "load"}
+        {
+            "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "phase_deg",
+            "duty_cycle_percent",
+            "load",
+        }
     ),
     "configure-ramp": frozenset(
-        {"frequency_hz", "amplitude_vpp", "offset_v", "symmetry_percent", "load"}
+        {
+            "frequency_hz",
+            "amplitude_vpp",
+            "offset_v",
+            "phase_deg",
+            "symmetry_percent",
+            "load",
+        }
     ),
     "configure-triangle": frozenset(
-        {"frequency_hz", "amplitude_vpp", "offset_v", "load"}
+        {"frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load"}
     ),
     "configure-pulse": frozenset(
-        {"frequency_hz", "amplitude_vpp", "pulse_width_s", "offset_v", "edge_time_s", "load"}
+        {
+            "frequency_hz",
+            "amplitude_vpp",
+            "pulse_width_s",
+            "offset_v",
+            "edge_time_s",
+            "phase_deg",
+            "load",
+        }
     ),
     "configure-dc": frozenset({"voltage_v", "load"}),
     "configure-noise": frozenset(
@@ -127,11 +149,26 @@ _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
 }
 _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
     "read-errors": {"max_reads": 20},
-    "configure-sine": {"offset_v": 0, "load": "50"},
-    "configure-square": {"offset_v": 0, "duty_cycle_percent": 50, "load": "50"},
-    "configure-ramp": {"offset_v": 0, "symmetry_percent": 100, "load": "50"},
-    "configure-triangle": {"offset_v": 0, "load": "50"},
-    "configure-pulse": {"offset_v": 0, "edge_time_s": 1e-8, "load": "50"},
+    "configure-sine": {"offset_v": 0, "phase_deg": 0.0, "load": "50"},
+    "configure-square": {
+        "offset_v": 0,
+        "phase_deg": 0.0,
+        "duty_cycle_percent": 50,
+        "load": "50",
+    },
+    "configure-ramp": {
+        "offset_v": 0,
+        "phase_deg": 0.0,
+        "symmetry_percent": 100,
+        "load": "50",
+    },
+    "configure-triangle": {"offset_v": 0, "phase_deg": 0.0, "load": "50"},
+    "configure-pulse": {
+        "offset_v": 0,
+        "phase_deg": 0.0,
+        "edge_time_s": 1e-8,
+        "load": "50",
+    },
     "configure-dc": {"load": "50"},
     "configure-noise": {"offset_v": 0, "load": "50"},
     "configure-prbs": {
@@ -384,6 +421,7 @@ def _validate_waveform_arguments(
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         elif command == "configure-square":
             dry_run_square(
@@ -393,6 +431,7 @@ def _validate_waveform_arguments(
                 arguments["offset_v"],
                 arguments["duty_cycle_percent"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         elif command == "configure-ramp":
             dry_run_ramp(
@@ -402,6 +441,7 @@ def _validate_waveform_arguments(
                 arguments["offset_v"],
                 arguments["symmetry_percent"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         elif command == "configure-triangle":
             dry_run_triangle(
@@ -410,6 +450,7 @@ def _validate_waveform_arguments(
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         elif command == "configure-pulse":
             dry_run_pulse(
@@ -420,6 +461,7 @@ def _validate_waveform_arguments(
                 arguments["offset_v"],
                 arguments["edge_time_s"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         elif command == "configure-dc":
             dry_run_dc(

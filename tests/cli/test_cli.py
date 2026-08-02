@@ -407,6 +407,7 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
             amplitude_vpp=0.1,
             offset_v=0.0,
             load="50",
+            phase_deg=45.0,
             output_state="off",
         )
 
@@ -421,13 +422,17 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
             "1000",
             "--amplitude-vpp",
             "0.1",
+            "--phase-deg",
+            "45",
             "--json",
         ]
     )
 
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
-    assert calls == [(USB_RESOURCE, "1000", "0.1", "0", "50", "system")]
+    assert calls == [
+        (USB_RESOURCE, "1000", "0.1", "0", "50", "system", 45.0)
+    ]
     assert payload == {
         "success": True,
         "action": "configure-sine",
@@ -438,6 +443,7 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 45.0,
         "load": "50",
         "output_state": "off",
         "error": None,
@@ -460,6 +466,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
             amplitude_vpp=0.1,
             offset_v=0.0,
             load="50",
+            phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
                 "OUTPut1:LOAD 50",
@@ -468,6 +475,8 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
                 "SOURce1:FREQuency 1000",
                 "SOURce1:VOLTage 0.1",
                 "SOURce1:VOLTage:OFFSet 0",
+                "UNIT:ANGLe DEGree",
+                "SOURce1:PHASe 0",
             ),
             executed=False,
             output_state="off",
@@ -500,7 +509,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "1000", "0.1", "0", "50")
+        ("keysight-33521b", "1000", "0.1", "0", "50", 0.0)
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -513,6 +522,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 0.0,
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
@@ -522,6 +532,8 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
             "SOURce1:FREQuency 1000",
             "SOURce1:VOLTage 0.1",
             "SOURce1:VOLTage:OFFSet 0",
+            "UNIT:ANGLe DEGree",
+            "SOURce1:PHASe 0",
         ],
         "executed": False,
         "output_state": "off",
@@ -574,6 +586,7 @@ def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
             offset_v=0.0,
             duty_cycle_percent=50.0,
             load="50",
+            phase_deg=0.0,
             output_state="off",
         )
 
@@ -595,7 +608,7 @@ def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert calls == [
-        (USB_RESOURCE, "1000", "0.1", "0", "50", "50", "system")
+        (USB_RESOURCE, "1000", "0.1", "0", "50", "50", "system", 0.0)
     ]
     assert payload == {
         "success": True,
@@ -607,6 +620,7 @@ def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 0.0,
         "duty_cycle_percent": 50.0,
         "load": "50",
         "output_state": "off",
@@ -631,6 +645,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
             offset_v=0.0,
             duty_cycle_percent=50.0,
             load="50",
+            phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
                 "OUTPut1:LOAD 50",
@@ -640,6 +655,8 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
                 "SOURce1:FUNCtion:SQUare:DCYCle 50",
                 "SOURce1:VOLTage 0.1",
                 "SOURce1:VOLTage:OFFSet 0",
+                "UNIT:ANGLe DEGree",
+                "SOURce1:PHASe 0",
             ),
             executed=False,
             output_state="off",
@@ -672,7 +689,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "1000", "0.1", "0", "50", "50")
+        ("keysight-33521b", "1000", "0.1", "0", "50", "50", 0.0)
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -685,6 +702,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 0.0,
         "duty_cycle_percent": 50.0,
         "load": "50",
         "commands": [
@@ -696,6 +714,8 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
             "SOURce1:FUNCtion:SQUare:DCYCle 50",
             "SOURce1:VOLTage 0.1",
             "SOURce1:VOLTage:OFFSet 0",
+            "UNIT:ANGLe DEGree",
+            "SOURce1:PHASe 0",
         ],
         "executed": False,
         "output_state": "off",
@@ -748,6 +768,7 @@ def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
             offset_v=0.0,
             symmetry_percent=100.0,
             load="50",
+            phase_deg=0.0,
             output_state="off",
         )
 
@@ -769,7 +790,7 @@ def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert calls == [
-        (USB_RESOURCE, "1000", "0.1", "0", "100", "50", "system")
+        (USB_RESOURCE, "1000", "0.1", "0", "100", "50", "system", 0.0)
     ]
     assert payload == {
         "success": True,
@@ -781,6 +802,7 @@ def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 0.0,
         "symmetry_percent": 100.0,
         "load": "50",
         "output_state": "off",
@@ -805,6 +827,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
             offset_v=0.0,
             symmetry_percent=25.0,
             load="50",
+            phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
                 "OUTPut1:LOAD 50",
@@ -815,6 +838,8 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
                 "SOURce1:FUNCtion:RAMP:SYMMetry 25",
                 "SOURce1:VOLTage 0.1",
                 "SOURce1:VOLTage:OFFSet 0",
+                "UNIT:ANGLe DEGree",
+                "SOURce1:PHASe 0",
             ),
             executed=False,
             output_state="off",
@@ -849,7 +874,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "1000", "0.1", "0", "25", "50")
+        ("keysight-33521b", "1000", "0.1", "0", "25", "50", 0.0)
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -862,6 +887,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 0.0,
         "symmetry_percent": 25.0,
         "load": "50",
         "commands": [
@@ -874,6 +900,8 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
             "SOURce1:FUNCtion:RAMP:SYMMetry 25",
             "SOURce1:VOLTage 0.1",
             "SOURce1:VOLTage:OFFSet 0",
+            "UNIT:ANGLe DEGree",
+            "SOURce1:PHASe 0",
         ],
         "executed": False,
         "output_state": "off",
@@ -945,6 +973,7 @@ def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.2,
+        "phase_deg": 0.0,
         "load": "high-z",
         "commands": [
             "OUTPut1 OFF",
@@ -955,6 +984,8 @@ def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
             "SOURce1:FREQuency 1000",
             "SOURce1:VOLTage 0.1",
             "SOURce1:VOLTage:OFFSet 0.2",
+            "UNIT:ANGLe DEGree",
+            "SOURce1:PHASe 0",
         ],
         "executed": False,
         "output_state": "off",
@@ -982,6 +1013,7 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
             offset_v=0.0,
             edge_time_s=1e-8,
             load="50",
+            phase_deg=0.0,
             output_state="off",
         )
 
@@ -1016,6 +1048,7 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
             "0.00000001",
             "50",
             "system",
+            0.0,
         )
     ]
     assert payload == {
@@ -1028,6 +1061,7 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 0.0,
         "pulse_width_s": 0.0001,
         "edge_time_s": 1e-8,
         "load": "50",
@@ -1235,6 +1269,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             pulse_width_s=0.0001,
             edge_time_s=1e-8,
             load="50",
+            phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
                 "OUTPut1:LOAD 50",
@@ -1245,6 +1280,8 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
                 "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
                 "SOURce1:VOLTage 0.1",
                 "SOURce1:VOLTage:OFFSet 0",
+                "UNIT:ANGLe DEGree",
+                "SOURce1:PHASe 0",
             ),
             executed=False,
             output_state="off",
@@ -1289,6 +1326,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             "0",
             "0.00000001",
             "50",
+            0.0,
         )
     ]
     assert manager_calls == []
@@ -1302,6 +1340,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
+        "phase_deg": 0.0,
         "pulse_width_s": 0.0001,
         "edge_time_s": 1e-8,
         "load": "50",
@@ -1315,6 +1354,8 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             "SOURce1:FUNCtion:PULSe:TRANsition:BOTH 1e-08",
             "SOURce1:VOLTage 0.1",
             "SOURce1:VOLTage:OFFSet 0",
+            "UNIT:ANGLe DEGree",
+            "SOURce1:PHASe 0",
         ],
         "executed": False,
         "output_state": "off",

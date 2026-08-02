@@ -185,7 +185,7 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
         ),
         (
             "configure-triangle",
-            {"frequency_hz": 1000, "amplitude_vpp": 0.1},
+            {"frequency_hz": 1000, "amplitude_vpp": 0.1, "phase_deg": 90.0},
             "simulate",
         ),
         (
@@ -243,6 +243,8 @@ def test_worker_command_execution_mapping(
     if command == "output":
         assert runtime.simulator_state is not None
         assert runtime.simulator_state.output_enabled is True
+    if command == "configure-triangle" and arguments.get("phase_deg") == 90.0:
+        assert result.phase_deg == 90.0
     if request_mode == "dry_run":
         assert result.commands
 

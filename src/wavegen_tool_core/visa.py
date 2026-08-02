@@ -161,6 +161,7 @@ class SineConfigurationResult:
     offset_v: float
     load: str
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,7 @@ class SineDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -192,6 +194,7 @@ class SquareConfigurationResult:
     duty_cycle_percent: float
     load: str
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -208,6 +211,7 @@ class SquareDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -224,6 +228,7 @@ class RampConfigurationResult:
     symmetry_percent: float
     load: str
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -240,6 +245,7 @@ class RampDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -255,6 +261,7 @@ class TriangleConfigurationResult:
     offset_v: float
     load: str
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -270,6 +277,7 @@ class TriangleDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -287,6 +295,7 @@ class PulseConfigurationResult:
     edge_time_s: float
     load: str
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -304,6 +313,7 @@ class PulseDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    phase_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -959,16 +969,18 @@ def configure_sine(
     offset_v: object = 0,
     load: object = 50,
     backend: str | None = None,
+    phase_deg: object = 0.0,
     *,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SineConfigurationResult:
     """Validate and configure a Channel 1 sine wave while keeping output off."""
 
-    frequency, amplitude, offset, normalized_load, commands = _prepare_sine(
+    frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
         amplitude_vpp,
         offset_v,
         load,
+        phase_deg,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -986,6 +998,7 @@ def configure_sine(
         amplitude_vpp=amplitude,
         offset_v=offset,
         load=normalized_load,
+        phase_deg=phase,
     )
 
 
@@ -995,16 +1008,18 @@ def dry_run_sine(
     amplitude_vpp: object,
     offset_v: object = 0,
     load: object = 50,
+    phase_deg: object = 0.0,
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
     _validate_dry_run_model(model, "sine")
 
-    frequency, amplitude, offset, normalized_load, commands = _prepare_sine(
+    frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
         amplitude_vpp,
         offset_v,
         load,
+        phase_deg,
     )
     return SineDryRunResult(
         model=CANONICAL_MODEL,
@@ -1013,6 +1028,7 @@ def dry_run_sine(
         amplitude_vpp=amplitude,
         offset_v=offset,
         load=normalized_load,
+        phase_deg=phase,
         commands=commands,
     )
 
@@ -1033,11 +1049,13 @@ def _prepare_sine(
     amplitude_vpp: object,
     offset_v: object,
     load: object,
-) -> tuple[float, float, float, str, tuple[str, ...]]:
+    phase_deg: object,
+) -> tuple[float, float, float, str, float, tuple[str, ...]]:
     frequency = _normalize_finite_number(frequency_hz, "frequency")
     amplitude = _normalize_finite_number(amplitude_vpp, "amplitude")
     offset = _normalize_finite_number(offset_v, "offset")
     normalized_load = _normalize_load(load)
+    phase = _normalize_phase_deg(phase_deg, waveform="Sine")
 
     if not 0.000001 <= frequency <= 30_000_000:
         raise WaveformParameterError(
@@ -1055,8 +1073,10 @@ def _prepare_sine(
         f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+        "UNIT:ANGLe DEGree",
+        f"SOURce1:PHASe {_format_scpi_number(phase)}",
     )
-    return frequency, amplitude, offset, normalized_load, commands
+    return frequency, amplitude, offset, normalized_load, phase, commands
 
 
 def configure_square(
@@ -1067,6 +1087,7 @@ def configure_square(
     duty_cycle_percent: object = 50,
     load: object = 50,
     backend: str | None = None,
+    phase_deg: object = 0.0,
     *,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SquareConfigurationResult:
@@ -1078,6 +1099,7 @@ def configure_square(
         offset,
         duty_cycle,
         normalized_load,
+        phase,
         commands,
     ) = _prepare_square(
         frequency_hz,
@@ -1085,6 +1107,7 @@ def configure_square(
         offset_v,
         duty_cycle_percent,
         load,
+        phase_deg,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -1103,6 +1126,7 @@ def configure_square(
         offset_v=offset,
         duty_cycle_percent=duty_cycle,
         load=normalized_load,
+        phase_deg=phase,
     )
 
 
@@ -1113,6 +1137,7 @@ def dry_run_square(
     offset_v: object = 0,
     duty_cycle_percent: object = 50,
     load: object = 50,
+    phase_deg: object = 0.0,
 ) -> SquareDryRunResult:
     """Preview a validated Channel 1 square configuration without VISA I/O."""
 
@@ -1123,6 +1148,7 @@ def dry_run_square(
         offset,
         duty_cycle,
         normalized_load,
+        phase,
         commands,
     ) = _prepare_square(
         frequency_hz,
@@ -1130,6 +1156,7 @@ def dry_run_square(
         offset_v,
         duty_cycle_percent,
         load,
+        phase_deg,
     )
     return SquareDryRunResult(
         model=CANONICAL_MODEL,
@@ -1139,6 +1166,7 @@ def dry_run_square(
         offset_v=offset,
         duty_cycle_percent=duty_cycle,
         load=normalized_load,
+        phase_deg=phase,
         commands=commands,
     )
 
@@ -1149,7 +1177,8 @@ def _prepare_square(
     offset_v: object,
     duty_cycle_percent: object,
     load: object,
-) -> tuple[float, float, float, float, str, tuple[str, ...]]:
+    phase_deg: object,
+) -> tuple[float, float, float, float, str, float, tuple[str, ...]]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -1167,6 +1196,7 @@ def _prepare_square(
         waveform="Square",
     )
     normalized_load = _normalize_load(load, waveform="Square")
+    phase = _normalize_phase_deg(phase_deg, waveform="Square")
 
     if not 0.000001 <= frequency <= 30_000_000:
         raise WaveformParameterError(
@@ -1207,6 +1237,8 @@ def _prepare_square(
         f"{_format_scpi_number(duty_cycle)}",
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+        "UNIT:ANGLe DEGree",
+        f"SOURce1:PHASe {_format_scpi_number(phase)}",
     )
     return (
         frequency,
@@ -1214,6 +1246,7 @@ def _prepare_square(
         offset,
         duty_cycle,
         normalized_load,
+        phase,
         commands,
     )
 
@@ -1226,6 +1259,7 @@ def configure_ramp(
     symmetry_percent: object = 100,
     load: object = 50,
     backend: str | None = None,
+    phase_deg: object = 0.0,
     *,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> RampConfigurationResult:
@@ -1237,6 +1271,7 @@ def configure_ramp(
         offset,
         symmetry,
         normalized_load,
+        phase,
         commands,
     ) = _prepare_ramp(
         frequency_hz,
@@ -1244,6 +1279,7 @@ def configure_ramp(
         offset_v,
         symmetry_percent,
         load,
+        phase_deg,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -1262,6 +1298,7 @@ def configure_ramp(
         offset_v=offset,
         symmetry_percent=symmetry,
         load=normalized_load,
+        phase_deg=phase,
     )
 
 
@@ -1272,6 +1309,7 @@ def dry_run_ramp(
     offset_v: object = 0,
     symmetry_percent: object = 100,
     load: object = 50,
+    phase_deg: object = 0.0,
 ) -> RampDryRunResult:
     """Preview a validated Channel 1 ramp configuration without VISA I/O."""
 
@@ -1282,6 +1320,7 @@ def dry_run_ramp(
         offset,
         symmetry,
         normalized_load,
+        phase,
         commands,
     ) = _prepare_ramp(
         frequency_hz,
@@ -1289,6 +1328,7 @@ def dry_run_ramp(
         offset_v,
         symmetry_percent,
         load,
+        phase_deg,
     )
     return RampDryRunResult(
         model=CANONICAL_MODEL,
@@ -1298,6 +1338,7 @@ def dry_run_ramp(
         offset_v=offset,
         symmetry_percent=symmetry,
         load=normalized_load,
+        phase_deg=phase,
         commands=commands,
     )
 
@@ -1308,7 +1349,8 @@ def _prepare_ramp(
     offset_v: object,
     symmetry_percent: object,
     load: object,
-) -> tuple[float, float, float, float, str, tuple[str, ...]]:
+    phase_deg: object,
+) -> tuple[float, float, float, float, str, float, tuple[str, ...]]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -1326,6 +1368,7 @@ def _prepare_ramp(
         waveform="Ramp",
     )
     normalized_load = _normalize_load(load, waveform="Ramp")
+    phase = _normalize_phase_deg(phase_deg, waveform="Ramp")
 
     if not 0.000001 <= frequency <= 200_000:
         raise WaveformParameterError(
@@ -1349,6 +1392,8 @@ def _prepare_ramp(
         f"{_format_scpi_number(symmetry)}",
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+        "UNIT:ANGLe DEGree",
+        f"SOURce1:PHASe {_format_scpi_number(phase)}",
     )
     return (
         frequency,
@@ -1356,6 +1401,7 @@ def _prepare_ramp(
         offset,
         symmetry,
         normalized_load,
+        phase,
         commands,
     )
 
@@ -1367,16 +1413,18 @@ def configure_triangle(
     offset_v: object = 0,
     load: object = 50,
     backend: str | None = None,
+    phase_deg: object = 0.0,
     *,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> TriangleConfigurationResult:
     """Validate and configure a Channel 1 triangle wave while keeping output off."""
 
-    frequency, amplitude, offset, normalized_load, commands = _prepare_triangle(
+    frequency, amplitude, offset, normalized_load, phase, commands = _prepare_triangle(
         frequency_hz,
         amplitude_vpp,
         offset_v,
         load,
+        phase_deg,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -1394,6 +1442,7 @@ def configure_triangle(
         amplitude_vpp=amplitude,
         offset_v=offset,
         load=normalized_load,
+        phase_deg=phase,
     )
 
 
@@ -1403,15 +1452,17 @@ def dry_run_triangle(
     amplitude_vpp: object,
     offset_v: object = 0,
     load: object = 50,
+    phase_deg: object = 0.0,
 ) -> TriangleDryRunResult:
     """Preview a validated Channel 1 triangle configuration without VISA I/O."""
 
     _validate_dry_run_model(model, "triangle")
-    frequency, amplitude, offset, normalized_load, commands = _prepare_triangle(
+    frequency, amplitude, offset, normalized_load, phase, commands = _prepare_triangle(
         frequency_hz,
         amplitude_vpp,
         offset_v,
         load,
+        phase_deg,
     )
     return TriangleDryRunResult(
         model=CANONICAL_MODEL,
@@ -1420,6 +1471,7 @@ def dry_run_triangle(
         amplitude_vpp=amplitude,
         offset_v=offset,
         load=normalized_load,
+        phase_deg=phase,
         commands=commands,
     )
 
@@ -1429,7 +1481,8 @@ def _prepare_triangle(
     amplitude_vpp: object,
     offset_v: object,
     load: object,
-) -> tuple[float, float, float, str, tuple[str, ...]]:
+    phase_deg: object,
+) -> tuple[float, float, float, str, float, tuple[str, ...]]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -1442,6 +1495,7 @@ def _prepare_triangle(
     )
     offset = _normalize_finite_number(offset_v, "offset", waveform="Triangle")
     normalized_load = _normalize_load(load, waveform="Triangle")
+    phase = _normalize_phase_deg(phase_deg, waveform="Triangle")
 
     if not 0.000001 <= frequency <= 200_000:
         raise WaveformParameterError(
@@ -1459,8 +1513,10 @@ def _prepare_triangle(
         f"SOURce1:FREQuency {_format_scpi_number(frequency)}",
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+        "UNIT:ANGLe DEGree",
+        f"SOURce1:PHASe {_format_scpi_number(phase)}",
     )
-    return frequency, amplitude, offset, normalized_load, commands
+    return frequency, amplitude, offset, normalized_load, phase, commands
 
 
 def configure_pulse(
@@ -1472,6 +1528,7 @@ def configure_pulse(
     edge_time_s: object = 10e-9,
     load: object = 50,
     backend: str | None = None,
+    phase_deg: object = 0.0,
     *,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> PulseConfigurationResult:
@@ -1484,6 +1541,7 @@ def configure_pulse(
         pulse_width,
         edge_time,
         normalized_load,
+        phase,
         commands,
     ) = _prepare_pulse(
         frequency_hz,
@@ -1492,12 +1550,13 @@ def configure_pulse(
         offset_v,
         edge_time_s,
         load,
+        phase_deg,
     )
 
     def operate(
         session: VisaSession,
         context: IdentificationResult,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, float]:
         def write_pulse_command(command: str, output_state: str | None) -> None:
             try:
                 session.write(command)
@@ -1566,6 +1625,12 @@ def configure_pulse(
             "BOTH edge",
             _parse_pulse_verification_number,
         )
+        readback_phase = _query_pulse_verification(
+            session,
+            "SOURce1:PHASe?",
+            "phase",
+            _parse_phase_verification_number,
+        )
 
         if output_state != "off":
             raise WaveformVerificationError(
@@ -1607,7 +1672,15 @@ def configure_pulse(
             abs_tolerance=PULSE_TIMING_ABS_TOLERANCE_S,
             context=context,
         )
-        return readback_frequency, readback_width, readback_edge
+        _verify_pulse_readback(
+            "phase",
+            phase,
+            readback_phase,
+            rel_tolerance=0.0,
+            abs_tolerance=0.0,
+            context=context,
+        )
+        return readback_frequency, readback_width, readback_edge, readback_phase
 
     context, readback = _run_on_supported_33521b(
         resource,
@@ -1616,7 +1689,7 @@ def configure_pulse(
         output_state_after_operation="off",
         resource_manager_factory=resource_manager_factory,
     )
-    readback_frequency, readback_width, readback_edge = readback
+    readback_frequency, readback_width, readback_edge, readback_phase = readback
     return PulseConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -1628,6 +1701,7 @@ def configure_pulse(
         pulse_width_s=readback_width,
         edge_time_s=readback_edge,
         load=normalized_load,
+        phase_deg=readback_phase,
     )
 
 
@@ -1639,6 +1713,7 @@ def dry_run_pulse(
     offset_v: object = 0,
     edge_time_s: object = 10e-9,
     load: object = 50,
+    phase_deg: object = 0.0,
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
@@ -1650,6 +1725,7 @@ def dry_run_pulse(
         pulse_width,
         edge_time,
         normalized_load,
+        phase,
         commands,
     ) = _prepare_pulse(
         frequency_hz,
@@ -1658,6 +1734,7 @@ def dry_run_pulse(
         offset_v,
         edge_time_s,
         load,
+        phase_deg,
     )
     return PulseDryRunResult(
         model=CANONICAL_MODEL,
@@ -1668,6 +1745,7 @@ def dry_run_pulse(
         pulse_width_s=pulse_width,
         edge_time_s=edge_time,
         load=normalized_load,
+        phase_deg=phase,
         commands=commands,
     )
 
@@ -1679,7 +1757,8 @@ def _prepare_pulse(
     offset_v: object,
     edge_time_s: object,
     load: object,
-) -> tuple[float, float, float, float, float, str, tuple[str, ...]]:
+    phase_deg: object,
+) -> tuple[float, float, float, float, float, str, float, tuple[str, ...]]:
     frequency = _normalize_finite_number(
         frequency_hz,
         "frequency",
@@ -1702,6 +1781,7 @@ def _prepare_pulse(
         waveform="Pulse",
     )
     normalized_load = _normalize_load(load, waveform="Pulse")
+    phase = _normalize_phase_deg(phase_deg, waveform="Pulse")
 
     if not 0.000001 <= frequency <= 30_000_000:
         raise WaveformParameterError(
@@ -1766,6 +1846,8 @@ def _prepare_pulse(
         f"{_format_scpi_number(edge_time)}",
         f"SOURce1:VOLTage {_format_scpi_number(amplitude)}",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(offset)}",
+        "UNIT:ANGLe DEGree",
+        f"SOURce1:PHASe {_format_scpi_number(phase)}",
     )
     return (
         frequency,
@@ -1774,6 +1856,7 @@ def _prepare_pulse(
         pulse_width,
         edge_time,
         normalized_load,
+        phase,
         commands,
     )
 
@@ -2184,6 +2267,15 @@ def _normalize_finite_number(
     return normalized
 
 
+def _normalize_phase_deg(value: object, *, waveform: str) -> float:
+    phase = _normalize_finite_number(value, "phase", waveform=waveform)
+    if not -360.0 <= phase <= 360.0:
+        raise WaveformParameterError(
+            f"{waveform} phase must be between -360 and 360 degrees."
+        )
+    return phase
+
+
 def _normalize_load(value: object, *, waveform: str = "Sine") -> str:
     if isinstance(value, bool):
         raise WaveformParameterError(f"{waveform} load must be 50 or high-z.")
@@ -2253,6 +2345,18 @@ def _parse_pulse_verification_number(response: object) -> float:
         raise ValueError("response must be numeric") from exc
     if not math.isfinite(value) or value <= 0:
         raise ValueError("response must be a finite positive number")
+    return value
+
+
+def _parse_phase_verification_number(response: object) -> float:
+    if not isinstance(response, str) or not response.strip():
+        raise ValueError("response must be a non-empty string")
+    try:
+        value = float(response.strip())
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("response must be numeric") from exc
+    if not math.isfinite(value):
+        raise ValueError("response must be a finite number")
     return value
 
 

@@ -20,6 +20,7 @@ sine/square/ramp/triangle/pulse/DC/noise/PRBS/output control for the Keysight or
 - Hardware-unvalidated, parameter-validated Channel 1 ramp configuration
 - Hardware-unvalidated, parameter-validated Channel 1 triangle configuration
 - Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
+- Phase offset control for sine, square, ramp, triangle, and pulse in degrees
 - Hardware-unvalidated, parameter-validated Channel 1 DC voltage configuration
 - Hardware-unvalidated, parameter-validated Channel 1 noise configuration
 - Hardware-unvalidated, parameter-validated Channel 1 PRBS configuration
@@ -376,7 +377,10 @@ impedance and `--json` for one JSON object. The load setting does not detect or
 verify the physically connected load. The command validates all waveform
 parameters before opening VISA. It then identifies the instrument in the same
 session, rejects anything except an exactly recognized 33521B, turns Channel 1
-output off, and applies the settings. It never turns the output on.
+output off, explicitly sets the angle unit to degrees, and applies the settings.
+It never turns the output on. Sine, square, ramp, triangle, and pulse accept
+`--phase-deg`, defaulting to 0 degrees and allowing -360 through +360 degrees.
+Phase configuration has not yet been hardware-validated.
 
 The supported 33521B sine limits are:
 
@@ -395,6 +399,7 @@ uv run wavegen-tool configure-sine `
   --frequency-hz 1000 `
   --amplitude-vpp 0.1 `
   --offset-v 0 `
+  --phase-deg 45 `
   --load 50
 ```
 
@@ -402,9 +407,10 @@ Dry-run supports sine, square, ramp, pulse, DC, noise, and PRBS configuration.
 Each dry-run uses the same Core parameter normalization, waveform-specific
 validation, and SCPI command planning as its live command, but does not create
 a ResourceManager, open a session, query, or write. The command list is only a
-preview and is not executed. Dry-run is neither a simulator nor hardware
-validation. Live waveform configuration continues to require an explicit VISA
-resource.
+preview and is not executed. The sine preview includes the explicit
+`UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run is neither a
+simulator nor hardware validation. Live waveform configuration continues to
+require an explicit VISA resource, and configuration leaves output off.
 
 ## Configure a Channel 1 Square Wave
 
@@ -426,7 +432,8 @@ enables output; only an explicit `output --state on` command can do that.
 Square frequency must be from 0.000001 Hz to 30000000 Hz. Duty cycle has a
 basic range of 0.01% to 99.99%, narrowed at higher frequencies by the 16 ns
 minimum pulse width. The amplitude, offset, and output-load setting limits are
-the same as for sine configuration above.
+the same as for sine configuration above. Square accepts `--phase-deg` with a
+default of 0 degrees and an inclusive range of -360 through +360 degrees.
 
 The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Square configuration has not yet been
@@ -471,7 +478,8 @@ Ramp frequency must be from 0.000001 Hz to 200000 Hz. Symmetry is the
 percentage of each cycle spent rising and must be from 0% to 100%: 0% is a
 falling ramp, 50% is a triangle wave, and 100% is a rising ramp. The amplitude,
 offset, and output-load setting limits are the same as for sine and square
-configuration.
+configuration. Ramp accepts `--phase-deg` with a default of 0 degrees and an
+inclusive range of -360 through +360 degrees.
 
 The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
@@ -510,6 +518,7 @@ uv run wavegen-tool configure-triangle `
   --frequency-hz 1000 `
   --amplitude-vpp 0.1 `
   --offset-v 0 `
+  --phase-deg 45 `
   --load 50
 ```
 
@@ -518,6 +527,8 @@ offset, and output-load setting limits are the same as for sine and square
 configuration. Triangle configuration uses the instrument's dedicated
 `TRIangle` function and has not yet been hardware-validated. Configuration
 first turns Channel 1 output off and leaves it off; it never enables output.
+Triangle accepts `--phase-deg` with a default of 0 degrees and an inclusive
+range of -360 through +360 degrees.
 
 Preview the validated Triangle SCPI plan without a VISA resource or instrument:
 
@@ -556,7 +567,8 @@ least 16 ns, and edge time must be from 8.4 ns to 1 us. This command applies
 the same edge time to the leading and trailing edges. Width must also fit
 within the waveform period and the selected edge-time constraints. The
 amplitude, offset, and output-load setting limits are the same as for the
-other waveform configuration commands.
+other waveform configuration commands. Pulse accepts `--phase-deg` with a
+default of 0 degrees and an inclusive range of -360 through +360 degrees.
 
 Live configuration first turns Channel 1 output off and applies safe
 intermediate pulse width and edge settings before selecting Pulse mode. It then

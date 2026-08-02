@@ -454,6 +454,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["load"],
                 backend,
+                arguments["phase_deg"],
                 **factory_kwargs,
             )
         if job.command == "configure-square":
@@ -465,6 +466,7 @@ class WorkerRuntime:
                 arguments["duty_cycle_percent"],
                 arguments["load"],
                 backend,
+                arguments["phase_deg"],
                 **factory_kwargs,
             )
         if job.command == "configure-ramp":
@@ -476,6 +478,7 @@ class WorkerRuntime:
                 arguments["symmetry_percent"],
                 arguments["load"],
                 backend,
+                arguments["phase_deg"],
                 **factory_kwargs,
             )
         if job.command == "configure-triangle":
@@ -486,6 +489,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["load"],
                 backend,
+                arguments["phase_deg"],
                 **factory_kwargs,
             )
         if job.command == "configure-pulse":
@@ -498,6 +502,7 @@ class WorkerRuntime:
                 arguments["edge_time_s"],
                 arguments["load"],
                 backend,
+                arguments["phase_deg"],
                 **factory_kwargs,
             )
         if job.command == "configure-dc":
@@ -553,6 +558,7 @@ class WorkerRuntime:
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         if command == "configure-square":
             return dry_run_square(
@@ -562,6 +568,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["duty_cycle_percent"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         if command == "configure-ramp":
             return dry_run_ramp(
@@ -571,6 +578,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["symmetry_percent"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         if command == "configure-triangle":
             return dry_run_triangle(
@@ -579,6 +587,7 @@ class WorkerRuntime:
                 arguments["amplitude_vpp"],
                 arguments["offset_v"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         if command == "configure-pulse":
             return dry_run_pulse(
@@ -589,6 +598,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["edge_time_s"],
                 arguments["load"],
+                arguments["phase_deg"],
             )
         if command == "configure-dc":
             return dry_run_dc(model, arguments["voltage_v"], arguments["load"])
