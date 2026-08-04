@@ -29,19 +29,25 @@ from wavegen_tool_core.visa import (
     configure_prbs,
     configure_pulse,
     configure_ramp,
+    configure_ramp_sweep,
     configure_sine,
     configure_sine_sweep,
     configure_square,
+    configure_square_sweep,
     configure_triangle,
+    configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
+    dry_run_ramp_sweep,
     dry_run_sine,
     dry_run_sine_sweep,
     dry_run_square,
+    dry_run_square_sweep,
     dry_run_triangle,
+    dry_run_triangle_sweep,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -929,6 +935,160 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
 
 
 @pytest.mark.parametrize(
+    ("waveform", "specific_value", "expected_commands"),
+    [
+        (
+            "square",
+            50,
+            (
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD INF",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FUNCtion SQUare",
+                "SOURce1:FREQuency 1000",
+                "SOURce1:FUNCtion:SQUare:DCYCle 50",
+                "SOURce1:VOLTage 0.2",
+                "SOURce1:VOLTage:OFFSet 0.1",
+                "UNIT:ANGLe DEGree",
+                "SOURce1:PHASe 45",
+                "SOURce1:FREQuency:STARt 1000",
+                "SOURce1:FREQuency:STOP 30000",
+                "SOURce1:SWEep:SPACing LINear",
+                "SOURce1:SWEep:TIME 1",
+                "SOURce1:SWEep:HTIMe 2",
+                "SOURce1:SWEep:RTIMe 3",
+                "TRIGger1:SOURce IMMediate",
+                "SOURce1:FREQuency:MODE SWEep",
+            ),
+        ),
+        (
+            "ramp",
+            25,
+            (
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FREQuency MINimum",
+                "SOURce1:FUNCtion RAMP",
+                "SOURce1:FREQuency 10000",
+                "SOURce1:FUNCtion:RAMP:SYMMetry 25",
+                "SOURce1:VOLTage 0.2",
+                "SOURce1:VOLTage:OFFSet -0.1",
+                "UNIT:ANGLe DEGree",
+                "SOURce1:PHASe -45",
+                "SOURce1:FREQuency:STARt 10000",
+                "SOURce1:FREQuency:STOP 1000",
+                "SOURce1:SWEep:SPACing LOGarithmic",
+                "SOURce1:SWEep:TIME 2",
+                "SOURce1:SWEep:HTIMe 1",
+                "SOURce1:SWEep:RTIMe 2",
+                "TRIGger1:SOURce IMMediate",
+                "SOURce1:FREQuency:MODE SWEep",
+            ),
+        ),
+        (
+            "triangle",
+            None,
+            (
+                "OUTPut1 OFF",
+                "OUTPut1:LOAD 50",
+                "SOURce1:VOLTage:UNIT VPP",
+                "SOURce1:FREQuency MINimum",
+                "SOURce1:FUNCtion TRIangle",
+                "SOURce1:FREQuency 200000",
+                "SOURce1:VOLTage 0.2",
+                "SOURce1:VOLTage:OFFSet 0",
+                "UNIT:ANGLe DEGree",
+                "SOURce1:PHASe 0",
+                "SOURce1:FREQuency:STARt 200000",
+                "SOURce1:FREQuency:STOP 1000",
+                "SOURce1:SWEep:SPACing LOGarithmic",
+                "SOURce1:SWEep:TIME 2",
+                "SOURce1:SWEep:HTIMe 0",
+                "SOURce1:SWEep:RTIMe 1",
+                "TRIGger1:SOURce IMMediate",
+                "SOURce1:FREQuency:MODE SWEep",
+            ),
+        ),
+    ],
+)
+def test_square_ramp_triangle_sweep_core_and_dry_run_share_ordered_write_plan(
+    waveform, specific_value, expected_commands
+):
+    session = FakeSession()
+    manager = FakeManager(session)
+    live_common = (
+        USB_RESOURCE,
+        1000 if waveform == "square" else 10000 if waveform == "ramp" else 200000,
+        30000 if waveform == "square" else 1000,
+        "linear" if waveform == "square" else "logarithmic",
+        1 if waveform == "square" else 2,
+        0.2,
+        0.1 if waveform == "square" else -0.1 if waveform == "ramp" else 0,
+        2 if waveform == "square" else 1 if waveform == "ramp" else 0,
+        3 if waveform == "square" else 2 if waveform == "ramp" else 1,
+        "high-z" if waveform == "square" else "50",
+        "system",
+        45 if waveform == "square" else -45 if waveform == "ramp" else 0,
+    )
+    dry_common = live_common[1:10] + (live_common[11],)
+
+    if waveform == "square":
+        result = configure_square_sweep(
+            *live_common,
+            specific_value,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+        preview = dry_run_square_sweep(
+            "keysight-33521b",
+            *dry_common,
+            specific_value,
+        )
+        assert result.duty_cycle_percent == 50.0
+        assert preview.duty_cycle_percent == 50.0
+    elif waveform == "ramp":
+        result = configure_ramp_sweep(
+            *live_common,
+            specific_value,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+        preview = dry_run_ramp_sweep(
+            "keysight-33521b",
+            *dry_common,
+            specific_value,
+        )
+        assert result.symmetry_percent == 25.0
+        assert preview.symmetry_percent == 25.0
+    else:
+        result = configure_triangle_sweep(
+            *live_common,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+        preview = dry_run_triangle_sweep("keysight-33521b", *dry_common)
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == list(expected_commands)
+    assert preview.commands == expected_commands
+    assert result.start_frequency_hz == float(live_common[1])
+    assert result.stop_frequency_hz == float(live_common[2])
+    assert result.spacing == live_common[3]
+    assert result.sweep_time_s == float(live_common[4])
+    assert result.hold_time_s == float(live_common[7])
+    assert result.return_time_s == float(live_common[8])
+    assert result.trigger_source == "immediate"
+    assert result.amplitude_vpp == 0.2
+    assert result.offset_v == float(live_common[6])
+    assert result.phase_deg == float(live_common[11])
+    assert result.load == live_common[9]
+    assert result.output_state == "off"
+    assert "OUTPut1 ON" not in session.writes
+    assert "SOURce1:FREQuency:MODE CW" not in session.writes
+    assert session.writes[-1] == "SOURce1:FREQuency:MODE SWEep"
+    assert preview.executed is False
+    assert preview.output_state == "off"
+
+
+@pytest.mark.parametrize(
     ("field", "value", "spacing", "sweep_time", "hold_time", "return_time"),
     [
         ("stop_frequency_hz", 1000, "linear", 1, 0, 0),
@@ -969,6 +1129,59 @@ def test_invalid_sine_sweep_parameters_fail_before_visa_io(
             resource_manager_factory=factory,
             **arguments,
         )
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert manager.session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("waveform", "start", "stop", "spacing", "sweep", "hold", "return_time", "duty"),
+    [
+        ("square", 1000, 1000, "linear", 1, 0, 0, 50),
+        ("square", 1000, 30_000_001, "linear", 1, 0, 0, 50),
+        ("ramp", 1000, 200_001, "linear", 1, 0, 0, 50),
+        ("triangle", 1000, 200_001, "linear", 1, 0, 0, 50),
+        ("square", 1_000_000, 30_000_000, "linear", 1, 0, 0, 47),
+        ("square", 1000, 10000, "linear", 7999, 2, 0, 50),
+        ("ramp", 1000, 10000, "logarithmic", 499, 2, 0, 50),
+    ],
+)
+def test_invalid_square_ramp_triangle_sweep_parameters_fail_before_visa_io(
+    waveform, start, stop, spacing, sweep, hold, return_time, duty
+):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+    common = {
+        "resource": USB_RESOURCE,
+        "start_frequency_hz": start,
+        "stop_frequency_hz": stop,
+        "spacing": spacing,
+        "sweep_time_s": sweep,
+        "amplitude_vpp": 0.1,
+        "offset_v": 0,
+        "hold_time_s": hold,
+        "return_time_s": return_time,
+        "load": 50,
+        "backend": "system",
+        "phase_deg": 0,
+        "resource_manager_factory": factory,
+    }
+
+    with pytest.raises(WaveformParameterError):
+        if waveform == "square":
+            configure_square_sweep(
+                **common,
+                duty_cycle_percent=duty,
+            )
+        elif waveform == "ramp":
+            configure_ramp_sweep(
+                **common,
+                symmetry_percent=50,
+            )
+        else:
+            configure_triangle_sweep(**common)
 
     assert factory.calls == []
     assert manager.opened_resources == []

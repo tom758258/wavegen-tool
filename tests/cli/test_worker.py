@@ -189,6 +189,41 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
             "simulate",
         ),
         (
+            "configure_square_sweep",
+            {
+                "start_frequency_hz": 1000,
+                "stop_frequency_hz": 30000,
+                "spacing": "linear",
+                "sweep_time_s": 1,
+                "amplitude_vpp": 0.1,
+                "duty_cycle_percent": 25,
+            },
+            "simulate",
+        ),
+        (
+            "configure_ramp_sweep",
+            {
+                "start_frequency_hz": 10000,
+                "stop_frequency_hz": 1000,
+                "spacing": "logarithmic",
+                "sweep_time_s": 2,
+                "amplitude_vpp": 0.1,
+                "symmetry_percent": 40,
+            },
+            "simulate",
+        ),
+        (
+            "configure_triangle_sweep",
+            {
+                "start_frequency_hz": 200000,
+                "stop_frequency_hz": 1000,
+                "spacing": "logarithmic",
+                "sweep_time_s": 2,
+                "amplitude_vpp": 0.1,
+            },
+            "simulate",
+        ),
+        (
             "configure-square",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1},
             "simulate",
@@ -228,6 +263,41 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
         ("output", {"enabled": True, "confirm_output": True}, "simulate"),
         ("configure-sine", _sine_arguments(), "dry_run"),
         (
+            "configure_square_sweep",
+            {
+                "start_frequency_hz": 1000,
+                "stop_frequency_hz": 30000,
+                "spacing": "linear",
+                "sweep_time_s": 1,
+                "amplitude_vpp": 0.1,
+                "duty_cycle_percent": 25,
+            },
+            "dry_run",
+        ),
+        (
+            "configure_ramp_sweep",
+            {
+                "start_frequency_hz": 10000,
+                "stop_frequency_hz": 1000,
+                "spacing": "logarithmic",
+                "sweep_time_s": 2,
+                "amplitude_vpp": 0.1,
+                "symmetry_percent": 40,
+            },
+            "dry_run",
+        ),
+        (
+            "configure_triangle_sweep",
+            {
+                "start_frequency_hz": 200000,
+                "stop_frequency_hz": 1000,
+                "spacing": "logarithmic",
+                "sweep_time_s": 2,
+                "amplitude_vpp": 0.1,
+            },
+            "dry_run",
+        ),
+        (
             "configure-triangle",
             {"frequency_hz": 1000, "amplitude_vpp": 0.1},
             "dry_run",
@@ -256,6 +326,25 @@ def test_worker_command_execution_mapping(
         assert runtime.simulator_state is None
         return
 
+    adapter_calls = []
+    if command in {
+        "configure_square_sweep",
+        "configure_ramp_sweep",
+        "configure_triangle_sweep",
+    }:
+        adapter_function_name = (
+            command
+            if request_mode == "simulate"
+            else command.replace("configure_", "dry_run_", 1)
+        )
+        real_adapter = getattr(worker_module, adapter_function_name)
+
+        def spy_adapter(*args, **kwargs):
+            adapter_calls.append((args, kwargs))
+            return real_adapter(*args, **kwargs)
+
+        monkeypatch.setattr(worker_module, adapter_function_name, spy_adapter)
+
     runtime = WorkerRuntime(_worker_config())
     result = runtime._execute_command(
         _admitted_job(command, arguments, mode=request_mode)
@@ -269,6 +358,24 @@ def test_worker_command_execution_mapping(
     if command == "configure-sine" and "high_level_v" in arguments:
         assert result.amplitude_vpp == 3.3
         assert result.offset_v == 1.65
+    if command in {
+        "configure_square_sweep",
+        "configure_ramp_sweep",
+        "configure_triangle_sweep",
+    }:
+        assert adapter_calls
+        assert result.spacing == arguments["spacing"]
+        assert result.trigger_source == "immediate"
+        if command == "configure_square_sweep":
+            assert result.duty_cycle_percent == 25.0
+            assert adapter_calls[0][1]["duty_cycle_percent"] == 25
+        elif command == "configure_ramp_sweep":
+            assert result.symmetry_percent == 40.0
+            assert adapter_calls[0][1]["symmetry_percent"] == 40
+        if request_mode == "simulate":
+            assert runtime.simulator_state is not None
+            assert runtime.simulator_state.frequency_mode == "SWEep"
+            assert runtime.simulator_state.output_enabled is False
     if command == "configure_sine_sweep":
         assert result.spacing == "linear"
         assert result.trigger_source == "immediate"

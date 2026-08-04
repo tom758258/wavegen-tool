@@ -34,19 +34,25 @@ from wavegen_tool_core import (
     configure_prbs,
     configure_pulse,
     configure_ramp,
+    configure_ramp_sweep,
     configure_sine,
     configure_sine_sweep,
     configure_square,
+    configure_square_sweep,
     configure_triangle,
+    configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
+    dry_run_ramp_sweep,
     dry_run_sine,
     dry_run_sine_sweep,
     dry_run_square,
+    dry_run_square_sweep,
     dry_run_triangle,
+    dry_run_triangle_sweep,
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
@@ -409,6 +415,250 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target model for dry-run (default: keysight-33521b).",
     )
     sine_sweep_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    square_sweep_parser = subparsers.add_parser(
+        "configure-square-sweep",
+        help="Configure a validated Channel 1 square frequency sweep with output off.",
+    )
+    _add_simulate_argument(square_sweep_parser)
+    square_sweep_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    square_sweep_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    square_sweep_parser.add_argument(
+        "--start-frequency-hz",
+        required=True,
+        help="Square sweep start frequency in Hz.",
+    )
+    square_sweep_parser.add_argument(
+        "--stop-frequency-hz",
+        required=True,
+        help="Square sweep stop frequency in Hz.",
+    )
+    square_sweep_parser.add_argument(
+        "--spacing",
+        required=True,
+        help="Square sweep spacing: linear or logarithmic.",
+    )
+    square_sweep_parser.add_argument(
+        "--sweep-time-s",
+        required=True,
+        help="Time to sweep from start to stop in seconds.",
+    )
+    square_sweep_parser.add_argument(
+        "--hold-time-s",
+        default=0,
+        help="Time to hold at the stop frequency in seconds (default: 0).",
+    )
+    square_sweep_parser.add_argument(
+        "--return-time-s",
+        default=0,
+        help="Time to return to the start frequency in seconds (default: 0).",
+    )
+    _add_voltage_input_arguments(
+        square_sweep_parser,
+        amplitude_help="Square sweep amplitude in Vpp.",
+    )
+    square_sweep_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    square_sweep_parser.add_argument(
+        "--duty-cycle-percent",
+        default="50",
+        help="Square duty cycle percentage (default: 50).",
+    )
+    square_sweep_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    square_sweep_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    square_sweep_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
+    )
+    square_sweep_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    ramp_sweep_parser = subparsers.add_parser(
+        "configure-ramp-sweep",
+        help="Configure a validated Channel 1 ramp frequency sweep with output off.",
+    )
+    _add_simulate_argument(ramp_sweep_parser)
+    ramp_sweep_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    ramp_sweep_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    ramp_sweep_parser.add_argument(
+        "--start-frequency-hz",
+        required=True,
+        help="Ramp sweep start frequency in Hz.",
+    )
+    ramp_sweep_parser.add_argument(
+        "--stop-frequency-hz",
+        required=True,
+        help="Ramp sweep stop frequency in Hz.",
+    )
+    ramp_sweep_parser.add_argument(
+        "--spacing",
+        required=True,
+        help="Ramp sweep spacing: linear or logarithmic.",
+    )
+    ramp_sweep_parser.add_argument(
+        "--sweep-time-s",
+        required=True,
+        help="Time to sweep from start to stop in seconds.",
+    )
+    ramp_sweep_parser.add_argument(
+        "--hold-time-s",
+        default=0,
+        help="Time to hold at the stop frequency in seconds (default: 0).",
+    )
+    ramp_sweep_parser.add_argument(
+        "--return-time-s",
+        default=0,
+        help="Time to return to the start frequency in seconds (default: 0).",
+    )
+    _add_voltage_input_arguments(
+        ramp_sweep_parser,
+        amplitude_help="Ramp sweep amplitude in Vpp.",
+    )
+    ramp_sweep_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    ramp_sweep_parser.add_argument(
+        "--symmetry-percent",
+        default="100",
+        help="Ramp symmetry percentage (default: 100).",
+    )
+    ramp_sweep_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    ramp_sweep_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    ramp_sweep_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
+    )
+    ramp_sweep_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+    triangle_sweep_parser = subparsers.add_parser(
+        "configure-triangle-sweep",
+        help="Configure a validated Channel 1 triangle frequency sweep with output off.",
+    )
+    _add_simulate_argument(triangle_sweep_parser)
+    triangle_sweep_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    triangle_sweep_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    triangle_sweep_parser.add_argument(
+        "--start-frequency-hz",
+        required=True,
+        help="Triangle sweep start frequency in Hz.",
+    )
+    triangle_sweep_parser.add_argument(
+        "--stop-frequency-hz",
+        required=True,
+        help="Triangle sweep stop frequency in Hz.",
+    )
+    triangle_sweep_parser.add_argument(
+        "--spacing",
+        required=True,
+        help="Triangle sweep spacing: linear or logarithmic.",
+    )
+    triangle_sweep_parser.add_argument(
+        "--sweep-time-s",
+        required=True,
+        help="Time to sweep from start to stop in seconds.",
+    )
+    triangle_sweep_parser.add_argument(
+        "--hold-time-s",
+        default=0,
+        help="Time to hold at the stop frequency in seconds (default: 0).",
+    )
+    triangle_sweep_parser.add_argument(
+        "--return-time-s",
+        default=0,
+        help="Time to return to the start frequency in seconds (default: 0).",
+    )
+    _add_voltage_input_arguments(
+        triangle_sweep_parser,
+        amplitude_help="Triangle sweep amplitude in Vpp.",
+    )
+    triangle_sweep_parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    triangle_sweep_parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    triangle_sweep_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    triangle_sweep_parser.add_argument(
+        "--model",
+        choices=("keysight-33521b",),
+        default="keysight-33521b",
+        help="Target model for dry-run (default: keysight-33521b).",
+    )
+    triangle_sweep_parser.add_argument(
         "--json",
         action="store_true",
         dest="json_output",
@@ -980,6 +1230,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     waveform_commands = {
         "configure-sine",
         "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -1017,6 +1270,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_sine(args)
     if args.command == "configure-sine-sweep":
         return _run_configure_sine_sweep(args)
+    if args.command == "configure-square-sweep":
+        return _run_configure_square_sweep(args)
+    if args.command == "configure-ramp-sweep":
+        return _run_configure_ramp_sweep(args)
+    if args.command == "configure-triangle-sweep":
+        return _run_configure_triangle_sweep(args)
     if args.command == "configure-square":
         return _run_configure_square(args)
     if args.command == "configure-ramp":
@@ -1341,6 +1600,244 @@ def _run_sine_sweep_dry_run(args: argparse.Namespace) -> int:
         )
     else:
         print(_human_sine_sweep_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_configure_square_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_square_sweep_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Square",
+        lambda amplitude, offset: configure_square_sweep(
+            resource,
+            args.start_frequency_hz,
+            args.stop_frequency_hz,
+            args.spacing,
+            args.sweep_time_s,
+            amplitude,
+            offset,
+            args.hold_time_s,
+            args.return_time_s,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            duty_cycle_percent=args.duty_cycle_percent,
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_square_sweep_dry_run(args: argparse.Namespace) -> int:
+    try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Square")
+        result = dry_run_square_sweep(
+            args.model,
+            args.start_frequency_hz,
+            args.stop_frequency_hz,
+            args.spacing,
+            args.sweep_time_s,
+            amplitude,
+            offset,
+            args.hold_time_s,
+            args.return_time_s,
+            args.load,
+            args.phase_deg,
+            duty_cycle_percent=args.duty_cycle_percent,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _square_sweep_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _square_sweep_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _square_sweep_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_square_sweep_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_ramp_sweep_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Ramp",
+        lambda amplitude, offset: configure_ramp_sweep(
+            resource,
+            args.start_frequency_hz,
+            args.stop_frequency_hz,
+            args.spacing,
+            args.sweep_time_s,
+            amplitude,
+            offset,
+            args.hold_time_s,
+            args.return_time_s,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            symmetry_percent=args.symmetry_percent,
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_ramp_sweep_dry_run(args: argparse.Namespace) -> int:
+    try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Ramp")
+        result = dry_run_ramp_sweep(
+            args.model,
+            args.start_frequency_hz,
+            args.stop_frequency_hz,
+            args.spacing,
+            args.sweep_time_s,
+            amplitude,
+            offset,
+            args.hold_time_s,
+            args.return_time_s,
+            args.load,
+            args.phase_deg,
+            symmetry_percent=args.symmetry_percent,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _ramp_sweep_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _ramp_sweep_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _ramp_sweep_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_ramp_sweep_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_triangle_sweep_dry_run(args)
+    resource, factory = (
+        _simulated_target() if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Triangle",
+        lambda amplitude, offset: configure_triangle_sweep(
+            resource,
+            args.start_frequency_hz,
+            args.stop_frequency_hz,
+            args.spacing,
+            args.sweep_time_s,
+            amplitude,
+            offset,
+            args.hold_time_s,
+            args.return_time_s,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
+    try:
+        amplitude, offset = _resolve_cli_voltage_inputs(args, "Triangle")
+        result = dry_run_triangle_sweep(
+            args.model,
+            args.start_frequency_hz,
+            args.stop_frequency_hz,
+            args.spacing,
+            args.sweep_time_s,
+            amplitude,
+            offset,
+            args.hold_time_s,
+            args.return_time_s,
+            args.load,
+            args.phase_deg,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _triangle_sweep_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _triangle_sweep_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _triangle_sweep_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_triangle_sweep_dry_run_success(result))
     return int(ExitCode.SUCCESS)
 
 
@@ -2133,7 +2630,12 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "output_state": result.output_state,
         "error": None,
     }
-    if action == "configure-sine-sweep":
+    if action in {
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
+    }:
         payload.update(
             start_frequency_hz=result.start_frequency_hz,
             stop_frequency_hz=result.stop_frequency_hz,
@@ -2147,6 +2649,10 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             phase_deg=result.phase_deg,
             load=result.load,
         )
+    if action == "configure-square-sweep":
+        payload["duty_cycle_percent"] = result.duty_cycle_percent
+    if action == "configure-ramp-sweep":
+        payload["symmetry_percent"] = result.symmetry_percent
     if action in {
         "configure-sine",
         "configure-square",
@@ -2271,6 +2777,137 @@ def _sine_sweep_dry_run_internal_error_payload() -> dict[str, object]:
     return {
         "success": False,
         "action": "configure-sine-sweep",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _square_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-square-sweep",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "start_frequency_hz": result.start_frequency_hz,
+        "stop_frequency_hz": result.stop_frequency_hz,
+        "spacing": result.spacing,
+        "sweep_time_s": result.sweep_time_s,
+        "hold_time_s": result.hold_time_s,
+        "return_time_s": result.return_time_s,
+        "trigger_source": result.trigger_source,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
+        "duty_cycle_percent": result.duty_cycle_percent,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _square_sweep_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-square-sweep",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _square_sweep_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-square-sweep",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _ramp_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-ramp-sweep",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "start_frequency_hz": result.start_frequency_hz,
+        "stop_frequency_hz": result.stop_frequency_hz,
+        "spacing": result.spacing,
+        "sweep_time_s": result.sweep_time_s,
+        "hold_time_s": result.hold_time_s,
+        "return_time_s": result.return_time_s,
+        "trigger_source": result.trigger_source,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
+        "symmetry_percent": result.symmetry_percent,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _ramp_sweep_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-ramp-sweep",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _ramp_sweep_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-ramp-sweep",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _triangle_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-triangle-sweep",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "start_frequency_hz": result.start_frequency_hz,
+        "stop_frequency_hz": result.stop_frequency_hz,
+        "spacing": result.spacing,
+        "sweep_time_s": result.sweep_time_s,
+        "hold_time_s": result.hold_time_s,
+        "return_time_s": result.return_time_s,
+        "trigger_source": result.trigger_source,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _triangle_sweep_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-triangle-sweep",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _triangle_sweep_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-triangle-sweep",
         "mode": "dry-run",
         "error": "internal_error: unexpected internal failure",
     }
@@ -2730,6 +3367,12 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = "Channel 1 sine waveform configured with output off."
     elif action == "configure-sine-sweep":
         heading = "Channel 1 sine frequency sweep configured with output off."
+    elif action == "configure-square-sweep":
+        heading = "Channel 1 square frequency sweep configured with output off."
+    elif action == "configure-ramp-sweep":
+        heading = "Channel 1 ramp frequency sweep configured with output off."
+    elif action == "configure-triangle-sweep":
+        heading = "Channel 1 triangle frequency sweep configured with output off."
     elif action == "configure-square":
         heading = "Channel 1 square waveform configured with output off."
     elif action == "configure-ramp":
@@ -2757,6 +3400,9 @@ def _human_control_success(action: str, result: Any) -> str:
     if action in {
         "configure-sine",
         "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -2775,6 +3421,33 @@ def _human_control_success(action: str, result: Any) -> str:
                 f"Trigger source: {result.trigger_source}",
             )
         )
+    if action in {
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
+    }:
+        lines.extend(
+            (
+                f"Start frequency (Hz): {result.start_frequency_hz}",
+                f"Stop frequency (Hz): {result.stop_frequency_hz}",
+                f"Spacing: {result.spacing}",
+                f"Sweep time (seconds): {result.sweep_time_s}",
+                f"Hold time (seconds): {result.hold_time_s}",
+                f"Return time (seconds): {result.return_time_s}",
+                f"Trigger source: {result.trigger_source}",
+                f"Amplitude (Vpp): {result.amplitude_vpp}",
+                f"Offset (V): {result.offset_v}",
+                f"Load: {result.load}",
+            )
+        )
+        if action == "configure-square-sweep":
+            lines.append(
+                f"Duty cycle (percent): {result.duty_cycle_percent}"
+            )
+        elif action == "configure-ramp-sweep":
+            lines.append(
+                f"Symmetry (percent): {result.symmetry_percent}"
+            )
     if action == "configure-pulse":
         if result.edge_time_s is not None:
             lines.append(f"Edge time (seconds): {result.edge_time_s}")
@@ -2824,6 +3497,61 @@ def _human_sine_sweep_dry_run_success(result: Any) -> str:
             commands,
         )
     )
+
+
+def _human_frequency_sweep_dry_run_success(
+    result: Any,
+    waveform: str,
+    specific_line: str | None = None,
+) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    lines = [
+        f"Channel 1 {waveform} sweep dry-run completed; no VISA I/O was performed.",
+        f"Target model: {result.model}",
+        f"Canonical model ID: {result.canonical_model_id}",
+        "Executed: no",
+        f"Start frequency (Hz): {result.start_frequency_hz}",
+        f"Stop frequency (Hz): {result.stop_frequency_hz}",
+        f"Spacing: {result.spacing}",
+        f"Sweep time (seconds): {result.sweep_time_s}",
+        f"Hold time (seconds): {result.hold_time_s}",
+        f"Return time (seconds): {result.return_time_s}",
+        f"Trigger source: {result.trigger_source}",
+        f"Amplitude (Vpp): {result.amplitude_vpp}",
+        f"Offset (V): {result.offset_v}",
+        f"Phase (degrees): {result.phase_deg}",
+        f"Load: {result.load}",
+    ]
+    if specific_line is not None:
+        lines.append(specific_line)
+    lines.extend(
+        (
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+    return "\n".join(lines)
+
+
+def _human_square_sweep_dry_run_success(result: Any) -> str:
+    return _human_frequency_sweep_dry_run_success(
+        result,
+        "square",
+        f"Duty cycle (percent): {result.duty_cycle_percent}",
+    )
+
+
+def _human_ramp_sweep_dry_run_success(result: Any) -> str:
+    return _human_frequency_sweep_dry_run_success(
+        result,
+        "ramp",
+        f"Symmetry (percent): {result.symmetry_percent}",
+    )
+
+
+def _human_triangle_sweep_dry_run_success(result: Any) -> str:
+    return _human_frequency_sweep_dry_run_success(result, "triangle")
 
 
 def _human_square_dry_run_success(result: Any) -> str:

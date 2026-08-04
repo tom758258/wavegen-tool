@@ -4,8 +4,9 @@ Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. The
 current milestone supports identification, read-only Channel 1 status, bounded
 instrument error-queue reads, and basic Channel 1
-sine/square/ramp/triangle/pulse/DC/noise/PRBS/output control and sine frequency
-sweep configuration for the Keysight or Agilent 33521B.
+sine/square/ramp/triangle/pulse/DC/noise/PRBS/output control and sine, square,
+ramp, and triangle frequency sweep configuration for the Keysight or Agilent
+33521B.
 
 ## Current Scope
 
@@ -22,6 +23,8 @@ sweep configuration for the Keysight or Agilent 33521B.
 - Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
 - Hardware-unvalidated, parameter-validated Channel 1 sine linear and logarithmic
   frequency sweep configuration with Immediate trigger
+- Hardware-unvalidated, parameter-validated Channel 1 square, ramp, and triangle
+  linear and logarithmic frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
 - Hardware-unvalidated, parameter-validated Channel 1 DC voltage configuration
 - Hardware-unvalidated, parameter-validated Channel 1 noise configuration
@@ -47,8 +50,9 @@ claim that every live backend/transport scope or control feature is
 hardware-validated. Identification has been hardware-validated against an
 Agilent Technologies 33521B through system VISA over USB. Live-only discovery
 has also been validated with USB and ASRL resources. Sine, square, ramp,
-triangle, pulse, DC, noise, PRBS, and sine sweep configuration, output control, status
-readback, and error queue reads have not yet been hardware-validated.
+triangle, pulse, DC, noise, PRBS, and frequency sweep configuration, output
+control, status readback, and error queue reads have not yet been
+hardware-validated.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -69,7 +73,8 @@ reserved WebUI import packages.
 ## Stateful Simulator
 
 The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
-all eight waveform configuration commands, the sine sweep command, and explicit
+all eight waveform configuration commands, the sine, square, ramp, and triangle
+sweep commands, and explicit
 output control for one
 simulated Keysight 33521B Channel 1. It uses the fixed resource
 `USB0::SIM::33521B::INSTR` and never creates a real VISA ResourceManager, runs
@@ -414,7 +419,8 @@ uv run wavegen-tool configure-sine `
   --load 50
 ```
 
-Dry-run supports sine, square, ramp, triangle, pulse, DC, noise, and PRBS configuration.
+Dry-run supports sine, square, ramp, triangle, pulse, DC, noise, PRBS, and
+square/ramp/triangle frequency sweep configuration.
 Each dry-run uses the same Core parameter normalization, waveform-specific
 validation, and SCPI command planning as its live command, but does not create
 a ResourceManager, open a session, query, or write. The command list is only a
@@ -448,6 +454,41 @@ The dry-run previews the start/stop, spacing, sweep/hold/return time, Immediate
 trigger, and sweep-mode SCPI commands without VISA I/O.
 Normal sine, square, ramp, triangle, and pulse configuration explicitly restores
 CW frequency mode after a sweep while leaving output off.
+
+## Configure Channel 1 Square, Ramp, and Triangle Frequency Sweeps
+
+The `configure-square-sweep`, `configure-ramp-sweep`, and
+`configure-triangle-sweep` commands support linear or logarithmic spacing,
+separate start and stop frequencies, sweep time, hold time, and return time.
+They use the Immediate trigger source only, leave Channel 1 output off, and are
+hardware-unvalidated.
+
+Square sweeps accept `--duty-cycle-percent`; its frequency-dependent limit is
+validated at the higher endpoint of the complete sweep. Ramp sweeps accept
+`--symmetry-percent` from 0% through 100%. Triangle sweeps have no additional
+waveform-specific input. The carrier frequency command is set to the requested
+start frequency, including for downward sweeps.
+
+Preview one representative square sweep without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-square-sweep `
+  --dry-run `
+  --model keysight-33521b `
+  --start-frequency-hz 1000 `
+  --stop-frequency-hz 30000 `
+  --spacing logarithmic `
+  --sweep-time-s 2 `
+  --hold-time-s 0 `
+  --return-time-s 0 `
+  --amplitude-vpp 0.1 `
+  --duty-cycle-percent 50 `
+  --load 50
+```
+
+The dry-run uses the same Core validation and ordered SCPI planning as live
+configuration. It does not create a ResourceManager, open a session, query, or
+write. Live use continues to require an explicit VISA resource.
 
 ## Configure a Channel 1 Square Wave
 
@@ -826,8 +867,10 @@ The `status` command resolves the exact manufacturer/model identity before its
 read-only Channel 1 queries. It does not write, reset, clear, inspect the error
 queue, or change output state.
 
-`configure-sine`, `configure-square`, `configure-ramp`, `configure-triangle`,
-`configure-pulse`, `configure-dc`, `configure-noise`, and `configure-prbs`
+`configure-sine`, `configure-sine-sweep`, `configure-square-sweep`,
+`configure-ramp-sweep`, `configure-triangle-sweep`, `configure-square`,
+`configure-ramp`, `configure-triangle`, `configure-pulse`, `configure-dc`,
+`configure-noise`, and `configure-prbs`
 first turn Channel 1 off and leave it off after configuration. They cannot
 enable output. The `output` command changes only the Channel 1 output state
 and does not reconfigure or reset the instrument.
@@ -854,6 +897,9 @@ uv run wavegen-tool identify --help
 uv run wavegen-tool status --help
 uv run wavegen-tool configure-sine --help
 uv run wavegen-tool configure-sine-sweep --help
+uv run wavegen-tool configure-square-sweep --help
+uv run wavegen-tool configure-ramp-sweep --help
+uv run wavegen-tool configure-triangle-sweep --help
 uv run wavegen-tool configure-square --help
 uv run wavegen-tool configure-ramp --help
 uv run wavegen-tool configure-triangle --help

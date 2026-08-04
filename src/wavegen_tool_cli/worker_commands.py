@@ -14,10 +14,13 @@ from wavegen_tool_core.visa import (
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
+    dry_run_ramp_sweep,
     dry_run_sine,
     dry_run_sine_sweep,
     dry_run_square,
+    dry_run_square_sweep,
     dry_run_triangle,
+    dry_run_triangle_sweep,
 )
 
 __all__ = [
@@ -62,6 +65,9 @@ _SUPPORTED_COMMANDS = frozenset(
         "read-errors",
         "configure-sine",
         "configure_sine_sweep",
+        "configure_square_sweep",
+        "configure_ramp_sweep",
+        "configure_triangle_sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -76,6 +82,9 @@ _CONFIGURE_COMMANDS = frozenset(
     {
         "configure-sine",
         "configure_sine_sweep",
+        "configure_square_sweep",
+        "configure_ramp_sweep",
+        "configure_triangle_sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -103,6 +112,56 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
     "configure_sine_sweep": frozenset(
+        {
+            "start_frequency_hz",
+            "stop_frequency_hz",
+            "spacing",
+            "sweep_time_s",
+            "hold_time_s",
+            "return_time_s",
+            "amplitude_vpp",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "phase_deg",
+            "load",
+        }
+    ),
+    "configure_square_sweep": frozenset(
+        {
+            "start_frequency_hz",
+            "stop_frequency_hz",
+            "spacing",
+            "sweep_time_s",
+            "hold_time_s",
+            "return_time_s",
+            "amplitude_vpp",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "phase_deg",
+            "duty_cycle_percent",
+            "load",
+        }
+    ),
+    "configure_ramp_sweep": frozenset(
+        {
+            "start_frequency_hz",
+            "stop_frequency_hz",
+            "spacing",
+            "sweep_time_s",
+            "hold_time_s",
+            "return_time_s",
+            "amplitude_vpp",
+            "offset_v",
+            "high_level_v",
+            "low_level_v",
+            "phase_deg",
+            "symmetry_percent",
+            "load",
+        }
+    ),
+    "configure_triangle_sweep": frozenset(
         {
             "start_frequency_hz",
             "stop_frequency_hz",
@@ -199,6 +258,15 @@ _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "configure_sine_sweep": frozenset(
         {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
     ),
+    "configure_square_sweep": frozenset(
+        {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
+    ),
+    "configure_ramp_sweep": frozenset(
+        {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
+    ),
+    "configure_triangle_sweep": frozenset(
+        {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
+    ),
     "configure-square": frozenset({"frequency_hz"}),
     "configure-ramp": frozenset({"frequency_hz"}),
     "configure-triangle": frozenset({"frequency_hz"}),
@@ -214,6 +282,26 @@ _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
     "read-errors": {"max_reads": 20},
     "configure-sine": {"phase_deg": 0.0, "load": "50"},
     "configure_sine_sweep": {
+        "hold_time_s": 0,
+        "return_time_s": 0,
+        "phase_deg": 0.0,
+        "load": "50",
+    },
+    "configure_square_sweep": {
+        "hold_time_s": 0,
+        "return_time_s": 0,
+        "phase_deg": 0.0,
+        "duty_cycle_percent": 50,
+        "load": "50",
+    },
+    "configure_ramp_sweep": {
+        "hold_time_s": 0,
+        "return_time_s": 0,
+        "phase_deg": 0.0,
+        "symmetry_percent": 100,
+        "load": "50",
+    },
+    "configure_triangle_sweep": {
         "hold_time_s": 0,
         "return_time_s": 0,
         "phase_deg": 0.0,
@@ -494,6 +582,9 @@ def _validate_live_write_safety(
 _VOLTAGE_WAVEFORMS = {
     "configure-sine": "Sine",
     "configure_sine_sweep": "Sine sweep",
+    "configure_square_sweep": "Square sweep",
+    "configure_ramp_sweep": "Ramp sweep",
+    "configure_triangle_sweep": "Triangle sweep",
     "configure-square": "Square",
     "configure-ramp": "Ramp",
     "configure-triangle": "Triangle",
@@ -579,6 +670,50 @@ def _validate_waveform_arguments(
             )
         elif command == "configure_sine_sweep":
             dry_run_sine_sweep(
+                model_id,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                arguments["phase_deg"],
+            )
+        elif command == "configure_square_sweep":
+            dry_run_square_sweep(
+                model_id,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                arguments["phase_deg"],
+                duty_cycle_percent=arguments["duty_cycle_percent"],
+            )
+        elif command == "configure_ramp_sweep":
+            dry_run_ramp_sweep(
+                model_id,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                arguments["phase_deg"],
+                symmetry_percent=arguments["symmetry_percent"],
+            )
+        elif command == "configure_triangle_sweep":
+            dry_run_triangle_sweep(
                 model_id,
                 arguments["start_frequency_hz"],
                 arguments["stop_frequency_hz"],

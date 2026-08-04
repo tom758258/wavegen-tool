@@ -26,19 +26,25 @@ from wavegen_tool_core import (
     configure_prbs,
     configure_pulse,
     configure_ramp,
+    configure_ramp_sweep,
     configure_sine,
     configure_sine_sweep,
     configure_square,
+    configure_square_sweep,
     configure_triangle,
+    configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
+    dry_run_ramp_sweep,
     dry_run_sine,
     dry_run_sine_sweep,
     dry_run_square,
+    dry_run_square_sweep,
     dry_run_triangle,
+    dry_run_triangle_sweep,
     identify_instrument,
     normalize_backend,
     query_status,
@@ -475,6 +481,56 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 **factory_kwargs,
             )
+        if job.command == "configure_square_sweep":
+            return configure_square_sweep(
+                resource,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                backend,
+                arguments["phase_deg"],
+                duty_cycle_percent=arguments["duty_cycle_percent"],
+                **factory_kwargs,
+            )
+        if job.command == "configure_ramp_sweep":
+            return configure_ramp_sweep(
+                resource,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                backend,
+                arguments["phase_deg"],
+                symmetry_percent=arguments["symmetry_percent"],
+                **factory_kwargs,
+            )
+        if job.command == "configure_triangle_sweep":
+            return configure_triangle_sweep(
+                resource,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                backend,
+                arguments["phase_deg"],
+                **factory_kwargs,
+            )
         if job.command == "configure-square":
             return configure_square(
                 resource,
@@ -582,6 +638,50 @@ class WorkerRuntime:
             )
         if command == "configure_sine_sweep":
             return dry_run_sine_sweep(
+                model,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                arguments["phase_deg"],
+            )
+        if command == "configure_square_sweep":
+            return dry_run_square_sweep(
+                model,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                arguments["phase_deg"],
+                duty_cycle_percent=arguments["duty_cycle_percent"],
+            )
+        if command == "configure_ramp_sweep":
+            return dry_run_ramp_sweep(
+                model,
+                arguments["start_frequency_hz"],
+                arguments["stop_frequency_hz"],
+                arguments["spacing"],
+                arguments["sweep_time_s"],
+                arguments["amplitude_vpp"],
+                arguments["offset_v"],
+                arguments["hold_time_s"],
+                arguments["return_time_s"],
+                arguments["load"],
+                arguments["phase_deg"],
+                symmetry_percent=arguments["symmetry_percent"],
+            )
+        if command == "configure_triangle_sweep":
+            return dry_run_triangle_sweep(
                 model,
                 arguments["start_frequency_hz"],
                 arguments["stop_frequency_hz"],

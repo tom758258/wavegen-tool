@@ -1992,6 +1992,114 @@ def test_read_errors_cli_simulation_json_smoke(capsys):
 
 
 @pytest.mark.parametrize(
+    ("argv", "expected_action", "specific_field", "specific_value"),
+    [
+        (
+            [
+                "configure-square-sweep",
+                "--dry-run",
+                "--model",
+                "keysight-33521b",
+                "--start-frequency-hz",
+                "1000",
+                "--stop-frequency-hz",
+                "30000",
+                "--spacing",
+                "linear",
+                "--sweep-time-s",
+                "1",
+                "--amplitude-vpp",
+                "0.1",
+                "--duty-cycle-percent",
+                "25",
+                "--json",
+            ],
+            "configure-square-sweep",
+            "duty_cycle_percent",
+            25.0,
+        ),
+        (
+            [
+                "configure-ramp-sweep",
+                "--dry-run",
+                "--model",
+                "keysight-33521b",
+                "--start-frequency-hz",
+                "10000",
+                "--stop-frequency-hz",
+                "1000",
+                "--spacing",
+                "logarithmic",
+                "--sweep-time-s",
+                "2",
+                "--amplitude-vpp",
+                "0.1",
+                "--symmetry-percent",
+                "25",
+                "--json",
+            ],
+            "configure-ramp-sweep",
+            "symmetry_percent",
+            25.0,
+        ),
+        (
+            [
+                "configure-triangle-sweep",
+                "--dry-run",
+                "--model",
+                "keysight-33521b",
+                "--start-frequency-hz",
+                "200000",
+                "--stop-frequency-hz",
+                "1000",
+                "--spacing",
+                "logarithmic",
+                "--sweep-time-s",
+                "2",
+                "--amplitude-vpp",
+                "0.1",
+                "--json",
+            ],
+            "configure-triangle-sweep",
+            "spacing",
+            "logarithmic",
+        ),
+    ],
+)
+def test_frequency_sweep_dry_run_cli_json_matrix(
+    monkeypatch,
+    capsys,
+    argv,
+    expected_action,
+    specific_field,
+    specific_value,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(argv)
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.SUCCESS
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["success"] is True
+    assert payload["action"] == expected_action
+    assert payload["mode"] == "dry-run"
+    assert payload["model"] == "33521B"
+    assert payload["canonical_model_id"] == "keysight-33521b"
+    assert payload["trigger_source"] == "immediate"
+    assert payload["output_state"] == "off"
+    assert payload[specific_field] == specific_value
+    assert payload["commands"][0] == "OUTPut1 OFF"
+    assert payload["commands"][-1] == "SOURce1:FREQuency:MODE SWEep"
+    assert "SOURce1:FREQuency:MODE CW" not in payload["commands"]
+    assert payload["executed"] is False
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize(
     ("argv", "expected_action", "field", "expected"),
     [
         (
@@ -2053,6 +2161,70 @@ def test_read_errors_cli_simulation_json_smoke(capsys):
             "configure-sine-sweep",
             "spacing",
             "linear",
+        ),
+        (
+            [
+                "configure-square-sweep",
+                "--simulate",
+                "--start-frequency-hz",
+                "1000",
+                "--stop-frequency-hz",
+                "30000",
+                "--spacing",
+                "linear",
+                "--sweep-time-s",
+                "1",
+                "--amplitude-vpp",
+                "0.1",
+                "--duty-cycle-percent",
+                "25",
+                "--json",
+            ],
+            "configure-square-sweep",
+            "duty_cycle_percent",
+            25.0,
+        ),
+        (
+            [
+                "configure-ramp-sweep",
+                "--simulate",
+                "--start-frequency-hz",
+                "10000",
+                "--stop-frequency-hz",
+                "1000",
+                "--spacing",
+                "logarithmic",
+                "--sweep-time-s",
+                "2",
+                "--amplitude-vpp",
+                "0.1",
+                "--symmetry-percent",
+                "25",
+                "--json",
+            ],
+            "configure-ramp-sweep",
+            "symmetry_percent",
+            25.0,
+        ),
+        (
+            [
+                "configure-triangle-sweep",
+                "--simulate",
+                "--start-frequency-hz",
+                "200000",
+                "--stop-frequency-hz",
+                "1000",
+                "--spacing",
+                "logarithmic",
+                "--sweep-time-s",
+                "2",
+                "--amplitude-vpp",
+                "0.1",
+                "--json",
+            ],
+            "configure-triangle-sweep",
+            "spacing",
+            "logarithmic",
         ),
         (
             [
