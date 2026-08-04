@@ -17,21 +17,21 @@ ramp, and triangle frequency sweep configuration for the Keysight or Agilent
 - Hardware-free Channel 1 dry-run preview for all eight waveform configurations
 - Stateful, hardware-free Keysight 33521B Channel 1 simulator for all public CLI
   commands
-- Hardware-unvalidated, parameter-validated Channel 1 square configuration
-- Hardware-unvalidated, parameter-validated Channel 1 ramp configuration
-- Hardware-unvalidated, parameter-validated Channel 1 triangle configuration
-- Hardware-unvalidated, parameter-validated Channel 1 pulse configuration
-- Hardware-unvalidated, parameter-validated Channel 1 sine linear and logarithmic
-  frequency sweep configuration with Immediate trigger
+- Parameter-validated Channel 1 square configuration
+- Parameter-validated Channel 1 ramp configuration
+- Parameter-validated Channel 1 triangle configuration
+- Parameter-validated Channel 1 pulse configuration
+- Parameter-validated Channel 1 sine linear and logarithmic frequency sweep
+  configuration with Immediate trigger
 - Hardware-unvalidated, parameter-validated Channel 1 square, ramp, and triangle
   linear and logarithmic frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
-- Hardware-unvalidated, parameter-validated Channel 1 DC voltage configuration
-- Hardware-unvalidated, parameter-validated Channel 1 noise configuration
-- Hardware-unvalidated, parameter-validated Channel 1 PRBS configuration
+- Parameter-validated Channel 1 DC voltage configuration
+- Parameter-validated Channel 1 noise configuration
+- Parameter-validated Channel 1 PRBS configuration
 - Explicit Channel 1 output on/off control
-- Hardware-unvalidated, read-only Channel 1 status query
-- Hardware-unvalidated, bounded instrument error queue reads
+- Read-only Channel 1 status query
+- Bounded instrument error queue reads
 - System VISA explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
 - The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
@@ -45,14 +45,26 @@ scope. Other Trueform models are not treated as supported.
 These are the only recognized manufacturer/model pairs. Matching ignores case
 and ordinary whitespace differences but does not use prefix, substring, or
 fuzzy matching. A successful identify result preserves the manufacturer
-reported by the instrument while normalizing the model to `33521B`. It does not
-claim that every live backend/transport scope or control feature is
-hardware-validated. Identification has been hardware-validated against an
-Agilent Technologies 33521B through system VISA over USB. Live-only discovery
-has also been validated with USB and ASRL resources. Sine, square, ramp,
-triangle, pulse, DC, noise, PRBS, and frequency sweep configuration, output
-control, status readback, and error queue reads have not yet been
-hardware-validated.
+reported by the instrument while normalizing the model to `33521B`. The Local
+records document live control/readback path validation against an Agilent
+Technologies 33521B through System VISA over USB for exact identification,
+read-only Channel 1 status, bounded public error-queue reads, explicit output
+on/off state control, sine, square, ramp, triangle, Pulse, DC, noise, and PRBS
+configuration, phase writes with bounded direct `SOURce1:PHASe?` readback,
+High/Low input canonicalization and its corresponding control path, and
+linear/logarithmic sine sweep configuration with Immediate trigger and recorded
+sweep-to-CW recovery. These paths cover the tested commands, applicable
+readback, error-queue checks, and output-off safety; they do not claim
+connector-level amplitude, frequency, phase, timing, jitter, distortion,
+bandwidth, calibration, or waveform quality.
+
+Raw resource listing and live-only connectivity checks remain documented
+capabilities. The Local records reviewed here do not establish a separate
+USB/ASRL discovery hardware-validation claim. The newly added
+`configure-square-sweep`, `configure-ramp-sweep`, and
+`configure-triangle-sweep` commands remain hardware-unvalidated; their Core,
+CLI, Worker, dry-run, simulator, and automated-test behavior is not physical-
+instrument validation.
 
 Other waveform types, automatic resource scanning, WebUI features, and release
 executables are not implemented. Identification sends only `*IDN?`; it does
@@ -388,7 +400,9 @@ session, rejects anything except an exactly recognized 33521B, turns Channel 1
 output off, explicitly sets the angle unit to degrees, and applies the settings.
 It never turns the output on. Sine, square, ramp, triangle, and pulse accept
 `--phase-deg`, defaulting to 0 degrees and allowing -360 through +360 degrees.
-Phase configuration has not yet been hardware-validated.
+The phase write and bounded direct `SOURce1:PHASe?` readback path was validated
+as a live control/readback path for the documented sine, square, ramp,
+triangle, and pulse cases; public `status` does not expose phase.
 
 Sine, square, ramp, triangle, pulse, noise, and PRBS configuration accept either
 `--amplitude-vpp` with optional `--offset-v`, or a complete
@@ -432,9 +446,9 @@ require an explicit VISA resource, and configuration leaves output off.
 ## Configure a Channel 1 Sine Frequency Sweep
 
 Sine sweeps support linear or logarithmic spacing, separate start and stop
-frequencies, sweep time, hold time, and return time. This Part uses the
-Immediate trigger source only. Sweep configuration is hardware-unvalidated and
-leaves output off:
+frequencies, sweep time, hold time, and return time. The documented sine sweep
+command path was validated as a live control/readback path on the tested setup.
+This Part uses the Immediate trigger source only and leaves output off:
 
 ```powershell
 uv run wavegen-tool configure-sine-sweep `
@@ -451,7 +465,8 @@ uv run wavegen-tool configure-sine-sweep `
 ```
 
 The dry-run previews the start/stop, spacing, sweep/hold/return time, Immediate
-trigger, and sweep-mode SCPI commands without VISA I/O.
+trigger, and sweep-mode SCPI commands without VISA I/O. The recorded live path
+also covered sweep-to-CW recovery.
 Normal sine, square, ramp, triangle, and pulse configuration explicitly restores
 CW frequency mode after a sweep while leaving output off.
 
@@ -460,8 +475,9 @@ CW frequency mode after a sweep while leaving output off.
 The `configure-square-sweep`, `configure-ramp-sweep`, and
 `configure-triangle-sweep` commands support linear or logarithmic spacing,
 separate start and stop frequencies, sweep time, hold time, and return time.
-They use the Immediate trigger source only, leave Channel 1 output off, and are
-hardware-unvalidated.
+They use the Immediate trigger source only, leave Channel 1 output off, and
+remain hardware-unvalidated. Core validation, dry-run, simulator, CLI, Worker,
+and automated tests do not constitute physical-instrument validation.
 
 Square sweeps accept `--duty-cycle-percent`; its frequency-dependent limit is
 validated at the higher endpoint of the complete sweep. Ramp sweeps accept
@@ -514,8 +530,9 @@ the same as for sine configuration above. Square accepts `--phase-deg` with a
 default of 0 degrees and an inclusive range of -360 through +360 degrees.
 
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Square configuration has not yet been
-hardware-validated.
+verify the physically connected load. Square configuration was included in the
+documented live control/readback path validation; this does not claim
+connector-level electrical performance.
 
 Preview the validated square SCPI plan without a VISA resource or instrument:
 
@@ -562,8 +579,9 @@ inclusive range of -360 through +360 degrees.
 The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Ramp configuration has not yet been
-hardware-validated.
+verify the physically connected load. Ramp configuration was included in the
+documented live control/readback path validation; this does not claim
+connector-level electrical performance.
 
 Preview the validated ramp SCPI plan without a VISA resource or instrument:
 
@@ -603,8 +621,10 @@ uv run wavegen-tool configure-triangle `
 Triangle frequency must be from 0.000001 Hz to 200000 Hz. The amplitude,
 offset, and output-load setting limits are the same as for sine and square
 configuration. Triangle configuration uses the instrument's dedicated
-`TRIangle` function and has not yet been hardware-validated. Configuration
-first turns Channel 1 output off and leaves it off; it never enables output.
+`TRIangle` function. Triangle configuration was included in the documented live
+control/readback path validation; this does not claim connector-level
+electrical performance. Configuration first turns Channel 1 output off and
+leaves it off; it never enables output.
 Triangle accepts `--phase-deg` with a default of 0 degrees and an inclusive
 range of -360 through +360 degrees.
 
@@ -674,8 +694,9 @@ output must still be off. If the instrument limit rejects or clips an edge,
 the command fails instead of reporting a false success. Configuration never
 enables output; only an explicit `output --state on` command can do that. The
 load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Independent edge control has not yet
-been hardware-validated.
+verify the physically connected load. Independent edge control was included in
+the documented live control/readback path validation; this does not claim
+connector-level pulse timing or waveform quality.
 
 Preview the pulse plan without a VISA resource:
 
@@ -716,8 +737,9 @@ The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Actual terminal voltage still depends
-on the physically connected load. DC configuration has not yet been
-hardware-validated.
+on the physically connected load. DC configuration was included in the
+documented live control/readback path validation; this does not claim actual
+terminal-voltage accuracy.
 
 Preview the DC plan without a VISA resource:
 
@@ -757,8 +779,9 @@ signal rarely reaches the full peak-to-peak boundary.
 The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Noise configuration has not yet been
-hardware-validated.
+verify the physically connected load. Noise configuration was included in the
+documented live control/readback path validation; its statistical output was
+not electrically characterized.
 
 Preview the noise plan without a VISA resource:
 
@@ -805,8 +828,9 @@ must not exceed 10 V.
 The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. PRBS configuration has not yet been
-hardware-validated.
+verify the physically connected load. PRBS configuration was included in the
+documented live control/readback path validation; this does not claim
+connector-level electrical performance.
 
 Preview the PRBS plan without a VISA resource:
 
