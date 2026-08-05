@@ -258,8 +258,11 @@ uv run wavegen-tool list-resources --live-only --backend "@py"
 A non-empty response confirms connectivity only. It does not establish that
 the resource is a recognized 33521B or authorize the model for later control.
 Live-only output does not display or save serial numbers, firmware, or raw IDN
-responses. Checks do not retry or switch backends. They do not send cleanup,
-remote/local, reset, or any command other than the single `*IDN?`.
+responses. Checks do not retry or switch backends. Raw listing does not open
+instrument sessions or attempt return-to-local. USB + System VISA live-only
+discovery attempts return-to-local before closing each opened USB instrument
+session; TCPIP/LAN, ASRL, simulator, and `@py` live-only checks do not make
+this attempt.
 
 Copy the selected USB or TCPIP resource into a PowerShell environment variable
 for the current session:
@@ -880,16 +883,19 @@ exactly one `*IDN?` query, and closes the VISA session and ResourceManager. Raw
 listing only returns the backend-reported resource strings; it never opens an
 instrument session or sends SCPI. Live-only listing opens only eligible
 candidates and sends each at most one `*IDN?` query with fixed open/session
-timeouts where applicable. It closes the session without clear, remote/local,
-reset, cleanup, diagnostic, or other commands. Control commands validate the
-backend and transport, open only the explicit resource, and resolve the exact
-manufacturer/model identity before any write. They use the same session for
-identification and control, do not retry or switch backends, and never send
-`*RST`. There is no automatic or background resource scan.
+timeouts where applicable. USB + System VISA live-only discovery attempts
+return-to-local before closing each opened USB instrument session; TCPIP/LAN,
+ASRL, simulator, and `@py` live-only discovery do not make this attempt.
+Discovery sends no VISA clear, reset, or diagnostic command. Control commands
+validate the backend and transport, open only the explicit resource, and
+resolve the exact manufacturer/model identity before any write. They use the
+same session for identification and control, do not retry or switch backends,
+and never send `*RST`. There is no automatic or background resource scan.
 
-Live instrument operations on USB with the system VISA backend attempt to return
-the instrument to local before closing the session. Resource listing, dry-run,
-simulator, TCPIP/LAN, and `@py` operations do not make this attempt.
+Live instrument operations and USB + System VISA live-only discovery attempt to
+return the instrument to local before closing the session. Raw resource
+listing, dry-run, simulator, TCPIP/LAN, ASRL, and `@py` operations do not make
+this attempt.
 
 The `status` command resolves the exact manufacturer/model identity before its
 read-only Channel 1 queries. It does not write, reset, clear, inspect the error

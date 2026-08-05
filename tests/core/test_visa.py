@@ -20,6 +20,10 @@ from wavegen_tool_core.errors import (
     WaveformParameterError,
     WaveformVerificationError,
 )
+from wavegen_tool_core.simulator import (
+    SIMULATED_33521B_RESOURCE,
+    SimulatedResourceManager,
+)
 from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
     IDN_QUERY,
@@ -278,6 +282,7 @@ def test_raw_resource_listing_uses_selected_backend_once_and_closes(backend, lib
     assert manager.list_calls == 1
     assert manager.opened_resources == []
     assert manager.session.queries == []
+    assert manager.session.control_ren_calls == []
     assert manager.close_calls == 1
     assert result.backend == backend
     assert result.resources == tuple(ResourceListEntry(resource=item) for item in resources)
@@ -393,7 +398,7 @@ def test_system_live_only_verifies_usb_tcpip_and_asrl_and_skips_other_transports
     assert usb_session.close_calls == 1
     assert asrl_session.control_ren_calls == []
     assert tcpip_session.control_ren_calls == []
-    assert usb_session.control_ren_calls == []
+    assert usb_session.control_ren_calls == [RENLineOperation.address_gtl]
     assert manager.close_calls == 1
     assert result.resources == (
         ResourceListEntry(ASRL_RESOURCE, "Agilent Technologies", "33521B"),
@@ -419,8 +424,119 @@ def test_pyvisa_py_live_only_verifies_tcpip_and_skips_usb():
     assert factory.calls == ["@py"]
     assert manager.opened_resources == [TCPIP_RESOURCE]
     assert tcpip_session.queries == [IDN_QUERY]
+    assert tcpip_session.control_ren_calls == []
     assert tcpip_session.close_calls == 1
     assert result.resources == (ResourceListEntry(TCPIP_RESOURCE),)
+
+
+def test_system_usb_live_only_cleanup_orders_gtl_before_session_and_manager_close():
+    events = []
+    session = FakeSession(events=events)
+    manager = FakeManager(
+        resources=(USB_RESOURCE,),
+        sessions_by_resource={USB_RESOURCE: session},
+        events=events,
+    )
+
+    list_resources(
+        "system",
+        live_only=True,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.control_ren_calls == [RENLineOperation.address_gtl]
+    assert events == [
+        ("query", IDN_QUERY),
+        ("control_ren", RENLineOperation.address_gtl),
+        ("close",),
+        ("manager_close",),
+    ]
+
+
+def test_system_usb_live_only_gtl_failure_closes_session_and_manager():
+    session = FakeSession(control_ren_error=RuntimeError("GTL failed"))
+    manager = FakeManager(
+        resources=(USB_RESOURCE,),
+        sessions_by_resource={USB_RESOURCE: session},
+    )
+
+    with pytest.raises(VisaCleanupError) as error:
+        list_resources(
+            "system",
+            live_only=True,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert "return to local failed" in str(error.value)
+    assert session.control_ren_calls == [RENLineOperation.address_gtl]
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_multiple_usb_live_only_cleanup_errors_preserve_candidate_order():
+    first_resource = "USB0::0x0000::0x0000::MY00000001::INSTR"
+    second_resource = "USB0::0x0000::0x0000::MY00000002::INSTR"
+    events = []
+    first_session = FakeSession(
+        control_ren_error=RuntimeError("first GTL failed"),
+        events=events,
+    )
+    second_session = FakeSession(
+        close_error=RuntimeError("second close failed"),
+        events=events,
+    )
+    manager = FakeManager(
+        resources=(first_resource, second_resource),
+        sessions_by_resource={
+            first_resource: first_session,
+            second_resource: second_session,
+        },
+        events=events,
+    )
+
+    with pytest.raises(VisaCleanupError) as error:
+        list_resources(
+            "system",
+            live_only=True,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert str(error.value) == (
+        "VISA cleanup failed: return to local failed; session close failed."
+    )
+    assert first_session.control_ren_calls == [RENLineOperation.address_gtl]
+    assert second_session.control_ren_calls == [RENLineOperation.address_gtl]
+    assert first_session.close_calls == 1
+    assert second_session.close_calls == 1
+    assert manager.close_calls == 1
+    assert events == [
+        ("query", IDN_QUERY),
+        ("control_ren", RENLineOperation.address_gtl),
+        ("close",),
+        ("query", IDN_QUERY),
+        ("control_ren", RENLineOperation.address_gtl),
+        ("close",),
+        ("manager_close",),
+    ]
+
+
+def test_simulator_live_only_does_not_attempt_gtl():
+    manager = SimulatedResourceManager()
+
+    result = list_resources(
+        "system",
+        live_only=True,
+        resource_manager_factory=lambda _library: manager,
+    )
+
+    assert result.resources == (
+        ResourceListEntry(
+            SIMULATED_33521B_RESOURCE,
+            "KEYSIGHT TECHNOLOGIES",
+            "33521B",
+        ),
+    )
+    assert manager.closed
 
 
 def test_live_only_keeps_parsed_identity_for_any_instrument_and_unknown_for_malformed():

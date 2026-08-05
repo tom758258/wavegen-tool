@@ -834,11 +834,15 @@ def _filter_live_resources(
         except Exception:
             continue
         finally:
-            if session is not None:
-                try:
-                    session.close()
-                except Exception:
-                    cleanup_errors.append("session close failed")
+            cleanup_errors.extend(
+                _close_visa_resources(
+                    session,
+                    manager,
+                    backend=backend_selection.name,
+                    transport=transport,
+                    close_manager=False,
+                )
+            )
 
     return tuple(live_resources), tuple(cleanup_errors)
 
@@ -4215,6 +4219,7 @@ def _close_visa_resources(
     *,
     backend: str,
     transport: str,
+    close_manager: bool = True,
 ) -> tuple[str, ...]:
     errors: list[str] = []
     if session is not None:
@@ -4231,7 +4236,8 @@ def _close_visa_resources(
             session.close()
         except Exception:
             errors.append("session close failed")
-    errors.extend(_close_resource_manager(manager))
+    if close_manager:
+        errors.extend(_close_resource_manager(manager))
     return tuple(errors)
 
 

@@ -22,6 +22,7 @@ class FakeSession:
         self.read_termination = "existing read"
         self.write_termination = "existing write"
         self.queries = []
+        self.control_ren_calls = []
         self.close_calls = 0
 
     def query(self, command):
@@ -42,7 +43,7 @@ class FakeSession:
         raise AssertionError("clear must not be called")
 
     def control_ren(self, mode):
-        raise AssertionError(f"control_ren must not be called: {mode}")
+        self.control_ren_calls.append(mode)
 
     def read_stb(self):
         raise AssertionError("read_stb must not be called")
