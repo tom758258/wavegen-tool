@@ -132,7 +132,7 @@ class UnsupportedInstrumentError(WavegenError):
 
 
 class VisaCleanupError(WavegenError):
-    """A session or ResourceManager could not be closed."""
+    """A VISA cleanup step could not be completed."""
 
     code = "visa_cleanup_error"
 

@@ -1,5 +1,6 @@
 from inspect import signature
 
+from pyvisa.constants import RENLineOperation
 import pytest
 
 import wavegen_tool_core.visa as visa_module
@@ -93,6 +94,8 @@ class FakeSession:
         query_errors_by_command=None,
         write_error=None,
         close_error=None,
+        control_ren_error=None,
+        events=None,
     ):
         self.response = response
         self.query_error = query_error
@@ -100,13 +103,15 @@ class FakeSession:
         self.query_errors_by_command = query_errors_by_command or {}
         self.write_error = write_error
         self.close_error = close_error
+        self.control_ren_error = control_ren_error
         self.timeout = None
         self.baud_rate = 4800
         self.read_termination = "existing read"
         self.write_termination = "existing write"
         self.queries = []
         self.writes = []
-        self.events = []
+        self.events = events if events is not None else []
+        self.control_ren_calls = []
         self.close_calls = 0
 
     def query(self, command):
@@ -120,6 +125,7 @@ class FakeSession:
 
     def close(self):
         self.close_calls += 1
+        self.events.append(("close",))
         if self.close_error is not None:
             raise self.close_error
 
@@ -133,7 +139,10 @@ class FakeSession:
         raise AssertionError("clear must not be called")
 
     def control_ren(self, mode):
-        raise AssertionError(f"control_ren must not be called: {mode}")
+        self.control_ren_calls.append(mode)
+        self.events.append(("control_ren", mode))
+        if self.control_ren_error is not None:
+            raise self.control_ren_error
 
     def read_stb(self):
         raise AssertionError("read_stb must not be called")
@@ -148,6 +157,7 @@ class FakeErrorQueueSession:
         response=VALID_IDN,
         *,
         close_error=None,
+        events=None,
     ):
         self.response = response
         self.error_queue_responses = list(error_queue_responses)
@@ -158,7 +168,8 @@ class FakeErrorQueueSession:
         self.write_termination = "existing write"
         self.queries = []
         self.writes = []
-        self.events = []
+        self.events = events if events is not None else []
+        self.control_ren_calls = []
         self.close_calls = 0
 
     def query(self, command):
@@ -172,6 +183,7 @@ class FakeErrorQueueSession:
 
     def close(self):
         self.close_calls += 1
+        self.events.append(("close",))
         if self.close_error is not None:
             raise self.close_error
 
@@ -183,7 +195,8 @@ class FakeErrorQueueSession:
         raise AssertionError("clear must not be called")
 
     def control_ren(self, mode):
-        raise AssertionError(f"control_ren must not be called: {mode}")
+        self.control_ren_calls.append(mode)
+        self.events.append(("control_ren", mode))
 
     def read_stb(self):
         raise AssertionError("read_stb must not be called")
@@ -200,6 +213,7 @@ class FakeManager:
         open_errors=None,
         open_error=None,
         close_error=None,
+        events=None,
     ):
         self.session = session or FakeSession()
         self.resources = resources
@@ -208,6 +222,7 @@ class FakeManager:
         self.open_errors = open_errors or {}
         self.open_error = open_error
         self.close_error = close_error
+        self.events = events if events is not None else []
         self.list_calls = 0
         self.opened_resources = []
         self.open_calls = []
@@ -230,6 +245,7 @@ class FakeManager:
 
     def close(self):
         self.close_calls += 1
+        self.events.append(("manager_close",))
         if self.close_error is not None:
             raise self.close_error
 
@@ -375,6 +391,9 @@ def test_system_live_only_verifies_usb_tcpip_and_asrl_and_skips_other_transports
     assert asrl_session.close_calls == 1
     assert tcpip_session.close_calls == 1
     assert usb_session.close_calls == 1
+    assert asrl_session.control_ren_calls == []
+    assert tcpip_session.control_ren_calls == []
+    assert usb_session.control_ren_calls == []
     assert manager.close_calls == 1
     assert result.resources == (
         ResourceListEntry(ASRL_RESOURCE, "Agilent Technologies", "33521B"),
@@ -631,6 +650,60 @@ def test_system_backend_lifecycle_queries_once_and_closes():
     assert result.identity.canonical_model_id == "keysight-33521b"
 
 
+def test_system_usb_cleanup_orders_gtl_before_session_and_manager_close():
+    events = []
+    session = FakeSession(events=events)
+    manager = FakeManager(session, events=events)
+
+    identify_instrument(
+        USB_RESOURCE,
+        "system",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.control_ren_calls == [RENLineOperation.address_gtl]
+    assert events == [
+        ("query", IDN_QUERY),
+        ("control_ren", RENLineOperation.address_gtl),
+        ("close",),
+        ("manager_close",),
+    ]
+
+
+def test_gtl_failure_closes_resources_and_reports_cleanup_failure():
+    session = FakeSession(control_ren_error=RuntimeError("GTL failed"))
+    manager = FakeManager(session)
+
+    with pytest.raises(VisaCleanupError) as error:
+        identify_instrument(
+            USB_RESOURCE,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert "return to local failed" in str(error.value)
+    assert session.control_ren_calls == [RENLineOperation.address_gtl]
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
+def test_gtl_failure_does_not_hide_primary_operation_error():
+    session = FakeSession(
+        query_error=TimeoutError("query timed out"),
+        control_ren_error=RuntimeError("GTL failed"),
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(IdnQueryError) as error:
+        identify_instrument(
+            USB_RESOURCE,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert error.value.cleanup_errors == ("return to local failed",)
+    assert session.close_calls == 1
+    assert manager.close_calls == 1
+
+
 def test_system_backend_accepts_tcpip():
     manager = FakeManager()
     factory = RecordingFactory(manager)
@@ -639,6 +712,9 @@ def test_system_backend_accepts_tcpip():
 
     assert factory.calls == ["@ivi"]
     assert manager.opened_resources == [TCPIP_RESOURCE]
+    assert manager.session.control_ren_calls == []
+    assert manager.session.close_calls == 1
+    assert manager.close_calls == 1
     assert result.backend == "system"
     assert result.transport == "tcpip"
 
@@ -651,6 +727,9 @@ def test_pyvisa_py_backend_accepts_tcpip_without_fallback():
 
     assert factory.calls == ["@py"]
     assert manager.opened_resources == [TCPIP_RESOURCE]
+    assert manager.session.control_ren_calls == []
+    assert manager.session.close_calls == 1
+    assert manager.close_calls == 1
     assert result.backend == "@py"
     assert result.transport == "tcpip"
 
@@ -752,6 +831,7 @@ def test_cleanup_error_does_not_hide_query_error():
     session = FakeSession(
         query_error=TimeoutError("query timed out"),
         close_error=RuntimeError("session close failed"),
+        control_ren_error=RuntimeError("GTL failed"),
     )
     manager = FakeManager(session, close_error=RuntimeError("manager close failed"))
 
@@ -759,6 +839,7 @@ def test_cleanup_error_does_not_hide_query_error():
         identify_instrument(USB_RESOURCE, resource_manager_factory=RecordingFactory(manager))
 
     assert error.value.cleanup_errors == (
+        "return to local failed",
         "session close failed",
         "ResourceManager close failed",
     )
@@ -1660,6 +1741,8 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         ("query", "SOURce1:FUNCtion:PULSe:WIDTh?"),
         ("query", "SOURce1:FUNCtion:PULSe:TRANsition?"),
         ("query", "SOURce1:PHASe?"),
+        ("control_ren", RENLineOperation.address_gtl),
+        ("close",),
     ]
     assert "OUTPut1 ON" not in session.writes
     assert result.frequency_hz == 10_000_000.0000005

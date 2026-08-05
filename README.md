@@ -887,6 +887,10 @@ manufacturer/model identity before any write. They use the same session for
 identification and control, do not retry or switch backends, and never send
 `*RST`. There is no automatic or background resource scan.
 
+Live instrument operations on USB with the system VISA backend attempt to return
+the instrument to local before closing the session. Resource listing, dry-run,
+simulator, TCPIP/LAN, and `@py` operations do not make this attempt.
+
 The `status` command resolves the exact manufacturer/model identity before its
 read-only Channel 1 queries. It does not write, reset, clear, inspect the error
 queue, or change output state.

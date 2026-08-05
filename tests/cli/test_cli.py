@@ -21,6 +21,7 @@ class FakeSession:
         self.timeout = None
         self.queries = []
         self.writes = []
+        self.control_ren_calls = []
         self.closed = False
 
     def query(self, command):
@@ -36,6 +37,9 @@ class FakeSession:
 
     def write(self, command):
         self.writes.append(command)
+
+    def control_ren(self, mode):
+        self.control_ren_calls.append(mode)
 
 
 class FakeManager:

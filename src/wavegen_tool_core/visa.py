@@ -9,6 +9,8 @@ from io import StringIO
 import math
 from typing import Protocol
 
+from pyvisa.constants import RENLineOperation
+
 from wavegen_tool_core.backends import (
     PYVISA_PY_BACKEND,
     SYSTEM_BACKEND,
@@ -39,6 +41,7 @@ from wavegen_tool_core.identity import (
     parse_idn,
     resolve_supported_identity,
 )
+from wavegen_tool_core.simulator import SimulatedResourceManager
 from wavegen_tool_core.transport import (
     ASRL_TRANSPORT,
     TCPIP_TRANSPORT,
@@ -102,6 +105,9 @@ class VisaSession(Protocol):
 
     def write(self, command: str) -> object:
         """Send one state-changing command."""
+
+    def control_ren(self, mode: RENLineOperation) -> None:
+        """Control the VISA remote-enable line."""
 
     def close(self) -> None:
         """Close the session."""
@@ -918,7 +924,12 @@ def identify_instrument(
                         identity=identity,
                     )
     finally:
-        cleanup_errors = _close_visa_resources(session, manager)
+        cleanup_errors = _close_visa_resources(
+            session,
+            manager,
+            backend=backend_selection.name,
+            transport=transport,
+        )
 
     if primary_error is not None:
         primary_error.attach_cleanup_errors(cleanup_errors)
@@ -1085,7 +1096,12 @@ def query_status(
                                 identity=identity,
                             )
     finally:
-        cleanup_errors = _close_visa_resources(session, manager)
+        cleanup_errors = _close_visa_resources(
+            session,
+            manager,
+            backend=backend_selection.name,
+            transport=transport,
+        )
 
     if primary_error is not None:
         primary_error.attach_cleanup_errors(cleanup_errors)
@@ -3953,7 +3969,12 @@ def _run_on_supported_33521b(
                         )
                         primary_cause = exc
     finally:
-        cleanup_errors = _close_visa_resources(session, manager)
+        cleanup_errors = _close_visa_resources(
+            session,
+            manager,
+            backend=backend_selection.name,
+            transport=transport,
+        )
 
     if primary_error is not None:
         primary_error.attach_cleanup_errors(cleanup_errors)
@@ -4164,7 +4185,12 @@ def read_error_queue(
                             limit_reached=limit_reached,
                         )
     finally:
-        cleanup_errors = _close_visa_resources(session, manager)
+        cleanup_errors = _close_visa_resources(
+            session,
+            manager,
+            backend=backend_selection.name,
+            transport=transport,
+        )
 
     if primary_error is not None:
         primary_error.attach_cleanup_errors(cleanup_errors)
@@ -4186,9 +4212,21 @@ def read_error_queue(
 def _close_visa_resources(
     session: VisaSession | None,
     manager: VisaResourceManager,
+    *,
+    backend: str,
+    transport: str,
 ) -> tuple[str, ...]:
     errors: list[str] = []
     if session is not None:
+        if (
+            backend == SYSTEM_BACKEND
+            and transport == USB_TRANSPORT
+            and not isinstance(manager, SimulatedResourceManager)
+        ):
+            try:
+                session.control_ren(RENLineOperation.address_gtl)
+            except Exception:
+                errors.append("return to local failed")
         try:
             session.close()
         except Exception:
