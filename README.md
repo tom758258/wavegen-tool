@@ -1,34 +1,31 @@
 # Wavegen Tool
 
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
-selected waveform generators and performing bounded control through VISA. The
-current milestone supports identification, read-only Channel 1 status, bounded
-instrument error-queue reads, and basic Channel 1
-sine/square/ramp/triangle/pulse/DC/noise/PRBS/output control and sine, square,
-ramp, and triangle frequency sweep configuration for the Keysight or Agilent
-33521B.
+selected waveform generators and performing bounded control through VISA. It
+supports identification, read-only Channel 1 status, bounded instrument
+error-queue reads, Channel 1 sine/square/ramp/triangle/pulse/DC/noise/PRBS
+configuration, explicit output control, and sine, square, ramp, and triangle
+frequency sweeps for Keysight or Agilent 33521B instruments.
 
 ## Current Scope
 
 - Exact manufacturer-and-model recognition for Keysight Technologies 33521B
   and Agilent Technologies 33521B
-- Parameter-validated Channel 1 sine configuration with explicit load, frequency,
-  amplitude, and offset
-- Hardware-free Channel 1 dry-run preview for all eight waveform configurations
-- Stateful, hardware-free Keysight 33521B Channel 1 simulator for all public CLI
+- Channel 1 sine configuration with explicit load, frequency, amplitude, and
+  offset
+- Channel 1 dry-run preview for all eight waveform configurations
+- Stateful in-memory Keysight 33521B Channel 1 simulator for all public CLI
   commands
-- Parameter-validated Channel 1 square configuration
-- Parameter-validated Channel 1 ramp configuration
-- Parameter-validated Channel 1 triangle configuration
-- Parameter-validated Channel 1 pulse configuration
-- Parameter-validated Channel 1 sine linear and logarithmic frequency sweep
-  configuration with Immediate trigger
-- Hardware-unvalidated, parameter-validated Channel 1 square, ramp, and triangle
-  linear and logarithmic frequency sweep configuration with Immediate trigger
+- Channel 1 square configuration
+- Channel 1 ramp configuration
+- Channel 1 triangle configuration
+- Channel 1 pulse configuration
+- Channel 1 sine, square, ramp, and triangle linear and logarithmic frequency
+  sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
-- Parameter-validated Channel 1 DC voltage configuration
-- Parameter-validated Channel 1 noise configuration
-- Parameter-validated Channel 1 PRBS configuration
+- Channel 1 DC voltage configuration
+- Channel 1 noise configuration
+- Channel 1 PRBS configuration
 - Explicit Channel 1 output on/off control
 - Read-only Channel 1 status query
 - Bounded instrument error queue reads
@@ -37,7 +34,6 @@ ramp, and triangle frequency sweep configuration for the Keysight or Agilent
 - The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
 - Raw VISA resource listing and opt-in live-only connectivity checks
 - Human-readable and JSON CLI output
-- Hardware-free tests with injectable fake VISA sessions
 
 The identify command rejects GPIB and all other transports outside its explicit
 scope. Other Trueform models are not treated as supported.
@@ -45,30 +41,11 @@ scope. Other Trueform models are not treated as supported.
 These are the only recognized manufacturer/model pairs. Matching ignores case
 and ordinary whitespace differences but does not use prefix, substring, or
 fuzzy matching. A successful identify result preserves the manufacturer
-reported by the instrument while normalizing the model to `33521B`. The Local
-records document live control/readback path validation against an Agilent
-Technologies 33521B through System VISA over USB for exact identification,
-read-only Channel 1 status, bounded public error-queue reads, explicit output
-on/off state control, sine, square, ramp, triangle, Pulse, DC, noise, and PRBS
-configuration, phase writes with bounded direct `SOURce1:PHASe?` readback,
-High/Low input canonicalization and its corresponding control path, and
-linear/logarithmic sine sweep configuration with Immediate trigger and recorded
-sweep-to-CW recovery. These paths cover the tested commands, applicable
-readback, error-queue checks, and output-off safety; they do not claim
-connector-level amplitude, frequency, phase, timing, jitter, distortion,
-bandwidth, calibration, or waveform quality.
+reported by the instrument while normalizing the model to `33521B`.
 
-Raw resource listing and live-only connectivity checks remain documented
-capabilities. The Local records reviewed here do not establish a separate
-USB/ASRL discovery hardware-validation claim. The newly added
-`configure-square-sweep`, `configure-ramp-sweep`, and
-`configure-triangle-sweep` commands remain hardware-unvalidated; their Core,
-CLI, Worker, dry-run, simulator, and automated-test behavior is not physical-
-instrument validation.
-
-Other waveform types, automatic resource scanning, WebUI features, and release
-executables are not implemented. Identification sends only `*IDN?`; it does
-not reset the instrument, change settings, or enable an output.
+The public scope excludes other waveform types, automatic resource scanning,
+WebUI features, and release executables. Identification sends only `*IDN?`; it
+does not reset the instrument, change settings, or enable an output.
 
 ## Requirements and Installation
 
@@ -132,11 +109,11 @@ simulated session or manager does not clear that shared state. A simulate
 Worker instead shares one simulator state for its process lifetime; neither
 mode provides cross-process persistence.
 
-Simulator mode is distinct from dry-run: dry-run only previews validated SCPI,
+Simulator mode is distinct from dry-run: dry-run previews an SCPI command plan,
 while the simulator executes supported SCPI against in-memory state. Neither
-mode is hardware validation. Live commands still require an explicit real VISA
-resource. `output --simulate --state on` enables only the simulated Channel 1
-state and never a physical output.
+mode performs physical instrument I/O. Live commands still require an explicit
+real VISA resource. `output --simulate --state on` enables only the simulated
+Channel 1 state and never a physical output.
 
 ## Worker and Lifecycle Clients
 
@@ -216,20 +193,20 @@ which selects `@ivi`, by default:
 uv run wavegen-tool list-resources
 ```
 
-Use `--live-only` to open each candidate allowed by the current
-backend/transport verification scope, apply a fixed one-second timeout, and
-send one `*IDN?` query. Only resources returning a non-empty response are
-shown. When the response is a standard four-field identity, the output shows
-its manufacturer, model, and resource. A non-standard but non-empty response
-is shown as `Unknown instrument`:
+Use `--live-only` to open each candidate eligible for the selected backend and
+transport, apply a fixed one-second timeout, and send one `*IDN?` query. Only
+resources returning a non-empty response are shown. When the response is a
+standard four-field identity, the output shows its manufacturer, model, and
+resource. A non-standard but non-empty response is shown as
+`Unknown instrument`:
 
 ```powershell
 uv run wavegen-tool list-resources --live-only
 uv run wavegen-tool list-resources --live-only --json
 ```
 
-System live verification accepts USB, TCPIP/LAN, and ASRL/RS-232 candidates.
-`@py` live verification accepts TCPIP/LAN candidates only. GPIB, PXI, VXI,
+System live-only checks accept USB, TCPIP/LAN, and ASRL/RS-232 candidates.
+`@py` live-only checks accept TCPIP/LAN candidates only. GPIB, PXI, VXI,
 unknown transports, and unsupported backend/transport combinations remain
 visible in raw results but are skipped in live-only mode.
 
@@ -403,9 +380,7 @@ session, rejects anything except an exactly recognized 33521B, turns Channel 1
 output off, explicitly sets the angle unit to degrees, and applies the settings.
 It never turns the output on. Sine, square, ramp, triangle, and pulse accept
 `--phase-deg`, defaulting to 0 degrees and allowing -360 through +360 degrees.
-The phase write and bounded direct `SOURce1:PHASe?` readback path was validated
-as a live control/readback path for the documented sine, square, ramp,
-triangle, and pulse cases; public `status` does not expose phase.
+Public `status` does not expose phase.
 
 Sine, square, ramp, triangle, pulse, noise, and PRBS configuration accept either
 `--amplitude-vpp` with optional `--offset-v`, or a complete
@@ -423,7 +398,7 @@ The supported 33521B sine limits are:
 - High-impedance load setting: 0.002 Vpp to 20 Vpp, with
   `abs(offset) + amplitude / 2 <= 10 V`
 
-Preview the validated sine SCPI plan without a VISA resource or instrument:
+Preview the sine SCPI plan without a VISA resource or instrument:
 
 ```powershell
 uv run wavegen-tool configure-sine `
@@ -442,16 +417,15 @@ Each dry-run uses the same Core parameter normalization, waveform-specific
 validation, and SCPI command planning as its live command, but does not create
 a ResourceManager, open a session, query, or write. The command list is only a
 preview and is not executed. The sine preview includes the explicit
-`UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run is neither a
-simulator nor hardware validation. Live waveform configuration continues to
-require an explicit VISA resource, and configuration leaves output off.
+`UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run does not execute
+SCPI or access hardware. Live waveform configuration continues to require an
+explicit VISA resource, and configuration leaves output off.
 
 ## Configure a Channel 1 Sine Frequency Sweep
 
 Sine sweeps support linear or logarithmic spacing, separate start and stop
-frequencies, sweep time, hold time, and return time. The documented sine sweep
-command path was validated as a live control/readback path on the tested setup.
-This Part uses the Immediate trigger source only and leaves output off:
+frequencies, sweep time, hold time, and return time. The command uses the
+Immediate trigger source only and leaves output off:
 
 ```powershell
 uv run wavegen-tool configure-sine-sweep `
@@ -468,19 +442,16 @@ uv run wavegen-tool configure-sine-sweep `
 ```
 
 The dry-run previews the start/stop, spacing, sweep/hold/return time, Immediate
-trigger, and sweep-mode SCPI commands without VISA I/O. The recorded live path
-also covered sweep-to-CW recovery.
-Normal sine, square, ramp, triangle, and pulse configuration explicitly restores
-CW frequency mode after a sweep while leaving output off.
+trigger, and sweep-mode SCPI commands without VISA I/O. Normal sine, square,
+ramp, triangle, and pulse configuration explicitly restores CW frequency mode
+after a sweep while leaving output off.
 
 ## Configure Channel 1 Square, Ramp, and Triangle Frequency Sweeps
 
 The `configure-square-sweep`, `configure-ramp-sweep`, and
 `configure-triangle-sweep` commands support linear or logarithmic spacing,
 separate start and stop frequencies, sweep time, hold time, and return time.
-They use the Immediate trigger source only, leave Channel 1 output off, and
-remain hardware-unvalidated. Core validation, dry-run, simulator, CLI, Worker,
-and automated tests do not constitute physical-instrument validation.
+They use the Immediate trigger source only and leave Channel 1 output off.
 
 Square sweeps accept `--duty-cycle-percent`; its frequency-dependent limit is
 validated at the higher endpoint of the complete sweep. Ramp sweeps accept
@@ -533,11 +504,9 @@ the same as for sine configuration above. Square accepts `--phase-deg` with a
 default of 0 degrees and an inclusive range of -360 through +360 degrees.
 
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Square configuration was included in the
-documented live control/readback path validation; this does not claim
-connector-level electrical performance.
+verify the physically connected load.
 
-Preview the validated square SCPI plan without a VISA resource or instrument:
+Preview the square SCPI plan without a VISA resource or instrument:
 
 ```powershell
 uv run wavegen-tool configure-square `
@@ -553,8 +522,8 @@ uv run wavegen-tool configure-square `
 Square dry-run shares live square parameter validation, including the
 frequency-dependent duty-cycle limits, and SCPI command planning. It does not
 create a ResourceManager, open a session, query, or write. The command list is
-only a preview and is not executed. Dry-run is neither a simulator nor hardware
-validation. Live `configure-square` continues to require an explicit VISA
+only a preview and is not executed. Dry-run does not execute SCPI or access
+hardware. Live `configure-square` continues to require an explicit VISA
 resource.
 
 ## Configure a Channel 1 Ramp Wave
@@ -582,11 +551,9 @@ inclusive range of -360 through +360 degrees.
 The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Ramp configuration was included in the
-documented live control/readback path validation; this does not claim
-connector-level electrical performance.
+verify the physically connected load.
 
-Preview the validated ramp SCPI plan without a VISA resource or instrument:
+Preview the ramp SCPI plan without a VISA resource or instrument:
 
 ```powershell
 uv run wavegen-tool configure-ramp `
@@ -602,8 +569,8 @@ uv run wavegen-tool configure-ramp `
 Ramp dry-run shares live ramp parameter normalization, frequency and symmetry
 limits, Vpp and output-load validation, and SCPI command planning. It does not
 create a ResourceManager, open a session, query, or write. The command list is
-only a preview and is not executed. Dry-run is neither a simulator nor hardware
-validation. Live `configure-ramp` continues to require an explicit VISA
+only a preview and is not executed. Dry-run does not execute SCPI or access
+hardware. Live `configure-ramp` continues to require an explicit VISA
 resource.
 
 ## Configure a Channel 1 Triangle Wave
@@ -624,14 +591,11 @@ uv run wavegen-tool configure-triangle `
 Triangle frequency must be from 0.000001 Hz to 200000 Hz. The amplitude,
 offset, and output-load setting limits are the same as for sine and square
 configuration. Triangle configuration uses the instrument's dedicated
-`TRIangle` function. Triangle configuration was included in the documented live
-control/readback path validation; this does not claim connector-level
-electrical performance. Configuration first turns Channel 1 output off and
-leaves it off; it never enables output.
-Triangle accepts `--phase-deg` with a default of 0 degrees and an inclusive
-range of -360 through +360 degrees.
+`TRIangle` function. Configuration first turns Channel 1 output off and leaves
+it off; it never enables output. Triangle accepts `--phase-deg` with a default
+of 0 degrees and an inclusive range of -360 through +360 degrees.
 
-Preview the validated Triangle SCPI plan without a VISA resource or instrument:
+Preview the Triangle SCPI plan without a VISA resource or instrument:
 
 ```powershell
 uv run wavegen-tool configure-triangle `
@@ -696,10 +660,8 @@ function, frequency, width, applicable edge values, and output state; the
 output must still be off. If the instrument limit rejects or clips an edge,
 the command fails instead of reporting a false success. Configuration never
 enables output; only an explicit `output --state on` command can do that. The
-load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Independent edge control was included in
-the documented live control/readback path validation; this does not claim
-connector-level pulse timing or waveform quality.
+load value is the instrument output-load setting and does not detect or verify
+the physically connected load.
 
 Preview the pulse plan without a VISA resource:
 
@@ -717,8 +679,8 @@ uv run wavegen-tool configure-pulse `
 
 Pulse dry-run applies the live frequency, edge, and pulse-width relationship
 validation and previews the safe intermediate SCPI plan. It does not query
-the instrument's dynamic edge maximum or perform readback verification because
-no VISA I/O occurs; live `configure-pulse` still requires an explicit resource.
+the instrument's dynamic edge maximum or perform readback checks because no
+VISA I/O occurs; live `configure-pulse` still requires an explicit resource.
 
 ## Configure a Channel 1 DC Voltage
 
@@ -740,9 +702,7 @@ The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
 verify the physically connected load. Actual terminal voltage still depends
-on the physically connected load. DC configuration was included in the
-documented live control/readback path validation; this does not claim actual
-terminal-voltage accuracy.
+on the physically connected load.
 
 Preview the DC plan without a VISA resource:
 
@@ -782,9 +742,7 @@ signal rarely reaches the full peak-to-peak boundary.
 The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. Noise configuration was included in the
-documented live control/readback path validation; its statistical output was
-not electrically characterized.
+verify the physically connected load.
 
 Preview the noise plan without a VISA resource:
 
@@ -821,19 +779,17 @@ uv run wavegen-tool configure-prbs `
 
 Bit rate must be from 0.001 bit/s to 50000000 bit/s. Supported patterns are
 PN7, PN9, PN11, PN15, PN20, and PN23. Pattern input is case-insensitive and
-results are normalized to uppercase canonical values. The common rising and falling edge time
-must be from 8.4 ns to 1 µs and must fit within one bit period. With the
-50-ohm load setting, amplitude must be from 0.001 Vpp to 10 Vpp and
-`abs(offset) + amplitude / 2` must not exceed 5 V. With the high-impedance
-setting, amplitude must be from 0.002 Vpp to 20 Vpp and the same expression
-must not exceed 10 V.
+results are normalized to uppercase canonical values. The common rising and
+falling edge time must be from 8.4 ns to 1 µs and must fit within one bit
+period. With the 50-ohm load setting, amplitude must be from 0.001 Vpp to
+10 Vpp and `abs(offset) + amplitude / 2` must not exceed 5 V. With the
+high-impedance setting, amplitude must be from 0.002 Vpp to 20 Vpp and the same
+expression must not exceed 10 V.
 
 The command first turns Channel 1 output off and leaves it off. Configuration
 never enables output; only an explicit `output --state on` command can do that.
 The load value is the instrument output-load setting and does not detect or
-verify the physically connected load. PRBS configuration was included in the
-documented live control/readback path validation; this does not claim
-connector-level electrical performance.
+verify the physically connected load.
 
 Preview the PRBS plan without a VISA resource:
 
