@@ -3,6 +3,7 @@ import pytest
 from wavegen_tool_core.errors import MalformedIdnError, UnsupportedInstrumentError
 from wavegen_tool_core.identity import (
     CANONICAL_MODEL_ID,
+    model_info_for_model_id,
     parse_idn,
     resolve_supported_identity,
 )
@@ -10,6 +11,22 @@ from wavegen_tool_core.identity import (
 
 VALID_IDN = "KEYSIGHT TECHNOLOGIES,33521B,MY00000000,1.00-0.00-0.00"
 AGILENT_IDN = "Agilent Technologies,33521B,MY00000001,1.00-0.00-0.00"
+
+
+@pytest.mark.parametrize(
+    ("model_id", "canonical_model"),
+    [
+        ("keysight-33510b", "33510B"),
+        ("keysight-33512b", "33512B"),
+        ("keysight-33521b", "33521B"),
+    ],
+)
+def test_registered_model_lookup_is_exact(model_id, canonical_model):
+    model_info = model_info_for_model_id(model_id)
+
+    assert model_info is not None
+    assert model_info.model_id == model_id
+    assert model_info.canonical_model == canonical_model
 
 
 def test_valid_keysight_33521b_idn_resolves_exact_support():
@@ -81,6 +98,14 @@ def test_model_mismatch_fails_closed_even_for_keysight():
 
 def test_agilent_other_model_fails_closed():
     identity = parse_idn("Agilent Technologies,33520B,MY00000000,1.00")
+
+    with pytest.raises(UnsupportedInstrumentError):
+        resolve_supported_identity(identity)
+
+
+@pytest.mark.parametrize("model", ["33510B", "33512B"])
+def test_registered_but_not_live_supported_models_fail_closed(model):
+    identity = parse_idn(f"Keysight Technologies,{model},MY00000000,1.00")
 
     with pytest.raises(UnsupportedInstrumentError):
         resolve_supported_identity(identity)
