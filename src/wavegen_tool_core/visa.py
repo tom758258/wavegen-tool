@@ -18,6 +18,10 @@ from wavegen_tool_core.backends import (
     normalize_backend,
     validate_backend_transport,
 )
+from wavegen_tool_core.capabilities import (
+    WavegenCapabilities,
+    capabilities_for_model_id,
+)
 from wavegen_tool_core.errors import (
     ErrorQueueQueryError,
     IdnQueryError,
@@ -1182,12 +1186,14 @@ def configure_sine(
 ) -> SineConfigurationResult:
     """Validate and configure a Channel 1 sine wave while keeping output off."""
 
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
         amplitude_vpp,
         offset_v,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -1220,6 +1226,7 @@ def dry_run_sine(
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
     _validate_dry_run_model(model, "sine")
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
 
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
@@ -1227,6 +1234,7 @@ def dry_run_sine(
         offset_v,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     return SineDryRunResult(
         model=CANONICAL_MODEL,
@@ -1258,6 +1266,7 @@ def configure_sine_sweep(
 ) -> SineSweepConfigurationResult:
     """Validate and configure a Channel 1 sine frequency sweep."""
 
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         start_frequency,
         stop_frequency,
@@ -1281,6 +1290,7 @@ def configure_sine_sweep(
         offset_v,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -1324,6 +1334,7 @@ def dry_run_sine_sweep(
     """Preview a validated Channel 1 sine sweep without VISA I/O."""
 
     _validate_dry_run_model(model, "sine sweep")
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         start_frequency,
         stop_frequency,
@@ -1347,6 +1358,7 @@ def dry_run_sine_sweep(
         offset_v,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     return SineSweepDryRunResult(
         model=CANONICAL_MODEL,
@@ -1385,6 +1397,7 @@ def configure_square_sweep(
 ) -> SquareSweepConfigurationResult:
     """Validate and configure a Channel 1 square frequency sweep."""
 
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         start_frequency,
         stop_frequency,
@@ -1410,6 +1423,7 @@ def configure_square_sweep(
         duty_cycle_percent,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -1455,6 +1469,7 @@ def dry_run_square_sweep(
     """Preview a validated Channel 1 square sweep without VISA I/O."""
 
     _validate_dry_run_model(model, "square sweep")
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         start_frequency,
         stop_frequency,
@@ -1480,6 +1495,7 @@ def dry_run_square_sweep(
         duty_cycle_percent,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     return SquareSweepDryRunResult(
         model=CANONICAL_MODEL,
@@ -1760,6 +1776,13 @@ def dry_run_triangle_sweep(
     )
 
 
+def _require_capabilities_for_model_id(model_id: str) -> WavegenCapabilities:
+    capabilities = capabilities_for_model_id(model_id)
+    if capabilities is None:
+        raise RuntimeError(f"missing capability profile for model ID {model_id!r}")
+    return capabilities
+
+
 def _validate_dry_run_model(model: object, waveform: str) -> None:
     if (
         not isinstance(model, str)
@@ -1865,6 +1888,8 @@ def _prepare_square_sweep(
     duty_cycle_percent: object,
     load: object,
     phase_deg: object,
+    *,
+    capabilities: WavegenCapabilities,
 ) -> tuple[
     float,
     float,
@@ -1889,15 +1914,20 @@ def _prepare_square_sweep(
         "stop frequency",
         waveform="Square sweep",
     )
-    if not 0.000001 <= start_frequency <= 30_000_000:
+    maximum_supported_frequency = (
+        capabilities.max_sine_square_pulse_noise_frequency_hz
+    )
+    if not 0.000001 <= start_frequency <= maximum_supported_frequency:
         raise WaveformParameterError(
             "Square sweep start frequency must be between "
-            "0.000001 Hz and 30000000 Hz."
+            "0.000001 Hz and "
+            f"{_format_scpi_number(maximum_supported_frequency)} Hz."
         )
-    if not 0.000001 <= stop_frequency <= 30_000_000:
+    if not 0.000001 <= stop_frequency <= maximum_supported_frequency:
         raise WaveformParameterError(
             "Square sweep stop frequency must be between "
-            "0.000001 Hz and 30000000 Hz."
+            "0.000001 Hz and "
+            f"{_format_scpi_number(maximum_supported_frequency)} Hz."
         )
     if start_frequency == stop_frequency:
         raise WaveformParameterError(
@@ -1920,6 +1950,7 @@ def _prepare_square_sweep(
         duty_cycle_percent,
         load,
         phase_deg,
+        capabilities=capabilities,
         include_cw_mode=False,
         duty_cycle_validation_frequency_hz=maximum_frequency,
     )
@@ -2176,6 +2207,8 @@ def _prepare_sine_sweep(
     offset_v: object,
     load: object,
     phase_deg: object,
+    *,
+    capabilities: WavegenCapabilities,
 ) -> tuple[
     float,
     float,
@@ -2202,6 +2235,7 @@ def _prepare_sine_sweep(
         offset_v,
         load,
         phase_deg,
+        capabilities=capabilities,
         include_cw_mode=False,
     )
     stop_frequency = _normalize_finite_number(
@@ -2209,10 +2243,14 @@ def _prepare_sine_sweep(
         "stop frequency",
         waveform="Sine sweep",
     )
-    if not 0.000001 <= stop_frequency <= 30_000_000:
+    maximum_supported_frequency = (
+        capabilities.max_sine_square_pulse_noise_frequency_hz
+    )
+    if not 0.000001 <= stop_frequency <= maximum_supported_frequency:
         raise WaveformParameterError(
             "Sine sweep stop frequency must be between "
-            "0.000001 Hz and 30000000 Hz."
+            "0.000001 Hz and "
+            f"{_format_scpi_number(maximum_supported_frequency)} Hz."
         )
     if start_frequency == stop_frequency:
         raise WaveformParameterError(
@@ -2278,6 +2316,8 @@ def _prepare_sine(
     offset_v: object,
     load: object,
     phase_deg: object,
+    *,
+    capabilities: WavegenCapabilities,
     include_cw_mode: bool = True,
 ) -> tuple[float, float, float, str, float, tuple[str, ...]]:
     frequency = _normalize_finite_number(frequency_hz, "frequency")
@@ -2286,9 +2326,11 @@ def _prepare_sine(
     normalized_load = _normalize_load(load)
     phase = _normalize_phase_deg(phase_deg, waveform="Sine")
 
-    if not 0.000001 <= frequency <= 30_000_000:
+    maximum_frequency = capabilities.max_sine_square_pulse_noise_frequency_hz
+    if not 0.000001 <= frequency <= maximum_frequency:
         raise WaveformParameterError(
-            "Sine frequency must be between 0.000001 Hz and 30000000 Hz."
+            "Sine frequency must be between 0.000001 Hz and "
+            f"{_format_scpi_number(maximum_frequency)} Hz."
         )
 
     _validate_vpp_levels(amplitude, offset, normalized_load, "Sine")
@@ -2326,6 +2368,7 @@ def configure_square(
 ) -> SquareConfigurationResult:
     """Validate and configure a Channel 1 square wave while keeping output off."""
 
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         frequency,
         amplitude,
@@ -2341,6 +2384,7 @@ def configure_square(
         duty_cycle_percent,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -2375,6 +2419,7 @@ def dry_run_square(
     """Preview a validated Channel 1 square configuration without VISA I/O."""
 
     _validate_dry_run_model(model, "square")
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         frequency,
         amplitude,
@@ -2390,6 +2435,7 @@ def dry_run_square(
         duty_cycle_percent,
         load,
         phase_deg,
+        capabilities=capabilities,
     )
     return SquareDryRunResult(
         model=CANONICAL_MODEL,
@@ -2412,6 +2458,7 @@ def _prepare_square(
     load: object,
     phase_deg: object,
     *,
+    capabilities: WavegenCapabilities,
     include_cw_mode: bool = True,
     duty_cycle_validation_frequency_hz: float | None = None,
 ) -> tuple[float, float, float, float, str, float, tuple[str, ...]]:
@@ -2434,9 +2481,11 @@ def _prepare_square(
     normalized_load = _normalize_load(load, waveform="Square")
     phase = _normalize_phase_deg(phase_deg, waveform="Square")
 
-    if not 0.000001 <= frequency <= 30_000_000:
+    maximum_frequency = capabilities.max_sine_square_pulse_noise_frequency_hz
+    if not 0.000001 <= frequency <= maximum_frequency:
         raise WaveformParameterError(
-            "Square frequency must be between 0.000001 Hz and 30000000 Hz."
+            "Square frequency must be between 0.000001 Hz and "
+            f"{_format_scpi_number(maximum_frequency)} Hz."
         )
     _validate_vpp_levels(amplitude, offset, normalized_load, "Square")
 
@@ -2793,6 +2842,7 @@ def configure_pulse(
 ) -> PulseConfigurationResult:
     """Validate and configure a Channel 1 pulse wave while keeping output off."""
 
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         frequency,
         amplitude,
@@ -2814,6 +2864,7 @@ def configure_pulse(
         phase_deg,
         leading_edge_s,
         trailing_edge_s,
+        capabilities=capabilities,
     )
 
     def operate(
@@ -3053,6 +3104,7 @@ def dry_run_pulse(
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
     _validate_dry_run_model(model, "pulse")
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         frequency,
         amplitude,
@@ -3074,6 +3126,7 @@ def dry_run_pulse(
         phase_deg,
         leading_edge_s,
         trailing_edge_s,
+        capabilities=capabilities,
     )
     return PulseDryRunResult(
         model=CANONICAL_MODEL,
@@ -3101,6 +3154,8 @@ def _prepare_pulse(
     phase_deg: object,
     leading_edge_s: object,
     trailing_edge_s: object,
+    *,
+    capabilities: WavegenCapabilities,
 ) -> tuple[
     float,
     float,
@@ -3137,9 +3192,11 @@ def _prepare_pulse(
     normalized_load = _normalize_load(load, waveform="Pulse")
     phase = _normalize_phase_deg(phase_deg, waveform="Pulse")
 
-    if not 0.000001 <= frequency <= 30_000_000:
+    maximum_frequency = capabilities.max_sine_square_pulse_noise_frequency_hz
+    if not 0.000001 <= frequency <= maximum_frequency:
         raise WaveformParameterError(
-            "Pulse frequency must be between 0.000001 Hz and 30000000 Hz."
+            "Pulse frequency must be between 0.000001 Hz and "
+            f"{_format_scpi_number(maximum_frequency)} Hz."
         )
     _validate_vpp_levels(amplitude, offset, normalized_load, "Pulse")
 
@@ -3307,6 +3364,7 @@ def configure_noise(
 ) -> NoiseConfigurationResult:
     """Validate and configure a Channel 1 noise wave while keeping output off."""
 
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         amplitude,
         offset,
@@ -3318,6 +3376,7 @@ def configure_noise(
         bandwidth_hz,
         offset_v,
         load,
+        capabilities=capabilities,
     )
     context = _write_to_supported_33521b(
         resource,
@@ -3348,6 +3407,7 @@ def dry_run_noise(
     """Preview a validated Channel 1 noise configuration without VISA I/O."""
 
     _validate_dry_run_model(model, "noise")
+    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
     (
         amplitude,
         offset,
@@ -3359,6 +3419,7 @@ def dry_run_noise(
         bandwidth_hz,
         offset_v,
         load,
+        capabilities=capabilities,
     )
     return NoiseDryRunResult(
         model=CANONICAL_MODEL,
@@ -3376,6 +3437,8 @@ def _prepare_noise(
     bandwidth_hz: object,
     offset_v: object,
     load: object,
+    *,
+    capabilities: WavegenCapabilities,
 ) -> tuple[float, float, float, str, tuple[str, ...]]:
     amplitude = _normalize_finite_number(
         amplitude_vpp,
@@ -3390,9 +3453,11 @@ def _prepare_noise(
     offset = _normalize_finite_number(offset_v, "offset", waveform="Noise")
     normalized_load = _normalize_load(load, waveform="Noise")
 
-    if not 0.001 <= bandwidth <= 30_000_000:
+    maximum_bandwidth = capabilities.max_sine_square_pulse_noise_frequency_hz
+    if not 0.001 <= bandwidth <= maximum_bandwidth:
         raise WaveformParameterError(
-            "Noise bandwidth must be between 0.001 Hz and 30000000 Hz."
+            "Noise bandwidth must be between 0.001 Hz and "
+            f"{_format_scpi_number(maximum_bandwidth)} Hz."
         )
     _validate_vpp_levels(amplitude, offset, normalized_load, "Noise")
 

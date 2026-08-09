@@ -4,6 +4,7 @@ from pyvisa.constants import RENLineOperation
 import pytest
 
 import wavegen_tool_core.visa as visa_module
+from wavegen_tool_core.capabilities import capabilities_for_model_id
 from wavegen_tool_core.errors import (
     ErrorQueueQueryError,
     IdnQueryError,
@@ -1387,6 +1388,42 @@ def test_invalid_square_ramp_triangle_sweep_parameters_fail_before_visa_io(
 
 
 @pytest.mark.parametrize(
+    ("prepare", "arguments"),
+    [
+        pytest.param(
+            visa_module._prepare_sine_sweep,
+            (20_000_001, 1000, "linear", 1, 0, 0, 0.1, 0, 50, 0),
+            id="sine-start",
+        ),
+        pytest.param(
+            visa_module._prepare_sine_sweep,
+            (1000, 20_000_001, "linear", 1, 0, 0, 0.1, 0, 50, 0),
+            id="sine-stop",
+        ),
+        pytest.param(
+            visa_module._prepare_square_sweep,
+            (20_000_001, 1000, "linear", 1, 0, 0, 0.1, 0, 50, 50, 0),
+            id="square-start",
+        ),
+        pytest.param(
+            visa_module._prepare_square_sweep,
+            (1000, 20_000_001, "linear", 1, 0, 0, 0.1, 0, 50, 50, 0),
+            id="square-stop",
+        ),
+    ],
+)
+def test_20_mhz_capability_limits_sine_and_square_sweep_endpoints(
+    prepare,
+    arguments,
+):
+    capabilities = capabilities_for_model_id("keysight-33510b")
+
+    assert capabilities is not None
+    with pytest.raises(WaveformParameterError, match="20000000 Hz"):
+        prepare(*arguments, capabilities=capabilities)
+
+
+@pytest.mark.parametrize(
     ("model", "frequency", "error_type"),
     [
         ("keysight-33522b", 1000, UnsupportedInstrumentError),
@@ -1442,6 +1479,39 @@ def test_invalid_sine_parameters_fail_before_visa_io(
     assert manager.opened_resources == []
     assert manager.session.queries == []
     assert manager.session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("prepare", "arguments"),
+    [
+        pytest.param(
+            visa_module._prepare_sine,
+            (20_000_001, 0.1, 0, 50, 0),
+            id="sine",
+        ),
+        pytest.param(
+            visa_module._prepare_square,
+            (20_000_001, 0.1, 0, 50, 50, 0),
+            id="square",
+        ),
+        pytest.param(
+            visa_module._prepare_pulse,
+            (20_000_001, 0.1, 0.0001, 0, 1e-8, 50, 0, None, None),
+            id="pulse",
+        ),
+        pytest.param(
+            visa_module._prepare_noise,
+            (0.1, 20_000_001, 0, 50),
+            id="noise",
+        ),
+    ],
+)
+def test_20_mhz_capability_limits_normal_waveform_frequency(prepare, arguments):
+    capabilities = capabilities_for_model_id("keysight-33510b")
+
+    assert capabilities is not None
+    with pytest.raises(WaveformParameterError, match="20000000 Hz"):
+        prepare(*arguments, capabilities=capabilities)
 
 
 @pytest.mark.parametrize(
