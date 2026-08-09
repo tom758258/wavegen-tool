@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field as dataclass_field
 import math
 
+from wavegen_tool_core.identity import (
+    CANONICAL_MODEL_ID,
+    ModelInfo,
+    model_info_for_model_id,
+)
+
 
 SIMULATED_33521B_RESOURCE = "USB0::SIM::33521B::INSTR"
 SIMULATED_33521B_IDN = "KEYSIGHT TECHNOLOGIES,33521B,SIM000001,1.0"
@@ -12,7 +18,7 @@ SIMULATED_33521B_IDN = "KEYSIGHT TECHNOLOGIES,33521B,SIM000001,1.0"
 
 @dataclass
 class Simulated33521BState:
-    """Process-local Channel 1 state for one simulated 33521B environment."""
+    """Process-local Channel 1 state for one registered simulated model."""
 
     output_enabled: bool = False
     output_load: str = "50"
@@ -41,6 +47,43 @@ class Simulated33521BState:
     prbs_pattern: str = "PN7"
     prbs_edge_time_s: float = 8.4e-9
     error_queue: list[str] = dataclass_field(default_factory=list)
+    model_id: str = CANONICAL_MODEL_ID
+
+    def __post_init__(self) -> None:
+        _require_model_info(self.model_id)
+
+    @property
+    def model_info(self) -> ModelInfo:
+        return _require_model_info(self.model_id)
+
+    @property
+    def resource_name(self) -> str:
+        return f"USB0::SIM::{self.model_info.canonical_model}::INSTR"
+
+    @property
+    def idn_response(self) -> str:
+        return (
+            "KEYSIGHT TECHNOLOGIES,"
+            f"{self.model_info.canonical_model},SIM000001,1.0"
+        )
+
+
+class SimulatedResourceManagerFactory:
+    """Explicit hardware-free factory context for one simulator state."""
+
+    def __init__(self, state: Simulated33521BState) -> None:
+        self.state = state
+
+    @property
+    def model_id(self) -> str:
+        return self.state.model_id
+
+    @property
+    def resource_name(self) -> str:
+        return self.state.resource_name
+
+    def __call__(self, _pyvisa_library: str) -> SimulatedResourceManager:
+        return SimulatedResourceManager(self.state)
 
 
 class SimulatedResourceManager:
@@ -52,7 +95,7 @@ class SimulatedResourceManager:
 
     def list_resources(self) -> tuple[str, ...]:
         self._ensure_open()
-        return (SIMULATED_33521B_RESOURCE,)
+        return (self.state.resource_name,)
 
     def open_resource(
         self,
@@ -60,7 +103,7 @@ class SimulatedResourceManager:
         **kwargs: object,
     ) -> SimulatedResource:
         self._ensure_open()
-        if resource_name != SIMULATED_33521B_RESOURCE:
+        if resource_name != self.state.resource_name:
             raise ValueError("Unsupported simulated VISA resource.")
         return SimulatedResource(self.state)
 
@@ -209,7 +252,7 @@ class SimulatedResource:
 
     def _query_response(self, command: str) -> str:
         responses = {
-            "*IDN?": SIMULATED_33521B_IDN,
+            "*IDN?": self.state.idn_response,
             "OUTPut1?": "1" if self.state.output_enabled else "0",
             "SOURce1:FUNCtion?": self.state.active_function,
             "SOURce1:FREQuency?": _format_number(self.state.frequency_hz),
@@ -277,3 +320,10 @@ def _parse_finite_number(value: str) -> float:
 
 def _format_number(value: float) -> str:
     return format(value, ".15g")
+
+
+def _require_model_info(model_id: str) -> ModelInfo:
+    model_info = model_info_for_model_id(model_id)
+    if model_info is None:
+        raise ValueError(f"Unsupported simulated model ID {model_id!r}.")
+    return model_info

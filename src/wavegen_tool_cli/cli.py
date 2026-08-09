@@ -16,9 +16,6 @@ from wavegen_tool_core import (
     ResourceManagerError,
     ResourceOpenError,
     SERIAL_TERMINATIONS,
-    SIMULATED_33521B_RESOURCE,
-    Simulated33521BState,
-    SimulatedResourceManager,
     StatusQueryError,
     UnsupportedBackendError,
     UnsupportedConnectionScopeError,
@@ -60,6 +57,11 @@ from wavegen_tool_core import (
     read_error_queue,
     resolve_voltage_inputs,
     set_output,
+)
+from wavegen_tool_core.identity import CANONICAL_MODEL_ID, registered_model_ids
+from wavegen_tool_core.simulator import (
+    Simulated33521BState,
+    SimulatedResourceManagerFactory,
 )
 from wavegen_tool_cli.worker import run_worker, validate_worker_startup
 from wavegen_tool_cli.lifecycle_client import (
@@ -108,6 +110,7 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (WaveformVerificationError, ExitCode.WAVEFORM_VERIFICATION_ERROR),
     (ErrorQueueQueryError, ExitCode.ERROR_QUEUE_QUERY_ERROR),
 )
+_REGISTERED_MODEL_IDS = registered_model_ids()
 
 
 def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
@@ -332,9 +335,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sine_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     sine_parser.add_argument(
         "--json",
@@ -410,9 +413,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sine_sweep_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     sine_sweep_parser.add_argument(
         "--json",
@@ -493,9 +496,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     square_sweep_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     square_sweep_parser.add_argument(
         "--json",
@@ -576,9 +579,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ramp_sweep_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     ramp_sweep_parser.add_argument(
         "--json",
@@ -654,9 +657,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     triangle_sweep_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     triangle_sweep_parser.add_argument(
         "--json",
@@ -712,9 +715,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     square_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     square_parser.add_argument(
         "--json",
@@ -770,9 +773,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ramp_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     ramp_parser.add_argument(
         "--json",
@@ -823,9 +826,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     triangle_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     triangle_parser.add_argument(
         "--json",
@@ -896,9 +899,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pulse_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     pulse_parser.add_argument(
         "--json",
@@ -939,9 +942,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dc_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     dc_parser.add_argument(
         "--json",
@@ -986,9 +989,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     noise_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     noise_parser.add_argument(
         "--json",
@@ -1045,9 +1048,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prbs_parser.add_argument(
         "--model",
-        choices=("keysight-33521b",),
-        default="keysight-33521b",
-        help="Target model for dry-run (default: keysight-33521b).",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     prbs_parser.add_argument(
         "--json",
@@ -1255,6 +1258,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.command in waveform_commands
         and not args.dry_run
         and not args.simulate
+        and args.model != CANONICAL_MODEL_ID
+    ):
+        parser.error(
+            "non-default --model selection requires --dry-run or --simulate"
+        )
+    if (
+        args.command in waveform_commands
+        and not args.dry_run
+        and not args.simulate
         and args.resource is None
     ):
         parser.error("the following arguments are required: --resource")
@@ -1316,13 +1328,13 @@ def _run_worker(
     return run_worker(config)
 
 
-def _simulated_target() -> tuple[str, Any]:
-    state = Simulated33521BState()
-
-    def factory(_pyvisa_library: str) -> SimulatedResourceManager:
-        return SimulatedResourceManager(state)
-
-    return SIMULATED_33521B_RESOURCE, factory
+def _simulated_target(
+    model_id: str = CANONICAL_MODEL_ID,
+) -> tuple[str, SimulatedResourceManagerFactory]:
+    factory = SimulatedResourceManagerFactory(
+        Simulated33521BState(model_id=model_id)
+    )
+    return factory.resource_name, factory
 
 
 def _factory_injection(simulated: bool, factory: Any) -> dict[str, Any]:
@@ -1461,7 +1473,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_sine_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -1529,7 +1541,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_sine_sweep_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -1607,7 +1619,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_square_sweep_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -1687,7 +1699,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_ramp_sweep_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -1767,7 +1779,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_triangle_sweep_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -1845,7 +1857,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_square_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -1915,7 +1927,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_ramp_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -1985,7 +1997,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_triangle_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -2053,7 +2065,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_pulse_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -2129,7 +2141,7 @@ def _run_configure_dc(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_dc_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control(
         args,
@@ -2185,7 +2197,7 @@ def _run_configure_noise(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_noise_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,
@@ -2251,7 +2263,7 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_prbs_dry_run(args)
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
     )
     return _run_control_with_voltage(
         args,

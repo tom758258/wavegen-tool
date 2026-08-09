@@ -27,6 +27,7 @@ from wavegen_tool_core import (
     query_status,
     set_output,
 )
+from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 
 
 def _factory_for(
@@ -62,6 +63,31 @@ def test_simulator_exposes_one_deterministic_recognized_resource() -> None:
     assert listing.resources[0].resource == SIMULATED_33521B_RESOURCE
     assert listing.resources[0].manufacturer == "KEYSIGHT TECHNOLOGIES"
     assert listing.resources[0].model == "33521B"
+
+
+@pytest.mark.parametrize(
+    ("model_id", "canonical_model"),
+    [
+        ("keysight-33510b", "33510B"),
+        ("keysight-33512b", "33512B"),
+    ],
+)
+def test_simulator_factory_exposes_registered_model_identity(
+    model_id,
+    canonical_model,
+) -> None:
+    factory = SimulatedResourceManagerFactory(
+        Simulated33521BState(model_id=model_id)
+    )
+    manager = factory("@sim")
+
+    assert manager.list_resources() == (factory.resource_name,)
+    session = manager.open_resource(factory.resource_name)
+    assert session.query("*IDN?") == (
+        f"KEYSIGHT TECHNOLOGIES,{canonical_model},SIM000001,1.0"
+    )
+    session.close()
+    manager.close()
 
 
 @pytest.mark.parametrize(

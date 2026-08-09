@@ -456,7 +456,7 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
     }
 
 
-def test_configure_sine_dry_run_cli_emits_hardware_free_json(
+def test_configure_sine_dry_run_cli_forwards_registered_model(
     monkeypatch, capsys
 ):
     manager = FakeManager()
@@ -466,8 +466,8 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
     def fake_dry_run_sine(*args):
         dry_run_calls.append(args)
         return SimpleNamespace(
-            model="33521B",
-            canonical_model_id="keysight-33521b",
+            model="33510B",
+            canonical_model_id="keysight-33510b",
             frequency_hz=1000.0,
             amplitude_vpp=0.1,
             offset_v=0.0,
@@ -504,7 +504,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
             "configure-sine",
             "--dry-run",
             "--model",
-            "keysight-33521b",
+            "keysight-33510b",
             "--frequency-hz",
             "1000",
             "--amplitude-vpp",
@@ -516,7 +516,7 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert dry_run_calls == [
-        ("keysight-33521b", "1000", 0.1, 0.0, "50", 0.0)
+        ("keysight-33510b", "1000", 0.1, 0.0, "50", 0.0)
     ]
     assert manager_calls == []
     assert manager.opened_resources == []
@@ -524,8 +524,8 @@ def test_configure_sine_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-sine",
         "mode": "dry-run",
-        "model": "33521B",
-        "canonical_model_id": "keysight-33521b",
+        "model": "33510B",
+        "canonical_model_id": "keysight-33510b",
         "frequency_hz": 1000.0,
         "amplitude_vpp": 0.1,
         "offset_v": 0.0,
@@ -2367,6 +2367,71 @@ def test_all_public_cli_routes_support_simulation_without_real_visa(
     assert payload.get("action") == expected_action
     assert payload[field] == expected
     assert captured.err == ""
+
+
+def test_configure_sine_simulator_dispatches_33510b_identity_and_capability(
+    monkeypatch,
+    capsys,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+    common_args = [
+        "configure-sine",
+        "--simulate",
+        "--model",
+        "keysight-33510b",
+        "--amplitude-vpp",
+        "0.1",
+        "--json",
+    ]
+
+    exit_code = main([*common_args, "--frequency-hz", "20000000"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["model"] == "33510B"
+    assert payload["frequency_hz"] == 20_000_000.0
+    assert payload["mode"] == "simulate"
+
+    exit_code = main([*common_args, "--frequency-hz", "25000000"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+    assert "20000000 Hz" in payload["error"]
+    assert manager_calls == []
+    assert manager.opened_resources == []
+
+
+@pytest.mark.parametrize("model_id", ["keysight-33510b", "keysight-33512b"])
+def test_non_default_model_is_rejected_for_live_configure_before_visa_io(
+    monkeypatch,
+    capsys,
+    model_id,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "configure-sine",
+                "--resource",
+                USB_RESOURCE,
+                "--model",
+                model_id,
+                "--frequency-hz",
+                "1000",
+                "--amplitude-vpp",
+                "0.1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert "requires --dry-run or --simulate" in captured.err
 
 
 def test_dry_run_and_simulate_conflict_is_usage_error_without_visa(

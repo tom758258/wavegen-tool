@@ -41,6 +41,12 @@ def model_info_for_model_id(model_id: str) -> ModelInfo | None:
     return _MODEL_REGISTRY.get(model_id)
 
 
+def registered_model_ids() -> tuple[str, ...]:
+    """Return exact registered model IDs in stable registry order."""
+
+    return tuple(_MODEL_REGISTRY)
+
+
 @dataclass(frozen=True)
 class InstrumentIdentity:
     """A parsed IDN response with optional exact support resolution."""

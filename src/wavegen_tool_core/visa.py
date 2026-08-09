@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import StringIO
 import math
 from typing import Protocol
@@ -39,13 +39,17 @@ from wavegen_tool_core.errors import (
     WavegenError,
 )
 from wavegen_tool_core.identity import (
-    CANONICAL_MODEL,
     CANONICAL_MODEL_ID,
     InstrumentIdentity,
+    ModelInfo,
+    model_info_for_model_id,
     parse_idn,
     resolve_supported_identity,
 )
-from wavegen_tool_core.simulator import SimulatedResourceManager
+from wavegen_tool_core.simulator import (
+    SimulatedResourceManager,
+    SimulatedResourceManagerFactory,
+)
 from wavegen_tool_core.transport import (
     ASRL_TRANSPORT,
     TCPIP_TRANSPORT,
@@ -1186,7 +1190,7 @@ def configure_sine(
 ) -> SineConfigurationResult:
     """Validate and configure a Channel 1 sine wave while keeping output off."""
 
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    capabilities = _capabilities_for_configuration(resource_manager_factory)
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
         amplitude_vpp,
@@ -1225,8 +1229,7 @@ def dry_run_sine(
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "sine")
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    model_info, capabilities = _require_hardware_free_model(model, "sine")
 
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
@@ -1237,8 +1240,8 @@ def dry_run_sine(
         capabilities=capabilities,
     )
     return SineDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         frequency_hz=frequency,
         amplitude_vpp=amplitude,
         offset_v=offset,
@@ -1266,7 +1269,7 @@ def configure_sine_sweep(
 ) -> SineSweepConfigurationResult:
     """Validate and configure a Channel 1 sine frequency sweep."""
 
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    capabilities = _capabilities_for_configuration(resource_manager_factory)
     (
         start_frequency,
         stop_frequency,
@@ -1333,8 +1336,7 @@ def dry_run_sine_sweep(
 ) -> SineSweepDryRunResult:
     """Preview a validated Channel 1 sine sweep without VISA I/O."""
 
-    _validate_dry_run_model(model, "sine sweep")
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    model_info, capabilities = _require_hardware_free_model(model, "sine sweep")
     (
         start_frequency,
         stop_frequency,
@@ -1361,8 +1363,8 @@ def dry_run_sine_sweep(
         capabilities=capabilities,
     )
     return SineSweepDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         start_frequency_hz=start_frequency,
         stop_frequency_hz=stop_frequency,
         spacing=normalized_spacing,
@@ -1397,7 +1399,7 @@ def configure_square_sweep(
 ) -> SquareSweepConfigurationResult:
     """Validate and configure a Channel 1 square frequency sweep."""
 
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    capabilities = _capabilities_for_configuration(resource_manager_factory)
     (
         start_frequency,
         stop_frequency,
@@ -1468,8 +1470,7 @@ def dry_run_square_sweep(
 ) -> SquareSweepDryRunResult:
     """Preview a validated Channel 1 square sweep without VISA I/O."""
 
-    _validate_dry_run_model(model, "square sweep")
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    model_info, capabilities = _require_hardware_free_model(model, "square sweep")
     (
         start_frequency,
         stop_frequency,
@@ -1498,8 +1499,8 @@ def dry_run_square_sweep(
         capabilities=capabilities,
     )
     return SquareSweepDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         start_frequency_hz=start_frequency,
         stop_frequency_hz=stop_frequency,
         spacing=normalized_spacing,
@@ -1604,7 +1605,7 @@ def dry_run_ramp_sweep(
 ) -> RampSweepDryRunResult:
     """Preview a validated Channel 1 ramp sweep without VISA I/O."""
 
-    _validate_dry_run_model(model, "ramp sweep")
+    model_info, _capabilities = _require_hardware_free_model(model, "ramp sweep")
     (
         start_frequency,
         stop_frequency,
@@ -1632,8 +1633,8 @@ def dry_run_ramp_sweep(
         phase_deg,
     )
     return RampSweepDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         start_frequency_hz=start_frequency,
         stop_frequency_hz=stop_frequency,
         spacing=normalized_spacing,
@@ -1733,7 +1734,7 @@ def dry_run_triangle_sweep(
 ) -> TriangleSweepDryRunResult:
     """Preview a validated Channel 1 triangle sweep without VISA I/O."""
 
-    _validate_dry_run_model(model, "triangle sweep")
+    model_info, _capabilities = _require_hardware_free_model(model, "triangle sweep")
     (
         start_frequency,
         stop_frequency,
@@ -1759,8 +1760,8 @@ def dry_run_triangle_sweep(
         phase_deg,
     )
     return TriangleSweepDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         start_frequency_hz=start_frequency,
         stop_frequency_hz=stop_frequency,
         spacing=normalized_spacing,
@@ -1783,15 +1784,57 @@ def _require_capabilities_for_model_id(model_id: str) -> WavegenCapabilities:
     return capabilities
 
 
-def _validate_dry_run_model(model: object, waveform: str) -> None:
-    if (
-        not isinstance(model, str)
-        or model.strip().casefold() != CANONICAL_MODEL_ID
-    ):
+def _capabilities_for_configuration(
+    resource_manager_factory: ResourceManagerFactory | None,
+) -> WavegenCapabilities:
+    model_id = (
+        resource_manager_factory.model_id
+        if isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
+        else CANONICAL_MODEL_ID
+    )
+    return _require_capabilities_for_model_id(model_id)
+
+
+def _require_hardware_free_model(
+    model: object,
+    waveform: str,
+) -> tuple[ModelInfo, WavegenCapabilities]:
+    model_info = model_info_for_model_id(model) if isinstance(model, str) else None
+    if model_info is None:
         raise UnsupportedInstrumentError(
             f"Unsupported {waveform} dry-run model; "
-            "expected 'keysight-33521b'."
+            "expected an exact registered model ID."
         )
+    return model_info, _require_capabilities_for_model_id(model_info.model_id)
+
+
+def _resolve_runtime_identity(
+    raw_idn: str,
+    *,
+    manager: VisaResourceManager,
+    factory: ResourceManagerFactory,
+) -> InstrumentIdentity:
+    parsed_identity = parse_idn(raw_idn)
+    if not (
+        isinstance(factory, SimulatedResourceManagerFactory)
+        and isinstance(manager, SimulatedResourceManager)
+    ):
+        return resolve_supported_identity(parsed_identity)
+
+    if manager.state is not factory.state:
+        raise RuntimeError("simulator factory and manager state do not match")
+    model_info = model_info_for_model_id(factory.model_id)
+    if model_info is None or parsed_identity.model != model_info.canonical_model:
+        raise UnsupportedInstrumentError(
+            "Simulator identity does not match its registered model context.",
+            identity=parsed_identity,
+        )
+    return replace(
+        parsed_identity,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
+        model_supported=True,
+    )
 
 
 def _prepare_sweep_timing(
@@ -2368,7 +2411,7 @@ def configure_square(
 ) -> SquareConfigurationResult:
     """Validate and configure a Channel 1 square wave while keeping output off."""
 
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    capabilities = _capabilities_for_configuration(resource_manager_factory)
     (
         frequency,
         amplitude,
@@ -2418,8 +2461,7 @@ def dry_run_square(
 ) -> SquareDryRunResult:
     """Preview a validated Channel 1 square configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "square")
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    model_info, capabilities = _require_hardware_free_model(model, "square")
     (
         frequency,
         amplitude,
@@ -2438,8 +2480,8 @@ def dry_run_square(
         capabilities=capabilities,
     )
     return SquareDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         frequency_hz=frequency,
         amplitude_vpp=amplitude,
         offset_v=offset,
@@ -2607,7 +2649,7 @@ def dry_run_ramp(
 ) -> RampDryRunResult:
     """Preview a validated Channel 1 ramp configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "ramp")
+    model_info, _capabilities = _require_hardware_free_model(model, "ramp")
     (
         frequency,
         amplitude,
@@ -2625,8 +2667,8 @@ def dry_run_ramp(
         phase_deg,
     )
     return RampDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         frequency_hz=frequency,
         amplitude_vpp=amplitude,
         offset_v=offset,
@@ -2756,7 +2798,7 @@ def dry_run_triangle(
 ) -> TriangleDryRunResult:
     """Preview a validated Channel 1 triangle configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "triangle")
+    model_info, _capabilities = _require_hardware_free_model(model, "triangle")
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_triangle(
         frequency_hz,
         amplitude_vpp,
@@ -2765,8 +2807,8 @@ def dry_run_triangle(
         phase_deg,
     )
     return TriangleDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         frequency_hz=frequency,
         amplitude_vpp=amplitude,
         offset_v=offset,
@@ -2842,7 +2884,7 @@ def configure_pulse(
 ) -> PulseConfigurationResult:
     """Validate and configure a Channel 1 pulse wave while keeping output off."""
 
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    capabilities = _capabilities_for_configuration(resource_manager_factory)
     (
         frequency,
         amplitude,
@@ -3103,8 +3145,7 @@ def dry_run_pulse(
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "pulse")
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    model_info, capabilities = _require_hardware_free_model(model, "pulse")
     (
         frequency,
         amplitude,
@@ -3129,8 +3170,8 @@ def dry_run_pulse(
         capabilities=capabilities,
     )
     return PulseDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         frequency_hz=frequency,
         amplitude_vpp=amplitude,
         offset_v=offset,
@@ -3318,11 +3359,11 @@ def dry_run_dc(
 ) -> DcDryRunResult:
     """Preview a validated Channel 1 DC configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "DC")
+    model_info, _capabilities = _require_hardware_free_model(model, "DC")
     voltage, normalized_load, commands = _prepare_dc(voltage_v, load)
     return DcDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         voltage_v=voltage,
         load=normalized_load,
         commands=commands,
@@ -3364,7 +3405,7 @@ def configure_noise(
 ) -> NoiseConfigurationResult:
     """Validate and configure a Channel 1 noise wave while keeping output off."""
 
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    capabilities = _capabilities_for_configuration(resource_manager_factory)
     (
         amplitude,
         offset,
@@ -3406,8 +3447,7 @@ def dry_run_noise(
 ) -> NoiseDryRunResult:
     """Preview a validated Channel 1 noise configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "noise")
-    capabilities = _require_capabilities_for_model_id(CANONICAL_MODEL_ID)
+    model_info, capabilities = _require_hardware_free_model(model, "noise")
     (
         amplitude,
         offset,
@@ -3422,8 +3462,8 @@ def dry_run_noise(
         capabilities=capabilities,
     )
     return NoiseDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         amplitude_vpp=amplitude,
         offset_v=offset,
         bandwidth_hz=bandwidth,
@@ -3543,7 +3583,7 @@ def dry_run_prbs(
 ) -> PrbsDryRunResult:
     """Preview a validated Channel 1 PRBS configuration without VISA I/O."""
 
-    _validate_dry_run_model(model, "PRBS")
+    model_info, _capabilities = _require_hardware_free_model(model, "PRBS")
     (
         bit_rate,
         amplitude,
@@ -3561,8 +3601,8 @@ def dry_run_prbs(
         load,
     )
     return PrbsDryRunResult(
-        model=CANONICAL_MODEL,
-        canonical_model_id=CANONICAL_MODEL_ID,
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
         bit_rate_bps=bit_rate,
         amplitude_vpp=amplitude,
         pattern=normalized_pattern,
@@ -4007,7 +4047,11 @@ def _run_on_supported_33521b(
                 primary_cause = exc
             else:
                 try:
-                    identity = resolve_supported_identity(parse_idn(raw_idn))
+                    identity = _resolve_runtime_identity(
+                        raw_idn,
+                        manager=manager,
+                        factory=factory,
+                    )
                 except WavegenError as exc:
                     primary_error = exc.attach_context(
                         backend=backend_selection.name,

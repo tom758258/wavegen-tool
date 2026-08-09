@@ -9,13 +9,14 @@ frequency sweeps for Keysight or Agilent 33521B instruments.
 
 ## Current Scope
 
-- Exact manufacturer-and-model recognition for Keysight Technologies 33521B
-  and Agilent Technologies 33521B
+- Exact live manufacturer-and-model recognition for Keysight Technologies
+  33521B and Agilent Technologies 33521B
 - Channel 1 sine configuration with explicit load, frequency, amplitude, and
   offset
-- Channel 1 dry-run preview for all eight waveform configurations
-- Stateful in-memory Keysight 33521B Channel 1 simulator for all public CLI
-  commands
+- Channel 1 dry-run preview for all eight waveform configurations, with exact
+  registered model selection for 33510B, 33512B, and 33521B
+- Stateful in-memory Channel 1 simulator, with the same exact model selection
+  for standalone waveform configuration commands
 - Channel 1 square configuration
 - Channel 1 ramp configuration
 - Channel 1 triangle configuration
@@ -36,12 +37,15 @@ frequency sweeps for Keysight or Agilent 33521B instruments.
 - Human-readable and JSON CLI output
 
 The identify command rejects GPIB and all other transports outside its explicit
-scope. Other Trueform models are not treated as supported.
+scope. Live identification and control support remains limited to the 33521B.
+The registered 33510B and 33512B profiles are available only to hardware-free
+dry-run and standalone configure simulation.
 
-These are the only recognized manufacturer/model pairs. Matching ignores case
-and ordinary whitespace differences but does not use prefix, substring, or
-fuzzy matching. A successful identify result preserves the manufacturer
-reported by the instrument while normalizing the model to `33521B`.
+For Live identity resolution, these are the only supported manufacturer/model
+pairs. Matching ignores case and ordinary whitespace differences but does not
+use prefix, substring, or fuzzy matching. A successful identify result
+preserves the manufacturer reported by the instrument while normalizing the
+model to `33521B`.
 
 The public scope excludes other waveform types, automatic resource scanning,
 WebUI features, and release executables. Identification sends only `*IDN?`; it
@@ -63,10 +67,9 @@ reserved WebUI import packages.
 
 The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight waveform configuration commands, the sine, square, ramp, and triangle
-sweep commands, and explicit
-output control for one
-simulated Keysight 33521B Channel 1. It uses the fixed resource
-`USB0::SIM::33521B::INSTR` and never creates a real VISA ResourceManager, runs
+sweep commands, and explicit output control for Channel 1. Standalone configure
+commands can select the registered 33510B, 33512B, or 33521B model; the default
+remains 33521B. The simulator never creates a real VISA ResourceManager, runs
 real resource discovery, opens hardware, or performs hardware I/O. Supported
 writes update in-memory state, subsequent queries read that state, and
 unsupported resources or SCPI fail closed.
@@ -82,12 +85,12 @@ uv run wavegen-tool identify `
   --simulate `
   --json
 
-uv run wavegen-tool configure-square `
+uv run wavegen-tool configure-sine `
   --simulate `
-  --frequency-hz 1000 `
+  --model keysight-33510b `
+  --frequency-hz 20000000 `
   --amplitude-vpp 0.1 `
   --offset-v 0 `
-  --duty-cycle-percent 50 `
   --load 50 `
   --json
 
@@ -107,7 +110,8 @@ operations in one Python process can preserve state by reusing the same
 `Simulated33521BState` through simulated ResourceManager factories. Closing a
 simulated session or manager does not clear that shared state. A simulate
 Worker instead shares one simulator state for its process lifetime; neither
-mode provides cross-process persistence.
+mode provides cross-process persistence. Worker simulation remains fixed to
+the 33521B profile.
 
 Simulator mode is distinct from dry-run: dry-run previews an SCPI command plan,
 while the simulator executes supported SCPI against in-memory state. Neither
@@ -412,7 +416,11 @@ uv run wavegen-tool configure-sine `
 ```
 
 Dry-run supports sine, square, ramp, triangle, pulse, DC, noise, PRBS, and
-square/ramp/triangle frequency sweep configuration.
+square/ramp/triangle frequency sweep configuration. Its exact `--model`
+choices are `keysight-33510b`, `keysight-33512b`, and `keysight-33521b`, with
+`keysight-33521b` as the default. Standalone configure simulation uses the same
+selection. Model selection never overrides Live `*IDN?` detection; non-default
+model selection is rejected for ordinary Live configuration.
 Each dry-run uses the same Core parameter normalization, waveform-specific
 validation, and SCPI command planning as its live command, but does not create
 a ResourceManager, open a session, query, or write. The command list is only a

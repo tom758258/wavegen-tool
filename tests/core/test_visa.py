@@ -1014,9 +1014,9 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
-def test_dry_run_sine_returns_normalized_hardware_free_command_preview():
+def test_dry_run_sine_returns_validated_hardware_free_command_preview():
     result = dry_run_sine(
-        "  KEYSIGHT-33521B  ",
+        "keysight-33521b",
         1000,
         0.1,
         0,
@@ -1051,6 +1051,26 @@ def test_dry_run_sine_returns_normalized_hardware_free_command_preview():
     )
     assert result.executed is False
     assert result.output_state == "off"
+
+
+@pytest.mark.parametrize(
+    ("model_id", "frequency_hz", "canonical_model"),
+    [
+        ("keysight-33510b", 20_000_000, "33510B"),
+        ("keysight-33512b", 20_000_000, "33512B"),
+        ("keysight-33521b", 25_000_000, "33521B"),
+    ],
+)
+def test_dry_run_sine_dispatches_registered_identity_and_capability(
+    model_id,
+    frequency_hz,
+    canonical_model,
+):
+    result = dry_run_sine(model_id, frequency_hz, 0.1)
+
+    assert result.model == canonical_model
+    assert result.canonical_model_id == model_id
+    assert result.frequency_hz == float(frequency_hz)
 
 
 @pytest.mark.parametrize(
@@ -1426,7 +1446,8 @@ def test_20_mhz_capability_limits_sine_and_square_sweep_endpoints(
 @pytest.mark.parametrize(
     ("model", "frequency", "error_type"),
     [
-        ("keysight-33522b", 1000, UnsupportedInstrumentError),
+        ("KEYSIGHT-33510B", 1000, UnsupportedInstrumentError),
+        ("keysight-33510b", 20_000_001, WaveformParameterError),
         ("keysight-33521b", 30_000_001, WaveformParameterError),
     ],
 )
@@ -1593,9 +1614,9 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
-def test_dry_run_square_returns_normalized_hardware_free_command_preview():
+def test_dry_run_square_returns_validated_hardware_free_command_preview():
     result = dry_run_square(
-        "  KEYSIGHT-33521B  ",
+        "keysight-33521b",
         1000,
         0.1,
         0,
@@ -1712,9 +1733,9 @@ def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
-def test_dry_run_ramp_returns_normalized_hardware_free_command_preview():
+def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
     result = dry_run_ramp(
-        "  KEYSIGHT-33521B  ",
+        "keysight-33521b",
         1000,
         0.1,
         0,
@@ -1797,7 +1818,7 @@ def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
         raise AssertionError("dry-run must not create a ResourceManager")
 
     monkeypatch.setattr(visa_module, "create_resource_manager", fail_resource_manager)
-    dry_run = dry_run_triangle("  KEYSIGHT-33521B  ", 1000, 0.1, 0.2, "high-z")
+    dry_run = dry_run_triangle("keysight-33521b", 1000, 0.1, 0.2, "high-z")
 
     assert dry_run.model == "33521B"
     assert dry_run.canonical_model_id == "keysight-33521b"
@@ -2128,9 +2149,9 @@ def test_configure_pulse_verification_failures(
     assert manager.close_calls == 1
 
 
-def test_dry_run_pulse_returns_normalized_hardware_free_command_preview():
+def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
     result = dry_run_pulse(
-        "  KEYSIGHT-33521B  ",
+        "keysight-33521b",
         1000,
         0.1,
         0.0001,
@@ -2311,8 +2332,8 @@ def test_configure_dc_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
-def test_dry_run_dc_returns_normalized_hardware_free_command_preview():
-    result = dry_run_dc("  KEYSIGHT-33521B  ", 1.5, 50)
+def test_dry_run_dc_returns_validated_hardware_free_command_preview():
+    result = dry_run_dc("keysight-33521b", 1.5, 50)
 
     assert tuple(signature(dry_run_dc).parameters) == (
         "model",
@@ -2394,9 +2415,9 @@ def test_configure_noise_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
-def test_dry_run_noise_returns_normalized_hardware_free_command_preview():
+def test_dry_run_noise_returns_validated_hardware_free_command_preview():
     result = dry_run_noise(
-        "  KEYSIGHT-33521B  ",
+        "keysight-33521b",
         0.1,
         1_000_000,
         0,
@@ -2492,9 +2513,9 @@ def test_configure_prbs_identifies_then_writes_safe_channel_one_sequence():
     assert manager.close_calls == 1
 
 
-def test_dry_run_prbs_returns_normalized_hardware_free_command_preview():
+def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
     result = dry_run_prbs(
-        "  KEYSIGHT-33521B  ",
+        "keysight-33521b",
         1_000_000,
         0.1,
         "pn9",
@@ -2613,6 +2634,24 @@ def test_control_rejects_unsupported_model_before_any_write():
     assert session.writes == []
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_sim_looking_resource_does_not_bypass_live_identity_guard():
+    session = FakeSession(
+        response="Keysight Technologies,33510B,SERIAL,FIRMWARE"
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(UnsupportedInstrumentError):
+        configure_sine(
+            "USB0::SIM::33510B::INSTR",
+            1000,
+            0.1,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
 
 
 def test_control_write_failure_is_domain_error_and_resources_are_closed():
