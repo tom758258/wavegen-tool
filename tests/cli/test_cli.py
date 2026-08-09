@@ -102,6 +102,8 @@ def test_identify_help(capsys):
     assert "--serial-read-termination" not in output
     assert "--serial-write-termination" not in output
     assert "{system,@py}" not in output
+    assert "--validation-allow-pending-live-support" not in output
+    assert "--model" not in output
 
 
 def test_missing_resource_is_usage_error_without_traceback(monkeypatch, capsys):
@@ -117,6 +119,45 @@ def test_missing_resource_is_usage_error_without_traceback(monkeypatch, capsys):
     assert manager.opened_resources == []
     assert "required" in captured.err
     assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        [
+            "--resource",
+            USB_RESOURCE,
+            "--validation-allow-pending-live-support",
+        ],
+        [
+            "--resource",
+            USB_RESOURCE,
+            "--model",
+            "keysight-33512b",
+        ],
+        [
+            "--simulate",
+            "--validation-allow-pending-live-support",
+            "--model",
+            "keysight-33512b",
+        ],
+    ],
+)
+def test_identify_validation_only_argument_guards_fail_before_visa_io(
+    monkeypatch,
+    capsys,
+    arguments,
+):
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(["identify", *arguments])
+
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert calls == []
+    assert manager.opened_resources == []
+    assert "usage:" in capsys.readouterr().err
 
 
 def test_valid_fake_identify_human_output(monkeypatch, capsys):
@@ -184,6 +225,34 @@ def test_valid_fake_identify_json_stdout_is_one_object(monkeypatch, capsys):
     assert "supported" not in payload
     assert captured.out.count("\n") == 1
     assert captured.err == ""
+
+
+def test_identify_validation_live_accepts_matching_33512b(monkeypatch, capsys):
+    manager = FakeManager(
+        FakeSession("Keysight Technologies,33512B,MY00000000,1.00")
+    )
+    calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "identify",
+            "--resource",
+            USB_RESOURCE,
+            "--validation-allow-pending-live-support",
+            "--model",
+            "keysight-33512b",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == ["@ivi"]
+    assert manager.session.queries == ["*IDN?"]
+    assert manager.session.writes == []
+    assert payload["model"] == "33512B"
+    assert payload["canonical_model_id"] == "keysight-33512b"
+    assert payload["model_supported"] is True
 
 
 def test_invalid_backend_human_error_does_not_create_manager(monkeypatch, capsys):
@@ -1881,6 +1950,85 @@ def test_read_errors_cli_json_success_with_instrument_error(monkeypatch, capsys)
     }
     assert captured.out.count("\n") == 1
     assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    ("command", "core_function", "extra_args"),
+    [
+        ("identify", "identify_instrument", []),
+        ("status", "query_status", []),
+        ("read-errors", "read_error_queue", []),
+        ("output", "set_output", ["--state", "off"]),
+    ],
+)
+def test_validation_direct_routes_forward_policy_and_expected_model(
+    monkeypatch,
+    capsys,
+    command,
+    core_function,
+    extra_args,
+):
+    identity = SimpleNamespace(
+        manufacturer="Keysight Technologies",
+        model="33512B",
+        serial="MY00000000",
+        firmware="1.00",
+        canonical_model_id="keysight-33512b",
+        model_supported=True,
+    )
+    values = {
+        "backend": "system",
+        "transport": "usb",
+        "identity": identity,
+    }
+    if command == "status":
+        values.update(
+            output_state="off",
+            function="SIN",
+            frequency_hz=1000.0,
+            amplitude=0.1,
+            amplitude_unit="VPP",
+            bandwidth_hz=None,
+            offset_v=0.0,
+            load="50",
+        )
+    elif command == "read-errors":
+        values.update(
+            errors=(),
+            read_count=1,
+            max_reads=20,
+            empty_confirmed=True,
+            limit_reached=False,
+        )
+    elif command == "output":
+        values["output_state"] = "off"
+    result = SimpleNamespace(**values)
+    calls = []
+
+    def fake_core(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    monkeypatch.setattr(cli_module, core_function, fake_core)
+
+    exit_code = main(
+        [
+            command,
+            "--resource",
+            USB_RESOURCE,
+            "--validation-allow-pending-live-support",
+            "--model",
+            "keysight-33512b",
+            *extra_args,
+            "--json",
+        ]
+    )
+
+    assert exit_code == ExitCode.SUCCESS
+    assert len(calls) == 1
+    assert calls[0][1]["support_policy_mode"] == "validation"
+    assert calls[0][1]["expected_model_id"] == "keysight-33512b"
+    assert json.loads(capsys.readouterr().out)["success"] is True
 
 
 def test_read_errors_cli_human_empty_queue_output(monkeypatch, capsys):

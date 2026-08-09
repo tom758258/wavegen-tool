@@ -768,6 +768,57 @@ def test_system_backend_lifecycle_queries_once_and_closes():
     assert result.identity.canonical_model_id == "keysight-33521b"
 
 
+def test_identify_validation_policy_accepts_matching_33512b():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = identify_instrument(
+        USB_RESOURCE,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+    assert result.identity.canonical_model_id == "keysight-33512b"
+    assert result.identity.model_supported is True
+
+
+def test_identify_validation_expected_model_mismatch_fails_closed():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(UnsupportedInstrumentError, match="expected exact model ID"):
+        identify_instrument(
+            USB_RESOURCE,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+
+
+def test_identify_product_policy_still_rejects_33512b():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(UnsupportedInstrumentError):
+        identify_instrument(
+            USB_RESOURCE,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+
+
 def test_system_usb_cleanup_orders_gtl_before_session_and_manager_close():
     events = []
     session = FakeSession(events=events)
@@ -2681,6 +2732,44 @@ def test_output_identifies_then_writes_only_requested_state(state):
     assert manager.close_calls == 1
 
 
+@pytest.mark.parametrize("state", ["on", "off"])
+def test_output_validation_policy_accepts_matching_33512b(state):
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = set_output(
+        USB_RESOURCE,
+        state,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == [f"OUTPut1 {state.upper()}"]
+    assert result.identity.canonical_model_id == "keysight-33512b"
+    assert result.output_state == state
+
+
+def test_output_validation_expected_model_mismatch_fails_before_write():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(UnsupportedInstrumentError, match="expected exact model ID"):
+        set_output(
+            USB_RESOURCE,
+            "on",
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+
+
 def test_control_rejects_unsupported_model_before_any_write():
     session = FakeSession(response="Keysight Technologies,33522B,SERIAL,FIRMWARE")
     manager = FakeManager(session)
@@ -2897,6 +2986,27 @@ def test_status_uses_one_session_and_parses_mode_aware_channel_one_state(
     assert manager.close_calls == 1
 
 
+def test_status_validation_policy_accepts_matching_33512b():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command=STATUS_RESPONSES,
+    )
+    manager = FakeManager(session)
+
+    result = query_status(
+        USB_RESOURCE,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries[0] == IDN_QUERY
+    assert "SOURce1:FUNCtion?" in session.queries
+    assert session.writes == []
+    assert result.identity.canonical_model_id == "keysight-33512b"
+    assert result.function == "SIN"
+
+
 @pytest.mark.parametrize(
     ("frequency_response", "query_error"),
     [
@@ -2981,6 +3091,26 @@ def test_read_error_queue_live_drains_fifo():
     assert session.writes == []
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_read_error_queue_validation_policy_accepts_matching_33512b():
+    session = FakeErrorQueueSession(
+        ['+0,"No error"'],
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+    )
+    manager = FakeManager(session)
+
+    result = read_error_queue(
+        USB_RESOURCE,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY, "SYSTem:ERRor?"]
+    assert session.writes == []
+    assert result.identity.canonical_model_id == "keysight-33512b"
+    assert result.empty_confirmed is True
 
 
 def test_read_error_queue_max_reads_cap():

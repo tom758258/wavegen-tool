@@ -872,6 +872,8 @@ def identify_instrument(
     resource: str,
     backend: str | None = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> IdentificationResult:
     """Open one resource, send only *IDN?, resolve exact model recognition, and close."""
@@ -923,7 +925,13 @@ def identify_instrument(
                 primary_cause = exc
             else:
                 try:
-                    identity = resolve_supported_identity(parse_idn(raw_idn))
+                    identity = _resolve_runtime_identity(
+                        raw_idn,
+                        manager=manager,
+                        factory=factory,
+                        support_policy_mode=support_policy_mode,
+                        expected_model_id=expected_model_id,
+                    )
                 except WavegenError as exc:
                     primary_error = exc.attach_context(
                         backend=backend_selection.name,
@@ -965,9 +973,11 @@ def query_status(
     resource: str,
     backend: str | None = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> StatusResult:
-    """Read Channel 1 status from one exactly recognized 33521B."""
+    """Read Channel 1 status from one policy-admitted instrument."""
 
     backend_selection = normalize_backend(backend)
     resource_name = normalize_resource(resource)
@@ -1015,7 +1025,13 @@ def query_status(
                 primary_cause = exc
             else:
                 try:
-                    identity = resolve_supported_identity(parse_idn(raw_idn))
+                    identity = _resolve_runtime_identity(
+                        raw_idn,
+                        manager=manager,
+                        factory=factory,
+                        support_policy_mode=support_policy_mode,
+                        expected_model_id=expected_model_id,
+                    )
                 except WavegenError as exc:
                     primary_error = exc.attach_context(
                         backend=backend_selection.name,
@@ -3799,9 +3815,11 @@ def set_output(
     state: str,
     backend: str | None = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> OutputResult:
-    """Explicitly set the recognized 33521B Channel 1 output state."""
+    """Explicitly set a policy-admitted instrument's Channel 1 output state."""
 
     if not isinstance(state, str) or state.strip().casefold() not in {"on", "off"}:
         raise WaveformParameterError("Output state must be on or off.")
@@ -3812,6 +3830,8 @@ def set_output(
         (f"OUTPut1 {normalized_state.upper()}",),
         output_state_after_writes=normalized_state,
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return OutputResult(
         resource=context.resource,
@@ -4353,9 +4373,11 @@ def read_error_queue(
     backend: str | None = None,
     *,
     max_reads: int = DEFAULT_ERROR_QUEUE_MAX_READS,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> ErrorQueueResult:
-    """Drain the SYSTem:ERRor? queue of one exactly recognized 33521B."""
+    """Drain the SYSTem:ERRor? queue of one policy-admitted instrument."""
 
     normalized_max_reads = _normalize_error_queue_max_reads(max_reads)
     backend_selection = normalize_backend(backend)
@@ -4405,7 +4427,13 @@ def read_error_queue(
                 primary_cause = exc
             else:
                 try:
-                    identity = resolve_supported_identity(parse_idn(raw_idn))
+                    identity = _resolve_runtime_identity(
+                        raw_idn,
+                        manager=manager,
+                        factory=factory,
+                        support_policy_mode=support_policy_mode,
+                        expected_model_id=expected_model_id,
+                    )
                 except WavegenError as exc:
                     primary_error = exc.attach_context(
                         backend=backend_selection.name,

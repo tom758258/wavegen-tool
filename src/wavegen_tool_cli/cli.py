@@ -135,6 +135,18 @@ def _add_validation_support_policy_argument(
     )
 
 
+def _add_validation_only_live_arguments(
+    parser: argparse.ArgumentParser,
+) -> None:
+    _add_validation_support_policy_argument(parser)
+    parser.add_argument(
+        "--model",
+        choices=_REGISTERED_MODEL_IDS,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+
+
 def _add_voltage_input_arguments(
     parser: argparse.ArgumentParser,
     *,
@@ -247,6 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Query and identify one explicit VISA resource.",
     )
     _add_simulate_argument(identify_parser)
+    _add_validation_only_live_arguments(identify_parser)
     identify_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -268,6 +281,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read Channel 1 status without changing the instrument.",
     )
     _add_simulate_argument(status_parser)
+    _add_validation_only_live_arguments(status_parser)
     status_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -289,6 +303,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read and drain the instrument system error queue.",
     )
     _add_simulate_argument(read_errors_parser)
+    _add_validation_only_live_arguments(read_errors_parser)
     read_errors_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -1090,6 +1105,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly set Channel 1 output on or off.",
     )
     _add_simulate_argument(output_parser)
+    _add_validation_only_live_arguments(output_parser)
     output_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -1270,6 +1286,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-noise",
         "configure-prbs",
     }
+    validation_only_live_commands = {
+        "identify",
+        "status",
+        "read-errors",
+        "output",
+    }
     if (
         args.command in waveform_commands
         and args.dry_run
@@ -1280,6 +1302,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--resource cannot be used with --simulate")
     if args.simulate and args.backend.strip().casefold() != "system":
         parser.error("--simulate requires the system backend")
+    if args.command in validation_only_live_commands:
+        if args.simulate and (
+            args.validation_allow_pending_live_support
+            or args.model is not None
+        ):
+            parser.error(
+                "validation-only live arguments cannot be used with --simulate"
+            )
+        if (
+            args.validation_allow_pending_live_support
+            and args.model is None
+        ):
+            parser.error(
+                "--validation-allow-pending-live-support requires --model"
+            )
+        if (
+            args.model is not None
+            and not args.validation_allow_pending_live_support
+        ):
+            parser.error(
+                "--model requires --validation-allow-pending-live-support"
+            )
     if (
         args.command in waveform_commands
         and not args.dry_run
@@ -1372,7 +1416,7 @@ def _factory_injection(simulated: bool, factory: Any) -> dict[str, Any]:
 
 def _validation_live_injection(args: argparse.Namespace) -> dict[str, Any]:
     if (
-        args.dry_run
+        getattr(args, "dry_run", False)
         or args.simulate
         or not args.validation_allow_pending_live_support
     ):
@@ -1405,6 +1449,7 @@ def _run_identify(args: argparse.Namespace) -> int:
         result = identify_instrument(
             resource,
             args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         )
     except WavegenError as exc:
@@ -2391,6 +2436,7 @@ def _run_output(args: argparse.Namespace) -> int:
             resource,
             args.state,
             args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -2404,6 +2450,7 @@ def _run_status(args: argparse.Namespace) -> int:
         result = query_status(
             resource,
             args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         )
     except WavegenError as exc:
@@ -2465,6 +2512,7 @@ def _run_read_errors(args: argparse.Namespace) -> int:
             resource,
             args.backend,
             max_reads=args.max_reads,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         )
     except WavegenError as exc:
