@@ -78,6 +78,17 @@ def test_root_help(capsys):
     assert "identify" in capsys.readouterr().out
 
 
+def test_configure_sine_help_hides_validation_live_switch(capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["configure-sine", "--help"])
+
+    assert error.value.code == ExitCode.SUCCESS
+    assert (
+        "--validation-allow-pending-live-support"
+        not in capsys.readouterr().out
+    )
+
+
 def test_identify_help(capsys):
     with pytest.raises(SystemExit) as error:
         main(["identify", "--help"])
@@ -2401,6 +2412,106 @@ def test_configure_sine_simulator_dispatches_33510b_identity_and_capability(
     assert "20000000 Hz" in payload["error"]
     assert manager_calls == []
     assert manager.opened_resources == []
+
+
+def test_configure_sine_validation_live_accepts_matching_33512b(
+    monkeypatch,
+    capsys,
+):
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--resource",
+            USB_RESOURCE,
+            "--model",
+            "keysight-33512b",
+            "--validation-allow-pending-live-support",
+            "--frequency-hz",
+            "20000000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert manager_calls == ["@ivi"]
+    assert session.queries == ["*IDN?"]
+    assert session.writes[0] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in session.writes
+    assert payload["model"] == "33512B"
+    assert payload["frequency_hz"] == 20_000_000.0
+
+
+def test_configure_sine_validation_live_rejects_expected_model_mismatch(
+    monkeypatch,
+    capsys,
+):
+    session = FakeSession()
+    manager = FakeManager(session)
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--resource",
+            USB_RESOURCE,
+            "--model",
+            "keysight-33512b",
+            "--validation-allow-pending-live-support",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.UNSUPPORTED_INSTRUMENT
+    assert "expected exact model ID" in payload["error"]
+    assert session.queries == ["*IDN?"]
+    assert session.writes == []
+
+
+def test_configure_sine_validation_live_uses_detected_33512b_capability(
+    monkeypatch,
+    capsys,
+):
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--resource",
+            USB_RESOURCE,
+            "--model",
+            "keysight-33512b",
+            "--validation-allow-pending-live-support",
+            "--frequency-hz",
+            "25000000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert "20000000 Hz" in payload["error"]
+    assert session.queries == ["*IDN?"]
+    assert session.writes == []
 
 
 @pytest.mark.parametrize("model_id", ["keysight-33510b", "keysight-33512b"])

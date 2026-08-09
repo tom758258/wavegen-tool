@@ -58,7 +58,11 @@ from wavegen_tool_core import (
     resolve_voltage_inputs,
     set_output,
 )
-from wavegen_tool_core.identity import CANONICAL_MODEL_ID, registered_model_ids
+from wavegen_tool_core.identity import (
+    CANONICAL_MODEL_ID,
+    SUPPORT_POLICY_MODE_VALIDATION,
+    registered_model_ids,
+)
 from wavegen_tool_core.simulator import (
     Simulated33521BState,
     SimulatedResourceManagerFactory,
@@ -118,6 +122,16 @@ def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
         "--simulate",
         action="store_true",
         help="Use the in-memory simulator without hardware VISA I/O.",
+    )
+
+
+def _add_validation_support_policy_argument(
+    parser: argparse.ArgumentParser,
+) -> None:
+    parser.add_argument(
+        "--validation-allow-pending-live-support",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
 
 
@@ -302,6 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 sine waveform with output off.",
     )
     _add_simulate_argument(sine_parser)
+    _add_validation_support_policy_argument(sine_parser)
     sine_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -351,6 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 sine frequency sweep with output off.",
     )
     _add_simulate_argument(sine_sweep_parser)
+    _add_validation_support_policy_argument(sine_sweep_parser)
     sine_sweep_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -429,6 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 square frequency sweep with output off.",
     )
     _add_simulate_argument(square_sweep_parser)
+    _add_validation_support_policy_argument(square_sweep_parser)
     square_sweep_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -512,6 +529,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 ramp frequency sweep with output off.",
     )
     _add_simulate_argument(ramp_sweep_parser)
+    _add_validation_support_policy_argument(ramp_sweep_parser)
     ramp_sweep_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -595,6 +613,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 triangle frequency sweep with output off.",
     )
     _add_simulate_argument(triangle_sweep_parser)
+    _add_validation_support_policy_argument(triangle_sweep_parser)
     triangle_sweep_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -673,6 +692,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 square waveform with output off.",
     )
     _add_simulate_argument(square_parser)
+    _add_validation_support_policy_argument(square_parser)
     square_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -731,6 +751,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 ramp waveform with output off.",
     )
     _add_simulate_argument(ramp_parser)
+    _add_validation_support_policy_argument(ramp_parser)
     ramp_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -789,6 +810,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 triangle waveform with output off.",
     )
     _add_simulate_argument(triangle_parser)
+    _add_validation_support_policy_argument(triangle_parser)
     triangle_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -842,6 +864,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 pulse waveform with output off.",
     )
     _add_simulate_argument(pulse_parser)
+    _add_validation_support_policy_argument(pulse_parser)
     pulse_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -915,6 +938,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 DC voltage with output off.",
     )
     _add_simulate_argument(dc_parser)
+    _add_validation_support_policy_argument(dc_parser)
     dc_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -958,6 +982,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 noise waveform with output off.",
     )
     _add_simulate_argument(noise_parser)
+    _add_validation_support_policy_argument(noise_parser)
     noise_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -1005,6 +1030,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Configure a validated Channel 1 PRBS waveform with output off.",
     )
     _add_simulate_argument(prbs_parser)
+    _add_validation_support_policy_argument(prbs_parser)
     prbs_parser.add_argument(
         "--resource",
         help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
@@ -1259,6 +1285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         and not args.dry_run
         and not args.simulate
         and args.model != CANONICAL_MODEL_ID
+        and not args.validation_allow_pending_live_support
     ):
         parser.error(
             "non-default --model selection requires --dry-run or --simulate"
@@ -1341,6 +1368,19 @@ def _factory_injection(simulated: bool, factory: Any) -> dict[str, Any]:
     if simulated:
         return {"resource_manager_factory": factory}
     return {}
+
+
+def _validation_live_injection(args: argparse.Namespace) -> dict[str, Any]:
+    if (
+        args.dry_run
+        or args.simulate
+        or not args.validation_allow_pending_live_support
+    ):
+        return {}
+    return {
+        "support_policy_mode": SUPPORT_POLICY_MODE_VALIDATION,
+        "expected_model_id": args.model,
+    }
 
 
 def _resolve_cli_voltage_inputs(
@@ -1486,6 +1526,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1559,6 +1600,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1638,6 +1680,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             duty_cycle_percent=args.duty_cycle_percent,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1718,6 +1761,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             symmetry_percent=args.symmetry_percent,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1797,6 +1841,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1871,6 +1916,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -1941,6 +1987,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -2010,6 +2057,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -2082,6 +2130,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.phase_deg,
             args.leading_edge_s,
             args.trailing_edge_s,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -2150,6 +2199,7 @@ def _run_configure_dc(args: argparse.Namespace) -> int:
             args.voltage_v,
             args.load,
             args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -2209,6 +2259,7 @@ def _run_configure_noise(args: argparse.Namespace) -> int:
             offset,
             args.load,
             args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )
@@ -2277,6 +2328,7 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
             args.edge_time_s,
             args.load,
             args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )

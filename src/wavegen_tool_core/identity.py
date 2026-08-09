@@ -15,6 +15,8 @@ RECOGNIZED_MANUFACTURERS = (
 )
 CANONICAL_MODEL = "33521B"
 CANONICAL_MODEL_ID = "keysight-33521b"
+SUPPORT_POLICY_MODE_PRODUCT = "product"
+SUPPORT_POLICY_MODE_VALIDATION = "validation"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,10 @@ _MODEL_REGISTRY = MappingProxyType(
     }
 )
 _LIVE_SUPPORTED_MODEL_IDS = frozenset({CANONICAL_MODEL_ID})
+_VALIDATION_PENDING_LIVE_MODEL_IDS = frozenset({"keysight-33512b"})
+_SUPPORT_POLICY_MODES = frozenset(
+    {SUPPORT_POLICY_MODE_PRODUCT, SUPPORT_POLICY_MODE_VALIDATION}
+)
 
 
 def model_info_for_model_id(model_id: str) -> ModelInfo | None:
@@ -97,8 +103,19 @@ def normalize_model(value: str) -> str:
     return value.strip().casefold()
 
 
-def resolve_supported_identity(identity: InstrumentIdentity) -> InstrumentIdentity:
+def resolve_supported_identity(
+    identity: InstrumentIdentity,
+    *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+) -> InstrumentIdentity:
     """Resolve only exact registered identities that are supported for live use."""
+
+    if support_policy_mode not in _SUPPORT_POLICY_MODES:
+        raise ValueError(f"unsupported support policy mode: {support_policy_mode}")
+
+    admitted_model_ids = _LIVE_SUPPORTED_MODEL_IDS
+    if support_policy_mode == SUPPORT_POLICY_MODE_VALIDATION:
+        admitted_model_ids = admitted_model_ids | _VALIDATION_PENDING_LIVE_MODEL_IDS
 
     manufacturer_matches = normalize_manufacturer(identity.manufacturer) in (
         normalize_manufacturer(manufacturer)
@@ -116,7 +133,7 @@ def resolve_supported_identity(identity: InstrumentIdentity) -> InstrumentIdenti
     if (
         not manufacturer_matches
         or model_info is None
-        or model_info.model_id not in _LIVE_SUPPORTED_MODEL_IDS
+        or model_info.model_id not in admitted_model_ids
     ):
         raise UnsupportedInstrumentError(
             "Unsupported instrument manufacturer/model combination "

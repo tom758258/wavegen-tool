@@ -3,6 +3,7 @@ import pytest
 from wavegen_tool_core.errors import MalformedIdnError, UnsupportedInstrumentError
 from wavegen_tool_core.identity import (
     CANONICAL_MODEL_ID,
+    SUPPORT_POLICY_MODE_VALIDATION,
     model_info_for_model_id,
     parse_idn,
     resolve_supported_identity,
@@ -109,6 +110,30 @@ def test_registered_but_not_live_supported_models_fail_closed(model):
 
     with pytest.raises(UnsupportedInstrumentError):
         resolve_supported_identity(identity)
+
+
+def test_validation_policy_accepts_exact_pending_33512b_identity():
+    identity = resolve_supported_identity(
+        parse_idn("Keysight Technologies,33512B,MY00000000,1.00"),
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+    )
+
+    assert identity.model == "33512B"
+    assert identity.canonical_model_id == "keysight-33512b"
+    assert identity.model_supported is True
+
+
+@pytest.mark.parametrize("model", ["33510B", "33522B"])
+def test_validation_policy_rejects_unadmitted_or_unknown_models(model):
+    identity = parse_idn(
+        f"Keysight Technologies,{model},MY00000000,1.00"
+    )
+
+    with pytest.raises(UnsupportedInstrumentError):
+        resolve_supported_identity(
+            identity,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        )
 
 
 @pytest.mark.parametrize(

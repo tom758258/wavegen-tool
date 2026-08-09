@@ -39,11 +39,12 @@ from wavegen_tool_core.errors import (
     WavegenError,
 )
 from wavegen_tool_core.identity import (
-    CANONICAL_MODEL_ID,
     InstrumentIdentity,
     ModelInfo,
+    SUPPORT_POLICY_MODE_PRODUCT,
     model_info_for_model_id,
     parse_idn,
+    registered_model_ids,
     resolve_supported_identity,
 )
 from wavegen_tool_core.simulator import (
@@ -1186,26 +1187,34 @@ def configure_sine(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SineConfigurationResult:
     """Validate and configure a Channel 1 sine wave while keeping output off."""
 
-    capabilities = _capabilities_for_configuration(resource_manager_factory)
-    frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
-        frequency_hz,
-        amplitude_vpp,
-        offset_v,
-        load,
-        phase_deg,
-        capabilities=capabilities,
-    )
-    context = _write_to_supported_33521b(
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_sine(
+            frequency_hz,
+            amplitude_vpp,
+            offset_v,
+            load,
+            phase_deg,
+            capabilities=capabilities,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
         backend,
-        commands,
-        output_state_after_writes="off",
+        prepare_configuration,
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
+    frequency, amplitude, offset, normalized_load, phase = prepared
     return SineConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -1265,11 +1274,38 @@ def configure_sine_sweep(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SineSweepConfigurationResult:
     """Validate and configure a Channel 1 sine frequency sweep."""
 
-    capabilities = _capabilities_for_configuration(resource_manager_factory)
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_sine_sweep(
+            start_frequency_hz,
+            stop_frequency_hz,
+            spacing,
+            sweep_time_s,
+            hold_time_s,
+            return_time_s,
+            amplitude_vpp,
+            offset_v,
+            load,
+            phase_deg,
+            capabilities=capabilities,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
     (
         start_frequency,
         stop_frequency,
@@ -1281,27 +1317,7 @@ def configure_sine_sweep(
         offset,
         normalized_load,
         phase,
-        commands,
-    ) = _prepare_sine_sweep(
-        start_frequency_hz,
-        stop_frequency_hz,
-        spacing,
-        sweep_time_s,
-        hold_time_s,
-        return_time_s,
-        amplitude_vpp,
-        offset_v,
-        load,
-        phase_deg,
-        capabilities=capabilities,
-    )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
-        commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
+    ) = prepared
     return SineSweepConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -1395,11 +1411,39 @@ def configure_square_sweep(
     phase_deg: object = 0.0,
     duty_cycle_percent: object = 50,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SquareSweepConfigurationResult:
     """Validate and configure a Channel 1 square frequency sweep."""
 
-    capabilities = _capabilities_for_configuration(resource_manager_factory)
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_square_sweep(
+            start_frequency_hz,
+            stop_frequency_hz,
+            spacing,
+            sweep_time_s,
+            hold_time_s,
+            return_time_s,
+            amplitude_vpp,
+            offset_v,
+            duty_cycle_percent,
+            load,
+            phase_deg,
+            capabilities=capabilities,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
     (
         start_frequency,
         stop_frequency,
@@ -1412,28 +1456,7 @@ def configure_square_sweep(
         normalized_load,
         phase,
         duty_cycle,
-        commands,
-    ) = _prepare_square_sweep(
-        start_frequency_hz,
-        stop_frequency_hz,
-        spacing,
-        sweep_time_s,
-        hold_time_s,
-        return_time_s,
-        amplitude_vpp,
-        offset_v,
-        duty_cycle_percent,
-        load,
-        phase_deg,
-        capabilities=capabilities,
-    )
-    context = _write_to_supported_33521b(
-        resource,
-        backend,
-        commands,
-        output_state_after_writes="off",
-        resource_manager_factory=resource_manager_factory,
-    )
+    ) = prepared
     return SquareSweepConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -1532,6 +1555,8 @@ def configure_ramp_sweep(
     phase_deg: object = 0.0,
     symmetry_percent: object = 100,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> RampSweepConfigurationResult:
     """Validate and configure a Channel 1 ramp frequency sweep."""
@@ -1562,12 +1587,14 @@ def configure_ramp_sweep(
         load,
         phase_deg,
     )
-    context = _write_to_supported_33521b(
+    context = _write_to_supported_instrument(
         resource,
         backend,
         commands,
         output_state_after_writes="off",
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return RampSweepConfigurationResult(
         resource=context.resource,
@@ -1665,6 +1692,8 @@ def configure_triangle_sweep(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> TriangleSweepConfigurationResult:
     """Validate and configure a Channel 1 triangle frequency sweep."""
@@ -1693,12 +1722,14 @@ def configure_triangle_sweep(
         load,
         phase_deg,
     )
-    context = _write_to_supported_33521b(
+    context = _write_to_supported_instrument(
         resource,
         backend,
         commands,
         output_state_after_writes="off",
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return TriangleSweepConfigurationResult(
         resource=context.resource,
@@ -1784,15 +1815,27 @@ def _require_capabilities_for_model_id(model_id: str) -> WavegenCapabilities:
     return capabilities
 
 
-def _capabilities_for_configuration(
+def _preflight_capabilities_for_configuration(
     resource_manager_factory: ResourceManagerFactory | None,
 ) -> WavegenCapabilities:
-    model_id = (
-        resource_manager_factory.model_id
-        if isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
-        else CANONICAL_MODEL_ID
+    if isinstance(resource_manager_factory, SimulatedResourceManagerFactory):
+        return _require_capabilities_for_model_id(resource_manager_factory.model_id)
+
+    maximum_frequency_hz = max(
+        _require_capabilities_for_model_id(
+            model_id
+        ).max_sine_square_pulse_noise_frequency_hz
+        for model_id in registered_model_ids()
     )
-    return _require_capabilities_for_model_id(model_id)
+    return WavegenCapabilities(maximum_frequency_hz)
+
+
+def _capabilities_for_identity(
+    identity: InstrumentIdentity,
+) -> WavegenCapabilities:
+    if identity.canonical_model_id is None:
+        raise RuntimeError("resolved identity is missing its canonical model ID")
+    return _require_capabilities_for_model_id(identity.canonical_model_id)
 
 
 def _require_hardware_free_model(
@@ -1813,28 +1856,44 @@ def _resolve_runtime_identity(
     *,
     manager: VisaResourceManager,
     factory: ResourceManagerFactory,
+    support_policy_mode: str,
+    expected_model_id: str | None,
 ) -> InstrumentIdentity:
     parsed_identity = parse_idn(raw_idn)
     if not (
         isinstance(factory, SimulatedResourceManagerFactory)
         and isinstance(manager, SimulatedResourceManager)
     ):
-        return resolve_supported_identity(parsed_identity)
-
-    if manager.state is not factory.state:
-        raise RuntimeError("simulator factory and manager state do not match")
-    model_info = model_info_for_model_id(factory.model_id)
-    if model_info is None or parsed_identity.model != model_info.canonical_model:
-        raise UnsupportedInstrumentError(
-            "Simulator identity does not match its registered model context.",
-            identity=parsed_identity,
+        identity = resolve_supported_identity(
+            parsed_identity,
+            support_policy_mode=support_policy_mode,
         )
-    return replace(
-        parsed_identity,
-        model=model_info.canonical_model,
-        canonical_model_id=model_info.model_id,
-        model_supported=True,
-    )
+    else:
+        if manager.state is not factory.state:
+            raise RuntimeError("simulator factory and manager state do not match")
+        model_info = model_info_for_model_id(factory.model_id)
+        if model_info is None or parsed_identity.model != model_info.canonical_model:
+            raise UnsupportedInstrumentError(
+                "Simulator identity does not match its registered model context.",
+                identity=parsed_identity,
+            )
+        identity = replace(
+            parsed_identity,
+            model=model_info.canonical_model,
+            canonical_model_id=model_info.model_id,
+            model_supported=True,
+        )
+
+    if (
+        expected_model_id is not None
+        and identity.canonical_model_id != expected_model_id
+    ):
+        raise UnsupportedInstrumentError(
+            "Detected instrument does not match the expected exact model ID "
+            f"{expected_model_id!r}.",
+            identity=identity,
+        )
+    return identity
 
 
 def _prepare_sweep_timing(
@@ -2407,35 +2466,35 @@ def configure_square(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SquareConfigurationResult:
     """Validate and configure a Channel 1 square wave while keeping output off."""
 
-    capabilities = _capabilities_for_configuration(resource_manager_factory)
-    (
-        frequency,
-        amplitude,
-        offset,
-        duty_cycle,
-        normalized_load,
-        phase,
-        commands,
-    ) = _prepare_square(
-        frequency_hz,
-        amplitude_vpp,
-        offset_v,
-        duty_cycle_percent,
-        load,
-        phase_deg,
-        capabilities=capabilities,
-    )
-    context = _write_to_supported_33521b(
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_square(
+            frequency_hz,
+            amplitude_vpp,
+            offset_v,
+            duty_cycle_percent,
+            load,
+            phase_deg,
+            capabilities=capabilities,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
         backend,
-        commands,
-        output_state_after_writes="off",
+        prepare_configuration,
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
+    frequency, amplitude, offset, duty_cycle, normalized_load, phase = prepared
     return SquareConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -2597,6 +2656,8 @@ def configure_ramp(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> RampConfigurationResult:
     """Validate and configure a Channel 1 ramp wave while keeping output off."""
@@ -2617,12 +2678,14 @@ def configure_ramp(
         load,
         phase_deg,
     )
-    context = _write_to_supported_33521b(
+    context = _write_to_supported_instrument(
         resource,
         backend,
         commands,
         output_state_after_writes="off",
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return RampConfigurationResult(
         resource=context.resource,
@@ -2757,6 +2820,8 @@ def configure_triangle(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> TriangleConfigurationResult:
     """Validate and configure a Channel 1 triangle wave while keeping output off."""
@@ -2768,12 +2833,14 @@ def configure_triangle(
         load,
         phase_deg,
     )
-    context = _write_to_supported_33521b(
+    context = _write_to_supported_instrument(
         resource,
         backend,
         commands,
         output_state_after_writes="off",
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return TriangleConfigurationResult(
         resource=context.resource,
@@ -2880,39 +2947,60 @@ def configure_pulse(
     leading_edge_s: object = None,
     trailing_edge_s: object = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> PulseConfigurationResult:
     """Validate and configure a Channel 1 pulse wave while keeping output off."""
 
-    capabilities = _capabilities_for_configuration(resource_manager_factory)
-    (
-        frequency,
-        amplitude,
-        offset,
-        pulse_width,
-        edge_time,
-        leading_edge,
-        trailing_edge,
-        normalized_load,
-        phase,
-        commands,
-    ) = _prepare_pulse(
-        frequency_hz,
-        amplitude_vpp,
-        pulse_width_s,
-        offset_v,
-        edge_time_s,
-        load,
-        phase_deg,
-        leading_edge_s,
-        trailing_edge_s,
-        capabilities=capabilities,
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[
+        float,
+        float,
+        float,
+        float,
+        float | None,
+        float,
+        float,
+        str,
+        float,
+        tuple[str, ...],
+    ]:
+        return _prepare_pulse(
+            frequency_hz,
+            amplitude_vpp,
+            pulse_width_s,
+            offset_v,
+            edge_time_s,
+            load,
+            phase_deg,
+            leading_edge_s,
+            trailing_edge_s,
+            capabilities=capabilities,
+        )
+
+    prepare_configuration(
+        _preflight_capabilities_for_configuration(resource_manager_factory)
     )
 
     def operate(
         session: VisaSession,
         context: IdentificationResult,
-    ) -> tuple[float, float, float, float, float]:
+    ) -> tuple[object, ...]:
+        (
+            frequency,
+            amplitude,
+            offset,
+            pulse_width,
+            edge_time,
+            leading_edge,
+            trailing_edge,
+            normalized_load,
+            phase,
+            commands,
+        ) = prepare_configuration(_capabilities_for_identity(context.identity))
+
         def write_pulse_command(command: str, output_state: str | None) -> None:
             try:
                 session.write(command)
@@ -3092,6 +3180,10 @@ def configure_pulse(
             context=context,
         )
         return (
+            amplitude,
+            offset,
+            edge_time,
+            normalized_load,
             readback_frequency,
             readback_width,
             readback_leading,
@@ -3099,14 +3191,20 @@ def configure_pulse(
             readback_phase,
         )
 
-    context, readback = _run_on_supported_33521b(
+    context, readback = _run_on_supported_instrument(
         resource,
         backend,
         operate,
         output_state_after_operation="off",
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     (
+        amplitude,
+        offset,
+        edge_time,
+        normalized_load,
         readback_frequency,
         readback_width,
         readback_leading,
@@ -3330,17 +3428,21 @@ def configure_dc(
     load: object = 50,
     backend: str | None = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> DcConfigurationResult:
     """Validate and configure a Channel 1 DC voltage while keeping output off."""
 
     voltage, normalized_load, commands = _prepare_dc(voltage_v, load)
-    context = _write_to_supported_33521b(
+    context = _write_to_supported_instrument(
         resource,
         backend,
         commands,
         output_state_after_writes="off",
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return DcConfigurationResult(
         resource=context.resource,
@@ -3401,31 +3503,33 @@ def configure_noise(
     load: object = 50,
     backend: str | None = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> NoiseConfigurationResult:
     """Validate and configure a Channel 1 noise wave while keeping output off."""
 
-    capabilities = _capabilities_for_configuration(resource_manager_factory)
-    (
-        amplitude,
-        offset,
-        bandwidth,
-        normalized_load,
-        commands,
-    ) = _prepare_noise(
-        amplitude_vpp,
-        bandwidth_hz,
-        offset_v,
-        load,
-        capabilities=capabilities,
-    )
-    context = _write_to_supported_33521b(
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_noise(
+            amplitude_vpp,
+            bandwidth_hz,
+            offset_v,
+            load,
+            capabilities=capabilities,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
         backend,
-        commands,
-        output_state_after_writes="off",
+        prepare_configuration,
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
+    amplitude, offset, bandwidth, normalized_load = prepared
     return NoiseConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -3531,6 +3635,8 @@ def configure_prbs(
     load: object = 50,
     backend: str | None = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> PrbsConfigurationResult:
     """Validate and configure Channel 1 PRBS while keeping output off."""
@@ -3551,12 +3657,14 @@ def configure_prbs(
         edge_time_s,
         load,
     )
-    context = _write_to_supported_33521b(
+    context = _write_to_supported_instrument(
         resource,
         backend,
         commands,
         output_state_after_writes="off",
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return PrbsConfigurationResult(
         resource=context.resource,
@@ -3698,7 +3806,7 @@ def set_output(
     if not isinstance(state, str) or state.strip().casefold() not in {"on", "off"}:
         raise WaveformParameterError("Output state must be on or off.")
     normalized_state = state.strip().casefold()
-    context = _write_to_supported_33521b(
+    context = _write_to_supported_instrument(
         resource,
         backend,
         (f"OUTPut1 {normalized_state.upper()}",),
@@ -3991,13 +4099,15 @@ def _verify_pulse_readback(
     )
 
 
-def _run_on_supported_33521b(
+def _run_on_supported_instrument(
     resource: str,
     backend: str | None,
     operation: Callable[[VisaSession, IdentificationResult], object],
     *,
     output_state_after_operation: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
 ) -> tuple[IdentificationResult, object]:
     backend_selection = normalize_backend(backend)
     resource_name = normalize_resource(resource)
@@ -4051,6 +4161,8 @@ def _run_on_supported_33521b(
                         raw_idn,
                         manager=manager,
                         factory=factory,
+                        support_policy_mode=support_policy_mode,
+                        expected_model_id=expected_model_id,
                     )
                 except WavegenError as exc:
                     primary_error = exc.attach_context(
@@ -4116,13 +4228,15 @@ def _run_on_supported_33521b(
     return context, operation_result
 
 
-def _write_to_supported_33521b(
+def _write_to_supported_instrument(
     resource: str,
     backend: str | None,
     commands: tuple[str, ...],
     *,
     output_state_after_writes: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
 ) -> IdentificationResult:
     def write_commands(
         session: VisaSession,
@@ -4131,14 +4245,57 @@ def _write_to_supported_33521b(
         for command in commands:
             session.write(command)
 
-    context, _ = _run_on_supported_33521b(
+    context, _ = _run_on_supported_instrument(
         resource,
         backend,
         write_commands,
         output_state_after_operation=output_state_after_writes,
         resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
     )
     return context
+
+
+def _prepare_and_write_to_supported_instrument(
+    resource: str,
+    backend: str | None,
+    prepare_configuration: Callable[
+        [WavegenCapabilities],
+        tuple[tuple[object, ...], tuple[str, ...]],
+    ],
+    *,
+    resource_manager_factory: ResourceManagerFactory | None,
+    support_policy_mode: str,
+    expected_model_id: str | None,
+) -> tuple[IdentificationResult, tuple[object, ...]]:
+    prepare_configuration(
+        _preflight_capabilities_for_configuration(resource_manager_factory)
+    )
+
+    def prepare_and_write(
+        session: VisaSession,
+        context: IdentificationResult,
+    ) -> tuple[object, ...]:
+        values, commands = prepare_configuration(
+            _capabilities_for_identity(context.identity)
+        )
+        for command in commands:
+            session.write(command)
+        return values
+
+    context, values = _run_on_supported_instrument(
+        resource,
+        backend,
+        prepare_and_write,
+        output_state_after_operation="off",
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    if not isinstance(values, tuple):  # pragma: no cover - defensive invariant
+        raise RuntimeError("configuration completed without prepared values")
+    return context, values
 
 
 def _normalize_error_queue_max_reads(value: object) -> int:

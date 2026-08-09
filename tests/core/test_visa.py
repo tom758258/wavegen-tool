@@ -21,6 +21,7 @@ from wavegen_tool_core.errors import (
     WaveformParameterError,
     WaveformVerificationError,
 )
+from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_VALIDATION
 from wavegen_tool_core.simulator import (
     SIMULATED_33521B_RESOURCE,
     SimulatedResourceManager,
@@ -1012,6 +1013,67 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
     assert result.load == "50"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_configure_sine_validation_policy_accepts_matching_33512b():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = configure_sine(
+        USB_RESOURCE,
+        20_000_000,
+        0.1,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes[0] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in session.writes
+    assert result.identity.model == "33512B"
+    assert result.identity.canonical_model_id == "keysight-33512b"
+    assert result.frequency_hz == 20_000_000.0
+
+
+def test_configure_sine_validation_expected_model_mismatch_fails_before_writes():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(UnsupportedInstrumentError, match="expected exact model ID"):
+        configure_sine(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+
+
+def test_configure_sine_uses_detected_33512b_capability_before_writes():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError, match="20000000 Hz"):
+        configure_sine(
+            USB_RESOURCE,
+            25_000_000,
+            0.1,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
 
 
 def test_dry_run_sine_returns_validated_hardware_free_command_preview():
