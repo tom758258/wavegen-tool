@@ -2562,7 +2562,7 @@ def test_configure_sine_simulator_dispatches_33510b_identity_and_capability(
     assert manager.opened_resources == []
 
 
-def test_configure_sine_validation_live_accepts_matching_33512b(
+def test_configure_sine_product_live_accepts_matching_33512b(
     monkeypatch,
     capsys,
 ):
@@ -2577,9 +2577,6 @@ def test_configure_sine_validation_live_accepts_matching_33512b(
             "configure-sine",
             "--resource",
             USB_RESOURCE,
-            "--model",
-            "keysight-33512b",
-            "--validation-allow-pending-live-support",
             "--frequency-hz",
             "20000000",
             "--amplitude-vpp",

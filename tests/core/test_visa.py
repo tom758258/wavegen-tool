@@ -803,20 +803,21 @@ def test_identify_validation_expected_model_mismatch_fails_closed():
     assert session.writes == []
 
 
-def test_identify_product_policy_still_rejects_33512b():
+def test_identify_product_policy_accepts_33512b():
     session = FakeSession(
         response="Keysight Technologies,33512B,MY00000000,1.00"
     )
     manager = FakeManager(session)
 
-    with pytest.raises(UnsupportedInstrumentError):
-        identify_instrument(
-            USB_RESOURCE,
-            resource_manager_factory=RecordingFactory(manager),
-        )
+    result = identify_instrument(
+        USB_RESOURCE,
+        resource_manager_factory=RecordingFactory(manager),
+    )
 
     assert session.queries == [IDN_QUERY]
     assert session.writes == []
+    assert result.identity.canonical_model_id == "keysight-33512b"
+    assert result.identity.model_supported is True
 
 
 def test_system_usb_cleanup_orders_gtl_before_session_and_manager_close():

@@ -5,12 +5,12 @@ selected waveform generators and performing bounded control through VISA. It
 supports identification, read-only Channel 1 status, bounded instrument
 error-queue reads, Channel 1 sine/square/ramp/triangle/pulse/DC/noise/PRBS
 configuration, explicit output control, and sine, square, ramp, and triangle
-frequency sweeps for Keysight or Agilent 33521B instruments.
+frequency sweeps for Keysight or Agilent 33512B and 33521B instruments.
 
 ## Current Scope
 
-- Exact live manufacturer-and-model recognition for Keysight Technologies
-  33521B and Agilent Technologies 33521B
+- Exact live manufacturer-and-model recognition for Keysight Technologies or
+  Agilent Technologies 33512B and 33521B
 - Channel 1 sine configuration with explicit load, frequency, amplitude, and
   offset
 - Channel 1 dry-run preview for all eight waveform configurations, with exact
@@ -37,15 +37,15 @@ frequency sweeps for Keysight or Agilent 33521B instruments.
 - Human-readable and JSON CLI output
 
 The identify command rejects GPIB and all other transports outside its explicit
-scope. Live identification and control support remains limited to the 33521B.
-The registered 33510B and 33512B profiles are available only to hardware-free
-dry-run and standalone configure simulation.
+scope. Live identification and control support is limited to the 33512B and
+33521B. The registered 33510B profile is available only to hardware-free dry-run
+and standalone configure simulation.
 
 For Live identity resolution, these are the only supported manufacturer/model
 pairs. Matching ignores case and ordinary whitespace differences but does not
 use prefix, substring, or fuzzy matching. A successful identify result
 preserves the manufacturer reported by the instrument while normalizing the
-model to `33521B`.
+model to `33512B` or `33521B`.
 
 The public scope excludes other waveform types, automatic resource scanning,
 WebUI features, and release executables. Identification sends only `*IDN?`; it
@@ -237,7 +237,8 @@ uv run wavegen-tool list-resources --live-only --backend "@py"
 ```
 
 A non-empty response confirms connectivity only. It does not establish that
-the resource is a recognized 33521B or authorize the model for later control.
+the resource is a recognized 33512B or 33521B or authorize the model for later
+control.
 Live-only output does not display or save serial numbers, firmware, or raw IDN
 responses. Checks do not retry or switch backends. Raw listing does not open
 instrument sessions or attempt return-to-local. USB + System VISA live-only
@@ -380,8 +381,9 @@ Use `--load high-z` to set the instrument's output-load setting to high
 impedance and `--json` for one JSON object. The load setting does not detect or
 verify the physically connected load. The command validates all waveform
 parameters before opening VISA. It then identifies the instrument in the same
-session, rejects anything except an exactly recognized 33521B, turns Channel 1
-output off, explicitly sets the angle unit to degrees, and applies the settings.
+session, rejects anything except an exactly recognized 33512B or 33521B, turns
+Channel 1 output off, explicitly sets the angle unit to degrees, and applies the
+settings.
 It never turns the output on. Sine, square, ramp, triangle, and pulse accept
 `--phase-deg`, defaulting to 0 degrees and allowing -360 through +360 degrees.
 Public `status` does not expose phase.

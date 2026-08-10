@@ -104,15 +104,29 @@ def test_agilent_other_model_fails_closed():
         resolve_supported_identity(identity)
 
 
-@pytest.mark.parametrize("model", ["33510B", "33512B"])
-def test_registered_but_not_live_supported_models_fail_closed(model):
-    identity = parse_idn(f"Keysight Technologies,{model},MY00000000,1.00")
+def test_registered_but_not_live_supported_33510b_fails_closed():
+    identity = parse_idn("Keysight Technologies,33510B,MY00000000,1.00")
 
     with pytest.raises(UnsupportedInstrumentError):
         resolve_supported_identity(identity)
 
 
-def test_validation_policy_accepts_exact_pending_33512b_identity():
+@pytest.mark.parametrize(
+    "manufacturer",
+    ["Keysight Technologies", "Agilent Technologies"],
+)
+def test_product_policy_accepts_exact_33512b_identity(manufacturer):
+    identity = resolve_supported_identity(
+        parse_idn(f"{manufacturer},33512B,MY00000000,1.00")
+    )
+
+    assert identity.manufacturer == manufacturer
+    assert identity.model == "33512B"
+    assert identity.canonical_model_id == "keysight-33512b"
+    assert identity.model_supported is True
+
+
+def test_validation_policy_accepts_product_supported_33512b_identity():
     identity = resolve_supported_identity(
         parse_idn("Keysight Technologies,33512B,MY00000000,1.00"),
         support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
