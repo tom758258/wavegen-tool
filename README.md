@@ -396,9 +396,13 @@ High/Low pair must have a high level greater than its low level. For example,
 `1.65 V` offset. Results and dry-run previews continue to report and command
 the canonical amplitude and offset values.
 
-The supported 33521B sine limits are:
+The supported sine frequency limits are:
 
-- Frequency: 0.000001 Hz to 30000000 Hz
+- 33512B: 0.000001 Hz to 20000000 Hz
+- 33521B: 0.000001 Hz to 30000000 Hz
+
+For both Product Live models:
+
 - 50-ohm load setting: 0.001 Vpp to 10 Vpp, with
   `abs(offset) + amplitude / 2 <= 5 V`
 - High-impedance load setting: 0.002 Vpp to 20 Vpp, with

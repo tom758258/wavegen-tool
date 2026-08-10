@@ -653,7 +653,7 @@ class SystemErrorEntry:
 
 @dataclass(frozen=True)
 class ErrorQueueResult:
-    """A bounded SYSTem:ERRor? drain of an exactly recognized 33521B."""
+    """A bounded SYSTem:ERRor? drain of an exactly recognized supported instrument."""
 
     resource: str
     backend: str
