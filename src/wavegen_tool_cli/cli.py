@@ -125,6 +125,16 @@ def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_channel_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--channel",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="Basic waveform channel (1 or 2; default: 1).",
+    )
+
+
 def _add_validation_support_policy_argument(
     parser: argparse.ArgumentParser,
 ) -> None:
@@ -278,9 +288,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser(
         "status",
-        help="Read Channel 1 status without changing the instrument.",
+        help="Read selected-channel status without changing the instrument.",
     )
     _add_simulate_argument(status_parser)
+    _add_channel_argument(status_parser)
     _add_validation_only_live_arguments(status_parser)
     status_parser.add_argument(
         "--resource",
@@ -328,9 +339,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sine_parser = subparsers.add_parser(
         "configure-sine",
-        help="Configure a validated Channel 1 sine waveform with output off.",
+        help="Configure a validated selected-channel sine waveform with output off.",
     )
     _add_simulate_argument(sine_parser)
+    _add_channel_argument(sine_parser)
     _add_validation_support_policy_argument(sine_parser)
     sine_parser.add_argument(
         "--resource",
@@ -704,9 +716,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     square_parser = subparsers.add_parser(
         "configure-square",
-        help="Configure a validated Channel 1 square waveform with output off.",
+        help="Configure a validated selected-channel square waveform with output off.",
     )
     _add_simulate_argument(square_parser)
+    _add_channel_argument(square_parser)
     _add_validation_support_policy_argument(square_parser)
     square_parser.add_argument(
         "--resource",
@@ -763,9 +776,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ramp_parser = subparsers.add_parser(
         "configure-ramp",
-        help="Configure a validated Channel 1 ramp waveform with output off.",
+        help="Configure a validated selected-channel ramp waveform with output off.",
     )
     _add_simulate_argument(ramp_parser)
+    _add_channel_argument(ramp_parser)
     _add_validation_support_policy_argument(ramp_parser)
     ramp_parser.add_argument(
         "--resource",
@@ -822,9 +836,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     triangle_parser = subparsers.add_parser(
         "configure-triangle",
-        help="Configure a validated Channel 1 triangle waveform with output off.",
+        help="Configure a validated selected-channel triangle waveform with output off.",
     )
     _add_simulate_argument(triangle_parser)
+    _add_channel_argument(triangle_parser)
     _add_validation_support_policy_argument(triangle_parser)
     triangle_parser.add_argument(
         "--resource",
@@ -876,9 +891,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     pulse_parser = subparsers.add_parser(
         "configure-pulse",
-        help="Configure a validated Channel 1 pulse waveform with output off.",
+        help="Configure a validated selected-channel pulse waveform with output off.",
     )
     _add_simulate_argument(pulse_parser)
+    _add_channel_argument(pulse_parser)
     _add_validation_support_policy_argument(pulse_parser)
     pulse_parser.add_argument(
         "--resource",
@@ -950,9 +966,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     dc_parser = subparsers.add_parser(
         "configure-dc",
-        help="Configure a validated Channel 1 DC voltage with output off.",
+        help="Configure a validated selected-channel DC voltage with output off.",
     )
     _add_simulate_argument(dc_parser)
+    _add_channel_argument(dc_parser)
     _add_validation_support_policy_argument(dc_parser)
     dc_parser.add_argument(
         "--resource",
@@ -994,9 +1011,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     noise_parser = subparsers.add_parser(
         "configure-noise",
-        help="Configure a validated Channel 1 noise waveform with output off.",
+        help="Configure a validated selected-channel noise waveform with output off.",
     )
     _add_simulate_argument(noise_parser)
+    _add_channel_argument(noise_parser)
     _add_validation_support_policy_argument(noise_parser)
     noise_parser.add_argument(
         "--resource",
@@ -1042,9 +1060,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     prbs_parser = subparsers.add_parser(
         "configure-prbs",
-        help="Configure a validated Channel 1 PRBS waveform with output off.",
+        help="Configure a validated selected-channel PRBS waveform with output off.",
     )
     _add_simulate_argument(prbs_parser)
+    _add_channel_argument(prbs_parser)
     _add_validation_support_policy_argument(prbs_parser)
     prbs_parser.add_argument(
         "--resource",
@@ -1102,9 +1121,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     output_parser = subparsers.add_parser(
         "output",
-        help="Explicitly set Channel 1 output on or off.",
+        help="Explicitly set selected-channel output on or off.",
     )
     _add_simulate_argument(output_parser)
+    _add_channel_argument(output_parser)
     _add_validation_only_live_arguments(output_parser)
     output_parser.add_argument(
         "--resource",
@@ -1571,6 +1591,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1587,6 +1608,7 @@ def _run_sine_dry_run(args: argparse.Namespace) -> int:
             offset,
             args.load,
             args.phase_deg,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1961,6 +1983,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1978,6 +2001,7 @@ def _run_square_dry_run(args: argparse.Namespace) -> int:
             args.duty_cycle_percent,
             args.load,
             args.phase_deg,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2032,6 +2056,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2049,6 +2074,7 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
             args.symmetry_percent,
             args.load,
             args.phase_deg,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2102,6 +2128,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2118,6 +2145,7 @@ def _run_triangle_dry_run(args: argparse.Namespace) -> int:
             offset,
             args.load,
             args.phase_deg,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2175,6 +2203,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.phase_deg,
             args.leading_edge_s,
             args.trailing_edge_s,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2195,6 +2224,7 @@ def _run_pulse_dry_run(args: argparse.Namespace) -> int:
             args.phase_deg,
             args.leading_edge_s,
             args.trailing_edge_s,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2244,6 +2274,7 @@ def _run_configure_dc(args: argparse.Namespace) -> int:
             args.voltage_v,
             args.load,
             args.backend,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2252,7 +2283,12 @@ def _run_configure_dc(args: argparse.Namespace) -> int:
 
 def _run_dc_dry_run(args: argparse.Namespace) -> int:
     try:
-        result = dry_run_dc(args.model, args.voltage_v, args.load)
+        result = dry_run_dc(
+            args.model,
+            args.voltage_v,
+            args.load,
+            channel=args.channel,
+        )
     except WavegenError as exc:
         if args.json_output:
             print(
@@ -2304,6 +2340,7 @@ def _run_configure_noise(args: argparse.Namespace) -> int:
             offset,
             args.load,
             args.backend,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2319,6 +2356,7 @@ def _run_noise_dry_run(args: argparse.Namespace) -> int:
             args.bandwidth_hz,
             offset,
             args.load,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2373,6 +2411,7 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
             args.edge_time_s,
             args.load,
             args.backend,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2390,6 +2429,7 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
             offset,
             args.edge_time_s,
             args.load,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2436,6 +2476,7 @@ def _run_output(args: argparse.Namespace) -> int:
             resource,
             args.state,
             args.backend,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2450,12 +2491,13 @@ def _run_status(args: argparse.Namespace) -> int:
         result = query_status(
             resource,
             args.backend,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         )
     except WavegenError as exc:
         if args.json_output:
-            payload = _status_error_payload(exc)
+            payload = _status_error_payload(exc, args.channel)
             print(
                 json.dumps(
                     _with_simulation_fields(payload, args.simulate),
@@ -2470,7 +2512,7 @@ def _run_status(args: argparse.Namespace) -> int:
         return int(_exit_code_for_error(exc))
     except Exception:
         if args.json_output:
-            payload = _status_internal_error_payload()
+            payload = _status_internal_error_payload(args.channel)
             print(
                 json.dumps(
                     _with_simulation_fields(payload, args.simulate),
@@ -2570,7 +2612,11 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
         result = operation()
     except WavegenError as exc:
         if args.json_output:
-            payload = _control_error_payload(args.command, exc)
+            payload = _control_error_payload(
+                args.command,
+                exc,
+                channel=getattr(args, "channel", None),
+            )
             print(
                 json.dumps(
                     _with_simulation_fields(payload, args.simulate),
@@ -2743,6 +2789,18 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "error": None,
     }
     if action in {
+        "configure-sine",
+        "configure-square",
+        "configure-ramp",
+        "configure-triangle",
+        "configure-pulse",
+        "configure-dc",
+        "configure-noise",
+        "configure-prbs",
+        "output",
+    }:
+        payload["channel"] = getattr(result, "channel", 1)
+    if action in {
         "configure-sine-sweep",
         "configure-square-sweep",
         "configure-ramp-sweep",
@@ -2821,6 +2879,7 @@ def _sine_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -3032,6 +3091,7 @@ def _square_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -3070,6 +3130,7 @@ def _ramp_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -3108,6 +3169,7 @@ def _triangle_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -3145,6 +3207,7 @@ def _pulse_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "frequency_hz": result.frequency_hz,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -3186,6 +3249,7 @@ def _dc_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "voltage_v": result.voltage_v,
         "load": result.load,
         "commands": list(result.commands),
@@ -3220,6 +3284,7 @@ def _noise_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "bandwidth_hz": result.bandwidth_hz,
@@ -3256,6 +3321,7 @@ def _prbs_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
         "bit_rate_bps": result.bit_rate_bps,
         "amplitude_vpp": result.amplitude_vpp,
         "pattern": result.pattern,
@@ -3287,9 +3353,14 @@ def _prbs_dry_run_internal_error_payload() -> dict[str, object]:
     }
 
 
-def _control_error_payload(action: str, error: WavegenError) -> dict[str, object]:
+def _control_error_payload(
+    action: str,
+    error: WavegenError,
+    *,
+    channel: int | None = None,
+) -> dict[str, object]:
     identity = error.identity
-    return {
+    payload = {
         "success": False,
         "action": action,
         "backend": error.backend,
@@ -3299,6 +3370,19 @@ def _control_error_payload(action: str, error: WavegenError) -> dict[str, object
         "output_state": error.output_state,
         "error": _error_text(error),
     }
+    if action in {
+        "configure-sine",
+        "configure-square",
+        "configure-ramp",
+        "configure-triangle",
+        "configure-pulse",
+        "configure-dc",
+        "configure-noise",
+        "configure-prbs",
+        "output",
+    }:
+        payload["channel"] = channel
+    return payload
 
 
 def _control_internal_error_payload(action: str) -> dict[str, object]:
@@ -3318,6 +3402,7 @@ def _status_success_payload(result: Any) -> dict[str, object]:
     return {
         "success": True,
         "action": "status",
+        "channel": getattr(result, "channel", 1),
         "backend": result.backend,
         "transport": result.transport,
         "manufacturer": result.identity.manufacturer,
@@ -3400,11 +3485,15 @@ def _error_queue_internal_error_payload(max_reads: int) -> dict[str, object]:
     }
 
 
-def _status_error_payload(error: WavegenError) -> dict[str, object]:
+def _status_error_payload(
+    error: WavegenError,
+    channel: int | None = None,
+) -> dict[str, object]:
     identity = error.identity
     return {
         "success": False,
         "action": "status",
+        "channel": channel,
         "backend": error.backend,
         "transport": error.transport,
         "manufacturer": getattr(identity, "manufacturer", None),
@@ -3420,10 +3509,11 @@ def _status_error_payload(error: WavegenError) -> dict[str, object]:
     }
 
 
-def _status_internal_error_payload() -> dict[str, object]:
+def _status_internal_error_payload(channel: int | None = None) -> dict[str, object]:
     return {
         "success": False,
         "action": "status",
+        "channel": channel,
         "backend": None,
         "transport": None,
         "manufacturer": None,
@@ -3475,8 +3565,9 @@ def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
 
 
 def _human_control_success(action: str, result: Any) -> str:
+    channel = getattr(result, "channel", 1)
     if action == "configure-sine":
-        heading = "Channel 1 sine waveform configured with output off."
+        heading = f"Channel {channel} sine waveform configured with output off."
     elif action == "configure-sine-sweep":
         heading = "Channel 1 sine frequency sweep configured with output off."
     elif action == "configure-square-sweep":
@@ -3486,21 +3577,21 @@ def _human_control_success(action: str, result: Any) -> str:
     elif action == "configure-triangle-sweep":
         heading = "Channel 1 triangle frequency sweep configured with output off."
     elif action == "configure-square":
-        heading = "Channel 1 square waveform configured with output off."
+        heading = f"Channel {channel} square waveform configured with output off."
     elif action == "configure-ramp":
-        heading = "Channel 1 ramp waveform configured with output off."
+        heading = f"Channel {channel} ramp waveform configured with output off."
     elif action == "configure-triangle":
-        heading = "Channel 1 triangle waveform configured with output off."
+        heading = f"Channel {channel} triangle waveform configured with output off."
     elif action == "configure-pulse":
-        heading = "Channel 1 pulse waveform configured with output off."
+        heading = f"Channel {channel} pulse waveform configured with output off."
     elif action == "configure-dc":
-        heading = "Channel 1 DC voltage configured with output off."
+        heading = f"Channel {channel} DC voltage configured with output off."
     elif action == "configure-noise":
-        heading = "Channel 1 noise waveform configured with output off."
+        heading = f"Channel {channel} noise waveform configured with output off."
     elif action == "configure-prbs":
-        heading = "Channel 1 PRBS waveform configured with output off."
+        heading = f"Channel {channel} PRBS waveform configured with output off."
     else:
-        heading = f"Channel 1 output set to {result.output_state}."
+        heading = f"Channel {channel} output set to {result.output_state}."
     lines = [
         heading,
         f"Backend: {result.backend}",
@@ -3577,7 +3668,7 @@ def _human_sine_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 sine dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} sine dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3670,7 +3761,7 @@ def _human_square_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 square dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} square dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3686,7 +3777,7 @@ def _human_ramp_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 ramp dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} ramp dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3702,7 +3793,7 @@ def _human_triangle_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 triangle dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} triangle dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3726,7 +3817,7 @@ def _human_pulse_dry_run_success(result: Any) -> str:
     )
     return "\n".join(
         (
-            "Channel 1 pulse dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} pulse dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3743,7 +3834,7 @@ def _human_dc_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 DC dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} DC dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3758,7 +3849,7 @@ def _human_noise_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 noise dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} noise dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3773,7 +3864,7 @@ def _human_prbs_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 PRBS dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} PRBS dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3789,7 +3880,7 @@ def _human_status_success(result: Any) -> str:
         f"Instrument: {result.identity.manufacturer} {result.identity.model}",
         f"Backend: {result.backend}",
         f"Transport: {result.transport}",
-        f"Channel 1 output: {result.output_state}",
+        f"Channel {result.channel} output: {result.output_state}",
         f"Function: {result.function}",
     ]
     if result.function == "DC":

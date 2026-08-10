@@ -1064,7 +1064,9 @@ def _wavegen_error_payload(error: WavegenError) -> dict[str, object]:
 
 def _json_safe(value: object) -> object:
     if is_dataclass(value):
-        return asdict(value)
+        serialized = asdict(value)
+        serialized.pop("channel", None)
+        return serialized
     if isinstance(value, tuple):
         return [_json_safe(item) for item in value]
     if isinstance(value, list):

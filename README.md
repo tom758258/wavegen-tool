@@ -2,33 +2,28 @@
 
 Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. It
-supports identification, read-only Channel 1 status, bounded instrument
-error-queue reads, Channel 1 sine/square/ramp/triangle/pulse/DC/noise/PRBS
-configuration, explicit output control, and sine, square, ramp, and triangle
-frequency sweeps for Keysight or Agilent 33512B and 33521B instruments.
+supports identification, read-only status, bounded instrument error-queue
+reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
+explicit output control, and sine, square, ramp, and triangle frequency sweeps
+for Keysight or Agilent 33512B and 33521B instruments.
 
 ## Current Scope
 
 - Exact live manufacturer-and-model recognition for Keysight Technologies or
   Agilent Technologies 33512B and 33521B
-- Channel 1 sine configuration with explicit load, frequency, amplitude, and
-  offset
-- Channel 1 dry-run preview for all eight waveform configurations, with exact
+- Basic Direct CLI control for Channel 1 or Channel 2 with `--channel`; the
+  default remains Channel 1
+- Dry-run preview for all eight basic waveform configurations, with exact
   registered model selection for 33510B, 33512B, and 33521B
-- Stateful in-memory Channel 1 simulator, with the same exact model selection
-  for standalone waveform configuration commands
-- Channel 1 square configuration
-- Channel 1 ramp configuration
-- Channel 1 triangle configuration
-- Channel 1 pulse configuration
+- Stateful in-memory simulator with independent channels for the two-channel
+  33510B and 33512B profiles
+- Basic sine, square, ramp, triangle, and pulse configuration
 - Channel 1 sine, square, ramp, and triangle linear and logarithmic frequency
   sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
-- Channel 1 DC voltage configuration
-- Channel 1 noise configuration
-- Channel 1 PRBS configuration
-- Explicit Channel 1 output on/off control
-- Read-only Channel 1 status query
+- Basic DC voltage, noise, and PRBS configuration
+- Explicit selected-channel output on/off control
+- Read-only selected-channel status query
 - Bounded instrument error queue reads
 - System VISA (`system_visa`) explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
@@ -52,6 +47,24 @@ The public scope excludes other waveform types, automatic resource scanning,
 WebUI features, and release executables. Identification sends only `*IDN?`; it
 does not reset the instrument, change settings, or enable an output.
 
+## Basic Channel Control
+
+The Direct CLI basic commands `status`, `output`, `configure-sine`,
+`configure-square`, `configure-ramp`, `configure-triangle`, `configure-pulse`,
+`configure-dc`, `configure-noise`, and `configure-prbs` accept `--channel 1`
+or `--channel 2`. The default is Channel 1. 33512B supports both channels for
+Product Live, dry-run, and simulator operation. 33510B supports both channels
+only in dry-run and simulator operation. 33521B has one channel, so Channel 2
+is rejected by Core in live, dry-run, and simulator paths. Sine, square, ramp,
+and triangle sweep commands remain Channel 1 only.
+
+Basic configuration turns off only the selected channel and leaves it off; it
+never enables output implicitly. On two-channel live instruments, independent
+state-changing operations fail closed unless frequency coupling, voltage
+coupling, and tracking are all explicitly reported as off. The tool never
+disables coupling or tracking automatically. Read-only status does not require
+these independent-channel checks.
+
 ## Requirements and Installation
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the
@@ -67,8 +80,10 @@ reserved WebUI import packages.
 ## Stateful Simulator
 
 The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
-all eight waveform configuration commands, the sine, square, ramp, and triangle
-sweep commands, and explicit output control for Channel 1. Standalone configure
+all eight basic waveform configuration commands, the sine, square, ramp, and
+triangle sweep commands, and explicit output control. Two-channel model
+profiles retain independent Channel 1 and Channel 2 state; the 33521B profile
+rejects Channel 2. Standalone configure
 commands can select the registered 33510B, 33512B, or 33521B model; the default
 remains 33521B. The simulator never creates a real VISA ResourceManager, runs
 real resource discovery, opens hardware, or performs hardware I/O. Supported
@@ -117,8 +132,8 @@ the 33521B profile.
 Simulator mode is distinct from dry-run: dry-run previews an SCPI command plan,
 while the simulator executes supported SCPI against in-memory state. Neither
 mode performs physical instrument I/O. Live commands still require an explicit
-real VISA resource. `output --simulate --state on` enables only the simulated
-Channel 1 state and never a physical output.
+real VISA resource. `output --simulate --state on` enables only the selected
+simulated channel and never a physical output.
 
 ## Worker and Lifecycle Clients
 
@@ -869,16 +884,16 @@ listing, dry-run, simulator, TCPIP/LAN, ASRL, and `@py` operations do not make
 this attempt.
 
 The `status` command resolves the exact manufacturer/model identity before its
-read-only Channel 1 queries. It does not write, reset, clear, inspect the error
-queue, or change output state.
+read-only selected-channel queries. It does not write, reset, clear, inspect
+the error queue, or change output state.
 
 `configure-sine`, `configure-sine-sweep`, `configure-square-sweep`,
 `configure-ramp-sweep`, `configure-triangle-sweep`, `configure-square`,
 `configure-ramp`, `configure-triangle`, `configure-pulse`, `configure-dc`,
-`configure-noise`, and `configure-prbs`
-first turn Channel 1 off and leave it off after configuration. They cannot
-enable output. The `output` command changes only the Channel 1 output state
-and does not reconfigure or reset the instrument.
+`configure-noise`, and `configure-prbs` first turn only the selected channel
+off and leave it off after configuration. They cannot enable output. The
+`output` command changes only the selected channel output state and does not
+reconfigure or reset the instrument. Sweep commands remain Channel 1 only.
 
 For identify, the `@py` plus USB combination and any `@bt` live connection request are rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain

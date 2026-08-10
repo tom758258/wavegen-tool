@@ -84,6 +84,101 @@ STATUS_NOISE_QUERIES = (
     "SOURce1:VOLTage?",
     "SOURce1:FUNCtion:NOISe:BANDwidth?",
 )
+
+def _validate_channel(
+    channel: object,
+    capabilities: WavegenCapabilities | None = None,
+    model_name: str | None = None,
+) -> int:
+    if isinstance(channel, bool) or not isinstance(channel, int):
+        raise WaveformParameterError("channel must be 1 or 2.")
+    if channel not in (1, 2):
+        raise WaveformParameterError("channel must be 1 or 2.")
+    if capabilities is not None and channel > capabilities.channel_count:
+        label = f"Keysight {model_name}" if model_name else "this model"
+        raise WaveformParameterError(
+            f"Channel {channel} is not supported on {label}."
+        )
+    return channel
+
+
+def _check_independent_channel_guard(
+    session: VisaSession,
+    capabilities: WavegenCapabilities,
+    context: IdentificationResult,
+) -> None:
+    if capabilities.channel_count <= 1:
+        return
+
+    try:
+        freq_coup = session.query("SOURce1:FREQuency:COUPle:STATe?").strip().upper()
+    except Exception as exc:
+        raise WaveformVerificationError(
+            "Failed to query frequency coupling state.",
+            backend=context.backend,
+            transport=context.transport,
+            identity=context.identity,
+            output_state="off",
+        ) from exc
+    if freq_coup not in {"0", "OFF"}:
+        raise WaveformVerificationError(
+            "Independent channel operation rejected: frequency coupling is active.",
+            backend=context.backend,
+            transport=context.transport,
+            identity=context.identity,
+            output_state="off",
+        )
+
+    try:
+        volt_coup = session.query("SOURce1:VOLTage:COUPle:STATe?").strip().upper()
+    except Exception as exc:
+        raise WaveformVerificationError(
+            "Failed to query voltage coupling state.",
+            backend=context.backend,
+            transport=context.transport,
+            identity=context.identity,
+            output_state="off",
+        ) from exc
+    if volt_coup not in {"0", "OFF"}:
+        raise WaveformVerificationError(
+            "Independent channel operation rejected: voltage coupling is active.",
+            backend=context.backend,
+            transport=context.transport,
+            identity=context.identity,
+            output_state="off",
+        )
+
+    for trk_cmd in ("SOURce1:TRACk?", "SOURce2:TRACk?"):
+        try:
+            track_resp = session.query(trk_cmd).strip().upper()
+        except Exception as exc:
+            raise WaveformVerificationError(
+                "Failed to query channel tracking state.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+                output_state="off",
+            ) from exc
+        if track_resp != "OFF":
+            raise WaveformVerificationError(
+                "Independent channel operation rejected: channel tracking is active.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+                output_state="off",
+            )
+
+
+def _channelize_commands(commands: tuple[str, ...], channel: int) -> tuple[str, ...]:
+    """Apply the selected channel to channel-specific basic commands."""
+
+    if channel == 1:
+        return commands
+    return tuple(
+        command.replace("SOURce1", "SOURce2").replace("OUTPut1", "OUTPut2")
+        for command in commands
+    )
+
 PULSE_TIMING_REL_TOLERANCE = 0.0
 PULSE_TIMING_ABS_TOLERANCE_S = 100e-12
 PULSE_FREQUENCY_ABS_TOLERANCE_HZ = 1e-6
@@ -150,7 +245,7 @@ class IdentificationResult:
 
 @dataclass(frozen=True)
 class StatusResult:
-    """A successful read-only Channel 1 status readback."""
+    """A successful read-only status readback."""
 
     resource: str
     backend: str
@@ -164,11 +259,12 @@ class StatusResult:
     bandwidth_hz: float | None
     offset_v: float
     load: str
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class SineConfigurationResult:
-    """A successful Channel 1 sine configuration."""
+    """A successful sine configuration."""
 
     resource: str
     backend: str
@@ -180,11 +276,12 @@ class SineConfigurationResult:
     load: str
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class SineDryRunResult:
-    """A hardware-free preview of a Channel 1 sine configuration."""
+    """A hardware-free preview of a sine configuration."""
 
     model: str
     canonical_model_id: str
@@ -196,6 +293,7 @@ class SineDryRunResult:
     executed: bool = False
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
@@ -380,7 +478,7 @@ class TriangleSweepDryRunResult:
 
 @dataclass(frozen=True)
 class SquareConfigurationResult:
-    """A successful Channel 1 square configuration."""
+    """A successful square configuration."""
 
     resource: str
     backend: str
@@ -393,11 +491,12 @@ class SquareConfigurationResult:
     load: str
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class SquareDryRunResult:
-    """A hardware-free preview of a Channel 1 square configuration."""
+    """A hardware-free preview of a square configuration."""
 
     model: str
     canonical_model_id: str
@@ -410,11 +509,12 @@ class SquareDryRunResult:
     executed: bool = False
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class RampConfigurationResult:
-    """A successful Channel 1 ramp configuration."""
+    """A successful ramp configuration."""
 
     resource: str
     backend: str
@@ -427,11 +527,12 @@ class RampConfigurationResult:
     load: str
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class RampDryRunResult:
-    """A hardware-free preview of a Channel 1 ramp configuration."""
+    """A hardware-free preview of a ramp configuration."""
 
     model: str
     canonical_model_id: str
@@ -444,11 +545,12 @@ class RampDryRunResult:
     executed: bool = False
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class TriangleConfigurationResult:
-    """A successful Channel 1 triangle configuration."""
+    """A successful triangle configuration."""
 
     resource: str
     backend: str
@@ -460,11 +562,12 @@ class TriangleConfigurationResult:
     load: str
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class TriangleDryRunResult:
-    """A hardware-free preview of a Channel 1 triangle configuration."""
+    """A hardware-free preview of a triangle configuration."""
 
     model: str
     canonical_model_id: str
@@ -476,11 +579,12 @@ class TriangleDryRunResult:
     executed: bool = False
     output_state: str = "off"
     phase_deg: float = 0.0
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class PulseConfigurationResult:
-    """A successful Channel 1 pulse configuration."""
+    """A successful pulse configuration."""
 
     resource: str
     backend: str
@@ -496,11 +600,12 @@ class PulseConfigurationResult:
     phase_deg: float = 0.0
     leading_edge_s: float | None = None
     trailing_edge_s: float | None = None
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class PulseDryRunResult:
-    """A hardware-free preview of a Channel 1 pulse configuration."""
+    """A hardware-free preview of a pulse configuration."""
 
     model: str
     canonical_model_id: str
@@ -516,11 +621,12 @@ class PulseDryRunResult:
     phase_deg: float = 0.0
     leading_edge_s: float | None = None
     trailing_edge_s: float | None = None
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class DcConfigurationResult:
-    """A successful Channel 1 DC voltage configuration."""
+    """A successful DC voltage configuration."""
 
     resource: str
     backend: str
@@ -529,11 +635,12 @@ class DcConfigurationResult:
     voltage_v: float
     load: str
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class DcDryRunResult:
-    """A hardware-free preview of a Channel 1 DC configuration."""
+    """A hardware-free preview of a DC configuration."""
 
     model: str
     canonical_model_id: str
@@ -542,11 +649,12 @@ class DcDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class NoiseConfigurationResult:
-    """A successful Channel 1 noise configuration."""
+    """A successful noise configuration."""
 
     resource: str
     backend: str
@@ -557,11 +665,12 @@ class NoiseConfigurationResult:
     bandwidth_hz: float
     load: str
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class NoiseDryRunResult:
-    """A hardware-free preview of a Channel 1 noise configuration."""
+    """A hardware-free preview of a noise configuration."""
 
     model: str
     canonical_model_id: str
@@ -572,11 +681,12 @@ class NoiseDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class PrbsConfigurationResult:
-    """A successful Channel 1 PRBS configuration."""
+    """A successful PRBS configuration."""
 
     resource: str
     backend: str
@@ -589,11 +699,12 @@ class PrbsConfigurationResult:
     edge_time_s: float
     load: str
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class PrbsDryRunResult:
-    """A hardware-free preview of a Channel 1 PRBS configuration."""
+    """A hardware-free preview of a PRBS configuration."""
 
     model: str
     canonical_model_id: str
@@ -606,17 +717,19 @@ class PrbsDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class OutputResult:
-    """A successful explicit Channel 1 output-state change."""
+    """A successful explicit output-state change."""
 
     resource: str
     backend: str
     transport: str
     identity: InstrumentIdentity
     output_state: str
+    channel: int = 1
 
 
 @dataclass(frozen=True)
@@ -973,11 +1086,12 @@ def query_status(
     resource: str,
     backend: str | None = None,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> StatusResult:
-    """Read Channel 1 status from one policy-admitted instrument."""
+    """Read selected-channel status from one policy-admitted instrument."""
 
     backend_selection = normalize_backend(backend)
     resource_name = normalize_resource(resource)
@@ -1038,92 +1152,128 @@ def query_status(
                         transport=transport,
                     )
                 else:
-                    responses: dict[str, str] = {}
-                    current_command = "status"
+                    capabilities = _capabilities_for_identity(identity)
                     try:
-                        for command in STATUS_COMMON_QUERIES:
-                            current_command = command
-                            responses[command] = session.query(command)
-                        function = _parse_status_function(
-                            responses["SOURce1:FUNCtion?"]
+                        selected_channel = _validate_channel(
+                            channel,
+                            capabilities,
+                            identity.model,
                         )
-                        if function == "DC":
-                            function_queries = ()
-                        elif function in {"NOIS", "NOISE"}:
-                            function_queries = STATUS_NOISE_QUERIES
-                        else:
-                            function_queries = STATUS_FREQUENCY_AMPLITUDE_QUERIES
-                        for command in function_queries:
-                            current_command = command
-                            responses[command] = session.query(command)
-                    except Exception as exc:
-                        primary_error = StatusQueryError(
-                            f"Status query {current_command} failed or timed out.",
+                    except WavegenError as exc:
+                        primary_error = exc.attach_context(
                             backend=backend_selection.name,
                             transport=transport,
                             identity=identity,
                         )
-                        primary_cause = exc
-                    if primary_error is None:
+                        selected_channel = None
+                    if primary_error is not None:
+                        selected_channel = None
+                    if selected_channel is None:
+                        pass
+                    else:
+                        channel_queries = tuple(
+                            command.replace("1", str(selected_channel), 1)
+                            for command in STATUS_COMMON_QUERIES
+                        )
+                        responses: dict[str, str] = {}
+                        current_command = "status"
                         try:
-                            frequency_hz = (
-                                _parse_status_number(
-                                    responses["SOURce1:FREQuency?"],
-                                    "frequency",
-                                )
-                                if "SOURce1:FREQuency?" in responses
-                                else None
+                            for command in channel_queries:
+                                current_command = command
+                                responses[command] = session.query(command)
+                            function_query = channel_queries[1]
+                            function = _parse_status_function(
+                                responses[function_query]
                             )
-                            amplitude_unit = (
-                                _parse_status_unit(
-                                    responses["SOURce1:VOLTage:UNIT?"]
-                                )
-                                if "SOURce1:VOLTage:UNIT?" in responses
-                                else None
+                            if function == "DC":
+                                function_queries = ()
+                            elif function in {"NOIS", "NOISE"}:
+                                function_queries = STATUS_NOISE_QUERIES
+                            else:
+                                function_queries = STATUS_FREQUENCY_AMPLITUDE_QUERIES
+                            function_queries = tuple(
+                                command.replace("1", str(selected_channel), 1)
+                                for command in function_queries
                             )
-                            amplitude = (
-                                _parse_status_number(
-                                    responses["SOURce1:VOLTage?"],
-                                    "amplitude",
-                                )
-                                if "SOURce1:VOLTage?" in responses
-                                else None
-                            )
-                            bandwidth_hz = (
-                                _parse_status_number(
-                                    responses["SOURce1:FUNCtion:NOISe:BANDwidth?"],
-                                    "noise bandwidth",
-                                )
-                                if "SOURce1:FUNCtion:NOISe:BANDwidth?" in responses
-                                else None
-                            )
-                            result = StatusResult(
-                                resource=resource_name,
-                                backend=backend_selection.name,
-                                transport=transport,
-                                identity=identity,
-                                output_state=_parse_status_output(
-                                    responses["OUTPut1?"]
-                                ),
-                                function=function,
-                                frequency_hz=frequency_hz,
-                                amplitude=amplitude,
-                                amplitude_unit=amplitude_unit,
-                                bandwidth_hz=bandwidth_hz,
-                                offset_v=_parse_status_number(
-                                    responses["SOURce1:VOLTage:OFFSet?"],
-                                    "offset",
-                                ),
-                                load=_parse_status_load(
-                                    responses["OUTPut1:LOAD?"]
-                                ),
-                            )
-                        except StatusQueryError as exc:
-                            primary_error = exc.attach_context(
+                            for command in function_queries:
+                                current_command = command
+                                responses[command] = session.query(command)
+                        except Exception as exc:
+                            primary_error = StatusQueryError(
+                                f"Status query {current_command} failed or timed out.",
                                 backend=backend_selection.name,
                                 transport=transport,
                                 identity=identity,
                             )
+                            primary_cause = exc
+                        if primary_error is None:
+                            try:
+                                frequency_query = f"SOURce{selected_channel}:FREQuency?"
+                                unit_query = f"SOURce{selected_channel}:VOLTage:UNIT?"
+                                amplitude_query = f"SOURce{selected_channel}:VOLTage?"
+                                bandwidth_query = (
+                                    f"SOURce{selected_channel}:FUNCtion:NOISe:BANDwidth?"
+                                )
+                                offset_query = (
+                                    f"SOURce{selected_channel}:VOLTage:OFFSet?"
+                                )
+                                output_query = f"OUTPut{selected_channel}?"
+                                load_query = f"OUTPut{selected_channel}:LOAD?"
+                                frequency_hz = (
+                                    _parse_status_number(
+                                        responses[frequency_query],
+                                        "frequency",
+                                    )
+                                    if frequency_query in responses
+                                    else None
+                                )
+                                amplitude_unit = (
+                                    _parse_status_unit(responses[unit_query])
+                                    if unit_query in responses
+                                    else None
+                                )
+                                amplitude = (
+                                    _parse_status_number(
+                                        responses[amplitude_query],
+                                        "amplitude",
+                                    )
+                                    if amplitude_query in responses
+                                    else None
+                                )
+                                bandwidth_hz = (
+                                    _parse_status_number(
+                                        responses[bandwidth_query],
+                                        "noise bandwidth",
+                                    )
+                                    if bandwidth_query in responses
+                                    else None
+                                )
+                                result = StatusResult(
+                                    resource=resource_name,
+                                    backend=backend_selection.name,
+                                    transport=transport,
+                                    identity=identity,
+                                    output_state=_parse_status_output(
+                                        responses[output_query]
+                                    ),
+                                    function=function,
+                                    frequency_hz=frequency_hz,
+                                    amplitude=amplitude,
+                                    amplitude_unit=amplitude_unit,
+                                    bandwidth_hz=bandwidth_hz,
+                                    offset_v=_parse_status_number(
+                                        responses[offset_query],
+                                        "offset",
+                                    ),
+                                    load=_parse_status_load(responses[load_query]),
+                                    channel=selected_channel,
+                                )
+                            except StatusQueryError as exc:
+                                primary_error = exc.attach_context(
+                                    backend=backend_selection.name,
+                                    transport=transport,
+                                    identity=identity,
+                                )
     finally:
         cleanup_errors = _close_visa_resources(
             session,
@@ -1203,11 +1353,12 @@ def configure_sine(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SineConfigurationResult:
-    """Validate and configure a Channel 1 sine wave while keeping output off."""
+    """Validate and configure a selected-channel sine wave while keeping output off."""
 
     def prepare_configuration(
         capabilities: WavegenCapabilities,
@@ -1226,6 +1377,8 @@ def configure_sine(
         resource,
         backend,
         prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -1241,6 +1394,7 @@ def configure_sine(
         offset_v=offset,
         load=normalized_load,
         phase_deg=phase,
+        channel=channel,
     )
 
 
@@ -1251,10 +1405,15 @@ def dry_run_sine(
     offset_v: object = 0,
     load: object = 50,
     phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
     model_info, capabilities = _require_hardware_free_model(model, "sine")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
 
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
@@ -1272,7 +1431,8 @@ def dry_run_sine(
         offset_v=offset,
         load=normalized_load,
         phase_deg=phase,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -2482,6 +2642,7 @@ def configure_square(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2506,6 +2667,8 @@ def configure_square(
         resource,
         backend,
         prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2522,6 +2685,7 @@ def configure_square(
         duty_cycle_percent=duty_cycle,
         load=normalized_load,
         phase_deg=phase,
+        channel=channel,
     )
 
 
@@ -2533,10 +2697,15 @@ def dry_run_square(
     duty_cycle_percent: object = 50,
     load: object = 50,
     phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
 ) -> SquareDryRunResult:
     """Preview a validated Channel 1 square configuration without VISA I/O."""
 
     model_info, capabilities = _require_hardware_free_model(model, "square")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         frequency,
         amplitude,
@@ -2563,7 +2732,8 @@ def dry_run_square(
         duty_cycle_percent=duty_cycle,
         load=normalized_load,
         phase_deg=phase,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -2672,11 +2842,12 @@ def configure_ramp(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> RampConfigurationResult:
-    """Validate and configure a Channel 1 ramp wave while keeping output off."""
+    """Validate and configure a selected-channel ramp wave while keeping output off."""
 
     (
         frequency,
@@ -2699,6 +2870,8 @@ def configure_ramp(
         backend,
         commands,
         output_state_after_writes="off",
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2714,6 +2887,7 @@ def configure_ramp(
         symmetry_percent=symmetry,
         load=normalized_load,
         phase_deg=phase,
+        channel=channel,
     )
 
 
@@ -2725,10 +2899,15 @@ def dry_run_ramp(
     symmetry_percent: object = 100,
     load: object = 50,
     phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
 ) -> RampDryRunResult:
     """Preview a validated Channel 1 ramp configuration without VISA I/O."""
 
-    model_info, _capabilities = _require_hardware_free_model(model, "ramp")
+    model_info, capabilities = _require_hardware_free_model(model, "ramp")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         frequency,
         amplitude,
@@ -2754,7 +2933,8 @@ def dry_run_ramp(
         symmetry_percent=symmetry,
         load=normalized_load,
         phase_deg=phase,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -2836,11 +3016,12 @@ def configure_triangle(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> TriangleConfigurationResult:
-    """Validate and configure a Channel 1 triangle wave while keeping output off."""
+    """Validate and configure a selected-channel triangle wave while keeping output off."""
 
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_triangle(
         frequency_hz,
@@ -2854,6 +3035,8 @@ def configure_triangle(
         backend,
         commands,
         output_state_after_writes="off",
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2868,6 +3051,7 @@ def configure_triangle(
         offset_v=offset,
         load=normalized_load,
         phase_deg=phase,
+        channel=channel,
     )
 
 
@@ -2878,10 +3062,15 @@ def dry_run_triangle(
     offset_v: object = 0,
     load: object = 50,
     phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
 ) -> TriangleDryRunResult:
     """Preview a validated Channel 1 triangle configuration without VISA I/O."""
 
-    model_info, _capabilities = _require_hardware_free_model(model, "triangle")
+    model_info, capabilities = _require_hardware_free_model(model, "triangle")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_triangle(
         frequency_hz,
         amplitude_vpp,
@@ -2897,7 +3086,8 @@ def dry_run_triangle(
         offset_v=offset,
         load=normalized_load,
         phase_deg=phase,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -2963,11 +3153,12 @@ def configure_pulse(
     leading_edge_s: object = None,
     trailing_edge_s: object = None,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> PulseConfigurationResult:
-    """Validate and configure a Channel 1 pulse wave while keeping output off."""
+    """Validate and configure a selected-channel pulse wave while keeping output off."""
 
     def prepare_configuration(
         capabilities: WavegenCapabilities,
@@ -3004,6 +3195,13 @@ def configure_pulse(
         session: VisaSession,
         context: IdentificationResult,
     ) -> tuple[object, ...]:
+        capabilities = _capabilities_for_identity(context.identity)
+        selected_channel = _validate_channel(
+            channel,
+            capabilities,
+            context.identity.model,
+        )
+        _check_independent_channel_guard(session, capabilities, context)
         (
             frequency,
             amplitude,
@@ -3015,7 +3213,10 @@ def configure_pulse(
             normalized_load,
             phase,
             commands,
-        ) = prepare_configuration(_capabilities_for_identity(context.identity))
+        ) = prepare_configuration(capabilities)
+        commands = _channelize_commands(commands, selected_channel)
+        source_prefix = f"SOURce{selected_channel}"
+        output_prefix = f"OUTPut{selected_channel}"
 
         def write_pulse_command(command: str, output_state: str | None) -> None:
             try:
@@ -3033,7 +3234,7 @@ def configure_pulse(
         if edge_time is not None:
             maximum = _query_pulse_verification(
                 session,
-                "SOURce1:FUNCtion:PULSe:TRANsition? MAXimum",
+                f"{source_prefix}:FUNCtion:PULSe:TRANsition? MAXimum",
                 "dynamic BOTH edge maximum",
                 _parse_pulse_verification_number,
             )
@@ -3047,7 +3248,7 @@ def configure_pulse(
         else:
             leading_maximum = _query_pulse_verification(
                 session,
-                "SOURce1:FUNCtion:PULSe:TRANsition:LEADing? MAXimum",
+                f"{source_prefix}:FUNCtion:PULSe:TRANsition:LEADing? MAXimum",
                 "dynamic leading edge maximum",
                 _parse_pulse_verification_number,
             )
@@ -3061,7 +3262,7 @@ def configure_pulse(
 
             trailing_maximum = _query_pulse_verification(
                 session,
-                "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling? MAXimum",
+                f"{source_prefix}:FUNCtion:PULSe:TRANsition:TRAiling? MAXimum",
                 "dynamic trailing edge maximum",
                 _parse_pulse_verification_number,
             )
@@ -3078,32 +3279,32 @@ def configure_pulse(
 
         output_state = _query_pulse_verification(
             session,
-            "OUTPut1?",
+            f"{output_prefix}?",
             "output state",
             _parse_status_output,
         )
         function = _query_pulse_verification(
             session,
-            "SOURce1:FUNCtion?",
+            f"{source_prefix}:FUNCtion?",
             "function",
             _parse_status_function,
         )
         readback_frequency = _query_pulse_verification(
             session,
-            "SOURce1:FREQuency?",
+            f"{source_prefix}:FREQuency?",
             "frequency",
             _parse_pulse_verification_number,
         )
         readback_width = _query_pulse_verification(
             session,
-            "SOURce1:FUNCtion:PULSe:WIDTh?",
+            f"{source_prefix}:FUNCtion:PULSe:WIDTh?",
             "pulse width",
             _parse_pulse_verification_number,
         )
         if edge_time is not None:
             readback_edge = _query_pulse_verification(
                 session,
-                "SOURce1:FUNCtion:PULSe:TRANsition?",
+                f"{source_prefix}:FUNCtion:PULSe:TRANsition?",
                 "BOTH edge",
                 _parse_pulse_verification_number,
             )
@@ -3112,19 +3313,19 @@ def configure_pulse(
         else:
             readback_leading = _query_pulse_verification(
                 session,
-                "SOURce1:FUNCtion:PULSe:TRANsition:LEADing?",
+                f"{source_prefix}:FUNCtion:PULSe:TRANsition:LEADing?",
                 "leading edge",
                 _parse_pulse_verification_number,
             )
             readback_trailing = _query_pulse_verification(
                 session,
-                "SOURce1:FUNCtion:PULSe:TRANsition:TRAiling?",
+                f"{source_prefix}:FUNCtion:PULSe:TRANsition:TRAiling?",
                 "trailing edge",
                 _parse_pulse_verification_number,
             )
         readback_phase = _query_pulse_verification(
             session,
-            "SOURce1:PHASe?",
+            f"{source_prefix}:PHASe?",
             "phase",
             _parse_phase_verification_number,
         )
@@ -3242,6 +3443,7 @@ def configure_pulse(
         phase_deg=readback_phase,
         leading_edge_s=readback_leading,
         trailing_edge_s=readback_trailing,
+        channel=channel,
     )
 
 
@@ -3256,10 +3458,15 @@ def dry_run_pulse(
     phase_deg: object = 0.0,
     leading_edge_s: object = None,
     trailing_edge_s: object = None,
+    *,
+    channel: int = 1,
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
     model_info, capabilities = _require_hardware_free_model(model, "pulse")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         frequency,
         amplitude,
@@ -3295,7 +3502,8 @@ def dry_run_pulse(
         phase_deg=phase,
         leading_edge_s=leading_edge,
         trailing_edge_s=trailing_edge,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -3444,11 +3652,12 @@ def configure_dc(
     load: object = 50,
     backend: str | None = None,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> DcConfigurationResult:
-    """Validate and configure a Channel 1 DC voltage while keeping output off."""
+    """Validate and configure a selected-channel DC voltage while keeping output off."""
 
     voltage, normalized_load, commands = _prepare_dc(voltage_v, load)
     context = _write_to_supported_instrument(
@@ -3456,6 +3665,8 @@ def configure_dc(
         backend,
         commands,
         output_state_after_writes="off",
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -3467,6 +3678,7 @@ def configure_dc(
         identity=context.identity,
         voltage_v=voltage,
         load=normalized_load,
+        channel=channel,
     )
 
 
@@ -3474,17 +3686,23 @@ def dry_run_dc(
     model: str,
     voltage_v: object,
     load: object = 50,
+    *,
+    channel: int = 1,
 ) -> DcDryRunResult:
     """Preview a validated Channel 1 DC configuration without VISA I/O."""
 
-    model_info, _capabilities = _require_hardware_free_model(model, "DC")
+    model_info, capabilities = _require_hardware_free_model(model, "DC")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     voltage, normalized_load, commands = _prepare_dc(voltage_v, load)
     return DcDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
         voltage_v=voltage,
         load=normalized_load,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -3519,6 +3737,7 @@ def configure_noise(
     load: object = 50,
     backend: str | None = None,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3541,6 +3760,8 @@ def configure_noise(
         resource,
         backend,
         prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -3555,6 +3776,7 @@ def configure_noise(
         offset_v=offset,
         bandwidth_hz=bandwidth,
         load=normalized_load,
+        channel=channel,
     )
 
 
@@ -3564,10 +3786,15 @@ def dry_run_noise(
     bandwidth_hz: object,
     offset_v: object = 0,
     load: object = 50,
+    *,
+    channel: int = 1,
 ) -> NoiseDryRunResult:
     """Preview a validated Channel 1 noise configuration without VISA I/O."""
 
     model_info, capabilities = _require_hardware_free_model(model, "noise")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         amplitude,
         offset,
@@ -3588,7 +3815,8 @@ def dry_run_noise(
         offset_v=offset,
         bandwidth_hz=bandwidth,
         load=normalized_load,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -3651,11 +3879,12 @@ def configure_prbs(
     load: object = 50,
     backend: str | None = None,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> PrbsConfigurationResult:
-    """Validate and configure Channel 1 PRBS while keeping output off."""
+    """Validate and configure selected-channel PRBS while keeping output off."""
 
     (
         bit_rate,
@@ -3678,6 +3907,8 @@ def configure_prbs(
         backend,
         commands,
         output_state_after_writes="off",
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -3693,6 +3924,7 @@ def configure_prbs(
         offset_v=offset,
         edge_time_s=edge_time,
         load=normalized_load,
+        channel=channel,
     )
 
 
@@ -3704,10 +3936,15 @@ def dry_run_prbs(
     offset_v: object = 0,
     edge_time_s: object = 8.4e-9,
     load: object = 50,
+    *,
+    channel: int = 1,
 ) -> PrbsDryRunResult:
     """Preview a validated Channel 1 PRBS configuration without VISA I/O."""
 
-    model_info, _capabilities = _require_hardware_free_model(model, "PRBS")
+    model_info, capabilities = _require_hardware_free_model(model, "PRBS")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         bit_rate,
         amplitude,
@@ -3733,7 +3970,8 @@ def dry_run_prbs(
         offset_v=offset,
         edge_time_s=edge_time,
         load=normalized_load,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -3815,11 +4053,12 @@ def set_output(
     state: str,
     backend: str | None = None,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> OutputResult:
-    """Explicitly set a policy-admitted instrument's Channel 1 output state."""
+    """Explicitly set a policy-admitted instrument's selected-channel output state."""
 
     if not isinstance(state, str) or state.strip().casefold() not in {"on", "off"}:
         raise WaveformParameterError("Output state must be on or off.")
@@ -3828,6 +4067,8 @@ def set_output(
         resource,
         backend,
         (f"OUTPut1 {normalized_state.upper()}",),
+        channel=channel,
+        independent_channel_guard=True,
         output_state_after_writes=normalized_state,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
@@ -3839,6 +4080,7 @@ def set_output(
         transport=context.transport,
         identity=context.identity,
         output_state=normalized_state,
+        channel=channel,
     )
 
 
@@ -4257,12 +4499,22 @@ def _write_to_supported_instrument(
     resource_manager_factory: ResourceManagerFactory | None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
+    channel: int = 1,
+    independent_channel_guard: bool = False,
 ) -> IdentificationResult:
     def write_commands(
         session: VisaSession,
-        _context: IdentificationResult,
+        context: IdentificationResult,
     ) -> None:
-        for command in commands:
+        capabilities = _capabilities_for_identity(context.identity)
+        selected_channel = _validate_channel(
+            channel,
+            capabilities,
+            context.identity.model,
+        )
+        if independent_channel_guard:
+            _check_independent_channel_guard(session, capabilities, context)
+        for command in _channelize_commands(commands, selected_channel):
             session.write(command)
 
     context, _ = _run_on_supported_instrument(
@@ -4288,6 +4540,8 @@ def _prepare_and_write_to_supported_instrument(
     resource_manager_factory: ResourceManagerFactory | None,
     support_policy_mode: str,
     expected_model_id: str | None,
+    channel: int = 1,
+    independent_channel_guard: bool = False,
 ) -> tuple[IdentificationResult, tuple[object, ...]]:
     prepare_configuration(
         _preflight_capabilities_for_configuration(resource_manager_factory)
@@ -4297,10 +4551,16 @@ def _prepare_and_write_to_supported_instrument(
         session: VisaSession,
         context: IdentificationResult,
     ) -> tuple[object, ...]:
-        values, commands = prepare_configuration(
-            _capabilities_for_identity(context.identity)
+        capabilities = _capabilities_for_identity(context.identity)
+        selected_channel = _validate_channel(
+            channel,
+            capabilities,
+            context.identity.model,
         )
-        for command in commands:
+        if independent_channel_guard:
+            _check_independent_channel_guard(session, capabilities, context)
+        values, commands = prepare_configuration(capabilities)
+        for command in _channelize_commands(commands, selected_channel):
             session.write(command)
         return values
 

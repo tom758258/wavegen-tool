@@ -28,6 +28,11 @@ class FakeSession:
         self.queries.append(command)
         if self.query_error is not None:
             raise self.query_error
+        cmd_upper = command.strip().upper()
+        if "COUPLE" in cmd_upper:
+            return "0"
+        if "TRACK?" in cmd_upper:
+            return "OFF"
         return self.response
 
     def close(self):
@@ -478,7 +483,7 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
 ):
     calls = []
 
-    def fake_configure_sine(*args):
+    def fake_configure_sine(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -522,6 +527,7 @@ def test_configure_sine_cli_parses_arguments_calls_core_and_emits_json(
     assert payload == {
         "success": True,
         "action": "configure-sine",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Keysight Technologies",
@@ -543,7 +549,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
     manager_calls = install_fake_manager(monkeypatch, manager)
     dry_run_calls = []
 
-    def fake_dry_run_sine(*args):
+    def fake_dry_run_sine(*args, **kwargs):
         dry_run_calls.append(args)
         return SimpleNamespace(
             model="33510B",
@@ -569,7 +575,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
             output_state="off",
         )
 
-    def fail_live_configure_sine(*args):
+    def fail_live_configure_sine(*args, **kwargs):
         raise AssertionError(f"live configure_sine must not be called: {args}")
 
     monkeypatch.setattr(cli_module, "dry_run_sine", fake_dry_run_sine)
@@ -604,6 +610,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
         "success": True,
         "action": "configure-sine",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33510B",
         "canonical_model_id": "keysight-33510b",
         "frequency_hz": 1000.0,
@@ -660,7 +667,7 @@ def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
 ):
     calls = []
 
-    def fake_configure_square(*args):
+    def fake_configure_square(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -701,6 +708,7 @@ def test_configure_square_cli_parses_arguments_calls_core_and_emits_json(
     assert payload == {
         "success": True,
         "action": "configure-square",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Keysight Technologies",
@@ -723,7 +731,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
     manager_calls = install_fake_manager(monkeypatch, manager)
     dry_run_calls = []
 
-    def fake_dry_run_square(*args):
+    def fake_dry_run_square(*args, **kwargs):
         dry_run_calls.append(args)
         return SimpleNamespace(
             model="33521B",
@@ -751,7 +759,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
             output_state="off",
         )
 
-    def fail_live_configure_square(*args):
+    def fail_live_configure_square(*args, **kwargs):
         raise AssertionError(f"live configure_square must not be called: {args}")
 
     monkeypatch.setattr(cli_module, "dry_run_square", fake_dry_run_square)
@@ -786,6 +794,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-square",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33521B",
         "canonical_model_id": "keysight-33521b",
         "frequency_hz": 1000.0,
@@ -844,7 +853,7 @@ def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
 ):
     calls = []
 
-    def fake_configure_ramp(*args):
+    def fake_configure_ramp(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -885,6 +894,7 @@ def test_configure_ramp_cli_parses_arguments_calls_core_and_emits_json(
     assert payload == {
         "success": True,
         "action": "configure-ramp",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Agilent Technologies",
@@ -907,7 +917,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
     manager_calls = install_fake_manager(monkeypatch, manager)
     dry_run_calls = []
 
-    def fake_dry_run_ramp(*args):
+    def fake_dry_run_ramp(*args, **kwargs):
         dry_run_calls.append(args)
         return SimpleNamespace(
             model="33521B",
@@ -936,7 +946,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
             output_state="off",
         )
 
-    def fail_live_configure_ramp(*args):
+    def fail_live_configure_ramp(*args, **kwargs):
         raise AssertionError(f"live configure_ramp must not be called: {args}")
 
     monkeypatch.setattr(cli_module, "dry_run_ramp", fake_dry_run_ramp)
@@ -973,6 +983,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-ramp",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33521B",
         "canonical_model_id": "keysight-33521b",
         "frequency_hz": 1000.0,
@@ -1060,6 +1071,7 @@ def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-triangle",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33521B",
         "canonical_model_id": "keysight-33521b",
         "frequency_hz": 1000.0,
@@ -1091,7 +1103,7 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
 ):
     calls = []
 
-    def fake_configure_pulse(*args):
+    def fake_configure_pulse(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -1153,6 +1165,7 @@ def test_configure_pulse_cli_parses_arguments_calls_core_and_emits_json(
     assert payload == {
         "success": True,
         "action": "configure-pulse",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Agilent Technologies",
@@ -1176,7 +1189,7 @@ def test_configure_dc_cli_parses_arguments_calls_core_and_emits_json(
 ):
     calls = []
 
-    def fake_configure_dc(*args):
+    def fake_configure_dc(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -1209,6 +1222,7 @@ def test_configure_dc_cli_parses_arguments_calls_core_and_emits_json(
     assert payload == {
         "success": True,
         "action": "configure-dc",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Agilent Technologies",
@@ -1225,7 +1239,7 @@ def test_configure_noise_cli_parses_arguments_calls_core_and_emits_json(
 ):
     calls = []
 
-    def fake_configure_noise(*args):
+    def fake_configure_noise(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -1264,6 +1278,7 @@ def test_configure_noise_cli_parses_arguments_calls_core_and_emits_json(
     assert payload == {
         "success": True,
         "action": "configure-noise",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Agilent Technologies",
@@ -1283,7 +1298,7 @@ def test_configure_prbs_cli_parses_arguments_calls_core_and_emits_json(
 ):
     calls = []
 
-    def fake_configure_prbs(*args):
+    def fake_configure_prbs(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -1337,6 +1352,7 @@ def test_configure_prbs_cli_parses_arguments_calls_core_and_emits_json(
     assert payload == {
         "success": True,
         "action": "configure-prbs",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Agilent Technologies",
@@ -1359,7 +1375,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
     manager_calls = install_fake_manager(monkeypatch, manager)
     dry_run_calls = []
 
-    def fake_dry_run_pulse(*args):
+    def fake_dry_run_pulse(*args, **kwargs):
         dry_run_calls.append(args)
         return SimpleNamespace(
             model="33521B",
@@ -1391,7 +1407,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             output_state="off",
         )
 
-    def fail_live_configure_pulse(*args):
+    def fail_live_configure_pulse(*args, **kwargs):
         raise AssertionError(f"live configure_pulse must not be called: {args}")
 
     monkeypatch.setattr(cli_module, "dry_run_pulse", fake_dry_run_pulse)
@@ -1441,6 +1457,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-pulse",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33521B",
         "canonical_model_id": "keysight-33521b",
         "frequency_hz": 1000.0,
@@ -1479,7 +1496,7 @@ def test_configure_dc_dry_run_cli_emits_hardware_free_json(
     manager_calls = install_fake_manager(monkeypatch, manager)
     dry_run_calls = []
 
-    def fake_dry_run_dc(*args):
+    def fake_dry_run_dc(*args, **kwargs):
         dry_run_calls.append(args)
         return SimpleNamespace(
             model="33521B",
@@ -1496,7 +1513,7 @@ def test_configure_dc_dry_run_cli_emits_hardware_free_json(
             output_state="off",
         )
 
-    def fail_live_configure_dc(*args):
+    def fail_live_configure_dc(*args, **kwargs):
         raise AssertionError(f"live configure_dc must not be called: {args}")
 
     monkeypatch.setattr(cli_module, "dry_run_dc", fake_dry_run_dc)
@@ -1523,6 +1540,7 @@ def test_configure_dc_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-dc",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33521B",
         "canonical_model_id": "keysight-33521b",
         "voltage_v": 1.5,
@@ -1546,7 +1564,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
     manager_calls = install_fake_manager(monkeypatch, manager)
     dry_run_calls = []
 
-    def fake_dry_run_noise(*args):
+    def fake_dry_run_noise(*args, **kwargs):
         dry_run_calls.append(args)
         return SimpleNamespace(
             model="33521B",
@@ -1568,7 +1586,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
             output_state="off",
         )
 
-    def fail_live_configure_noise(*args):
+    def fail_live_configure_noise(*args, **kwargs):
         raise AssertionError(f"live configure_noise must not be called: {args}")
 
     monkeypatch.setattr(cli_module, "dry_run_noise", fake_dry_run_noise)
@@ -1603,6 +1621,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-noise",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33521B",
         "canonical_model_id": "keysight-33521b",
         "amplitude_vpp": 0.1,
@@ -1631,7 +1650,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
     manager_calls = install_fake_manager(monkeypatch, manager)
     dry_run_calls = []
 
-    def fake_dry_run_prbs(*args):
+    def fake_dry_run_prbs(*args, **kwargs):
         dry_run_calls.append(args)
         return SimpleNamespace(
             model="33521B",
@@ -1657,7 +1676,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
             output_state="off",
         )
 
-    def fail_live_configure_prbs(*args):
+    def fail_live_configure_prbs(*args, **kwargs):
         raise AssertionError(f"live configure_prbs must not be called: {args}")
 
     monkeypatch.setattr(cli_module, "dry_run_prbs", fake_dry_run_prbs)
@@ -1704,6 +1723,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
         "success": True,
         "action": "configure-prbs",
         "mode": "dry-run",
+        "channel": 1,
         "model": "33521B",
         "canonical_model_id": "keysight-33521b",
         "bit_rate_bps": 1_000_000.0,
@@ -1780,7 +1800,7 @@ def test_remaining_live_waveforms_require_resource(
 def test_output_cli_parses_state_and_calls_core(monkeypatch, capsys, state):
     calls = []
 
-    def fake_set_output(*args):
+    def fake_set_output(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -1836,7 +1856,7 @@ def test_output_on_cleanup_failure_json_preserves_possible_output_state(
 def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, capsys):
     calls = []
 
-    def fake_query_status(*args):
+    def fake_query_status(*args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
             backend="system",
@@ -1867,6 +1887,7 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
     assert payload == {
         "success": True,
         "action": "status",
+        "channel": 1,
         "backend": "system",
         "transport": "usb",
         "manufacturer": "Agilent Technologies",
@@ -2588,7 +2609,13 @@ def test_configure_sine_product_live_accepts_matching_33512b(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.SUCCESS
     assert manager_calls == ["@ivi"]
-    assert session.queries == ["*IDN?"]
+    assert session.queries == [
+        "*IDN?",
+        "SOURce1:FREQuency:COUPle:STATe?",
+        "SOURce1:VOLTage:COUPle:STATe?",
+        "SOURce1:TRACk?",
+        "SOURce2:TRACk?",
+    ]
     assert session.writes[0] == "OUTPut1 OFF"
     assert "OUTPut1 ON" not in session.writes
     assert payload["model"] == "33512B"
@@ -2655,8 +2682,61 @@ def test_configure_sine_validation_live_uses_detected_33512b_capability(
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == ExitCode.CLI_USAGE
     assert "20000000 Hz" in payload["error"]
-    assert session.queries == ["*IDN?"]
+    assert session.queries == [
+        "*IDN?",
+        "SOURce1:FREQuency:COUPle:STATe?",
+        "SOURce1:VOLTage:COUPle:STATe?",
+        "SOURce1:TRACk?",
+        "SOURce2:TRACk?",
+    ]
     assert session.writes == []
+
+
+def test_configure_sine_cli_channel_two_dry_run_emits_channel_two_scpi(capsys):
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["channel"] == 2
+    assert "OUTPut2 OFF" in payload["commands"]
+    assert all("SOURce1" not in command for command in payload["commands"])
+
+
+def test_configure_sine_cli_rejects_33521b_channel_two_in_simulator(capsys):
+    exit_code = main(
+        [
+            "configure-sine",
+            "--simulate",
+            "--model",
+            "keysight-33521b",
+            "--channel",
+            "2",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert payload["channel"] == 2
+    assert "Channel 2" in payload["error"]
 
 
 @pytest.mark.parametrize("model_id", ["keysight-33510b", "keysight-33512b"])

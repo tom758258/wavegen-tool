@@ -423,6 +423,50 @@ def test_simulator_fails_closed_for_unknown_operations_and_closed_sessions() -> 
     with pytest.raises(RuntimeError, match="session is closed"):
         direct_session.query("*IDN?")
 
+
+def test_two_channel_simulator_preserves_independent_channel_state() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1000,
+        0.1,
+        resource_manager_factory=factory,
+        channel=1,
+    )
+    configure_sine(
+        factory.resource_name,
+        2000,
+        0.2,
+        resource_manager_factory=factory,
+        channel=2,
+    )
+    set_output(
+        factory.resource_name,
+        "on",
+        resource_manager_factory=factory,
+        channel=2,
+    )
+
+    status_one = query_status(
+        factory.resource_name,
+        resource_manager_factory=factory,
+        channel=1,
+    )
+    status_two = query_status(
+        factory.resource_name,
+        resource_manager_factory=factory,
+        channel=2,
+    )
+
+    assert status_one.frequency_hz == 1000.0
+    assert status_one.amplitude == 0.1
+    assert status_one.output_state == "off"
+    assert status_two.frequency_hz == 2000.0
+    assert status_two.amplitude == 0.2
+    assert status_two.output_state == "on"
+
 def test_simulator_error_queue_fifo() -> None:
     """SYSTem:ERRor? drains the shared state FIFO; status does not consume it."""
     state = Simulated33521BState()

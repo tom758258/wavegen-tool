@@ -601,3 +601,17 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
     assert event_names[-1] == "summary"
     assert {event["run_id"] for event in events} == {runtime.run_id}
     assert events[-1]["exit_code"] == 0
+
+
+def test_worker_serialization_keeps_core_channel_field_out_of_worker_results():
+    result = worker_module._json_safe(
+        cli_module.dry_run_sine(
+            MODEL_ID,
+            1000,
+            0.1,
+            channel=1,
+        )
+    )
+
+    assert isinstance(result, dict)
+    assert "channel" not in result

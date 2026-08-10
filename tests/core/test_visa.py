@@ -127,7 +127,14 @@ class FakeSession:
             raise self.query_errors_by_command[command]
         if self.query_error is not None:
             raise self.query_error
-        return self.responses_by_command.get(command, self.response)
+        if command in self.responses_by_command:
+            return self.responses_by_command[command]
+        cmd_upper = command.strip().upper()
+        if "COUPLE" in cmd_upper:
+            return "0"
+        if "TRACK?" in cmd_upper:
+            return "OFF"
+        return self.response
 
     def close(self):
         self.close_calls += 1
@@ -1082,7 +1089,13 @@ def test_configure_sine_validation_policy_accepts_matching_33512b():
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.queries == [IDN_QUERY]
+    assert session.queries == [
+        IDN_QUERY,
+        "SOURce1:FREQuency:COUPle:STATe?",
+        "SOURce1:VOLTage:COUPle:STATe?",
+        "SOURce1:TRACk?",
+        "SOURce2:TRACk?",
+    ]
     assert session.writes[0] == "OUTPut1 OFF"
     assert "OUTPut1 ON" not in session.writes
     assert result.identity.model == "33512B"
@@ -1124,7 +1137,13 @@ def test_configure_sine_uses_detected_33512b_capability_before_writes():
             resource_manager_factory=RecordingFactory(manager),
         )
 
-    assert session.queries == [IDN_QUERY]
+    assert session.queries == [
+        IDN_QUERY,
+        "SOURce1:FREQuency:COUPle:STATe?",
+        "SOURce1:VOLTage:COUPle:STATe?",
+        "SOURce1:TRACk?",
+        "SOURce2:TRACk?",
+    ]
     assert session.writes == []
 
 
@@ -1144,6 +1163,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
         "offset_v",
         "load",
         "phase_deg",
+        "channel",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1746,6 +1766,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
         "duty_cycle_percent",
         "load",
         "phase_deg",
+        "channel",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1865,6 +1886,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
         "symmetry_percent",
         "load",
         "phase_deg",
+        "channel",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2285,6 +2307,7 @@ def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
         "phase_deg",
         "leading_edge_s",
         "trailing_edge_s",
+        "channel",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2453,6 +2476,7 @@ def test_dry_run_dc_returns_validated_hardware_free_command_preview():
         "model",
         "voltage_v",
         "load",
+        "channel",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2544,6 +2568,7 @@ def test_dry_run_noise_returns_validated_hardware_free_command_preview():
         "bandwidth_hz",
         "offset_v",
         "load",
+        "channel",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2646,6 +2671,7 @@ def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
         "offset_v",
         "edge_time_s",
         "load",
+        "channel",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2748,7 +2774,13 @@ def test_output_validation_policy_accepts_matching_33512b(state):
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.queries == [IDN_QUERY]
+    assert session.queries == [
+        IDN_QUERY,
+        "SOURce1:FREQuency:COUPle:STATe?",
+        "SOURce1:VOLTage:COUPle:STATe?",
+        "SOURce1:TRACk?",
+        "SOURce2:TRACk?",
+    ]
     assert session.writes == [f"OUTPut1 {state.upper()}"]
     assert result.identity.canonical_model_id == "keysight-33512b"
     assert result.output_state == state
@@ -3253,3 +3285,157 @@ def test_pyvisa_bt_live_only_skips_all_resources():
     assert factory.calls == ["@bt"]
     assert manager.opened_resources == []
     assert result.resources == ()
+
+
+@pytest.mark.parametrize(
+    ("runner", "arguments"),
+    [
+        (dry_run_sine, (1000, 0.1)),
+        (dry_run_square, (1000, 0.1, 0, 50, 50)),
+        (dry_run_ramp, (1000, 0.1, 0, 25, 50)),
+        (dry_run_triangle, (1000, 0.1, 0, 50)),
+        (dry_run_pulse, (1000, 0.1, 0.0001, 0, 1e-8, 50)),
+        (dry_run_dc, (1.5, 50)),
+        (dry_run_noise, (0.1, 100000, 0, 50)),
+        (dry_run_prbs, (1_000_000, 0.1, "PN9", 0, 8.4e-9, 50)),
+    ],
+)
+def test_basic_dry_runs_channelize_all_p1_waveforms(runner, arguments):
+    result = runner("keysight-33512b", *arguments, channel=2)
+
+    assert result.channel == 2
+    assert all("SOURce1" not in command for command in result.commands)
+    assert all("OUTPut1" not in command for command in result.commands)
+    assert any("SOURce2" in command or "OUTPut2" in command for command in result.commands)
+
+
+def test_live_33521b_channel_two_rejects_after_identity_before_writes():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError, match="Channel 2"):
+        configure_sine(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            channel=2,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("command", "response", "query_error"),
+    [
+        ("SOURce1:FREQuency:COUPle:STATe?", "1", None),
+        ("SOURce1:VOLTage:COUPle:STATe?", "ON", None),
+        ("SOURce1:TRACk?", "ON", None),
+        ("SOURce1:TRACk?", "INV", None),
+        ("SOURce2:TRACk?", "ON", None),
+        ("SOURce1:FREQuency:COUPle:STATe?", "MALFORMED", None),
+        ("SOURce1:FREQuency:COUPle:STATe?", None, TimeoutError("timeout")),
+    ],
+)
+def test_independent_channel_guard_fails_closed_before_any_write(
+    command,
+    response,
+    query_error,
+):
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={} if response is None else {command: response},
+        query_errors_by_command={} if query_error is None else {command: query_error},
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformVerificationError):
+        configure_sine(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            channel=2,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.writes == []
+    assert any(event[0] == "query" for event in session.events)
+    assert all(event[0] != "write" for event in session.events)
+
+
+def test_independent_channel_guard_allows_channel_two_when_all_modes_are_off():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = configure_sine(
+        USB_RESOURCE,
+        1000,
+        0.1,
+        channel=2,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.channel == 2
+    assert session.writes[0] == "OUTPut2 OFF"
+    assert all("SOURce1" not in command for command in session.writes)
+    assert all("OUTPut1" not in command for command in session.writes)
+
+
+def test_status_channel_two_is_read_only_and_uses_channel_two_queries():
+    responses = {
+        "OUTPut2?": "0",
+        "SOURce2:FUNCtion?": "SIN",
+        "SOURce2:VOLTage:OFFSet?": "0",
+        "OUTPut2:LOAD?": "50",
+        "SOURce2:FREQuency?": "1000",
+        "SOURce2:VOLTage:UNIT?": "VPP",
+        "SOURce2:VOLTage?": "0.1",
+        "SOURce1:FREQuency:COUPle:STATe?": "1",
+        "SOURce1:VOLTage:COUPle:STATe?": "1",
+        "SOURce1:TRACk?": "ON",
+        "SOURce2:TRACk?": "INV",
+    }
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command=responses,
+    )
+    manager = FakeManager(session)
+
+    result = query_status(
+        USB_RESOURCE,
+        channel=2,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.channel == 2
+    assert result.frequency_hz == 1000.0
+    assert session.writes == []
+    assert all("SOURce1" not in command for command in session.queries[1:])
+
+
+def test_output_channel_two_changes_only_selected_output():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = set_output(
+        USB_RESOURCE,
+        "on",
+        channel=2,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.channel == 2
+    assert session.writes == ["OUTPut2 ON"]
