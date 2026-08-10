@@ -404,7 +404,7 @@ def test_listing_invalid_backend_json_does_not_create_manager(monkeypatch, capsy
         "resources": [],
         "error": (
             "unsupported_backend: Unsupported VISA backend "
-            "'invalid-backend'; choose 'system' or '@py'."
+            "'invalid-backend'; choose 'system', '@py', or '@bt'."
         ),
     }
     assert captured.out.count("\n") == 1

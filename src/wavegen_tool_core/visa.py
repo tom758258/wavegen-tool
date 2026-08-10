@@ -692,7 +692,7 @@ def normalize_serial_termination(value: str) -> str | None:
 
 
 def create_resource_manager(pyvisa_library: str) -> VisaResourceManager:
-    """Create a system or pyvisa-py ResourceManager without fallback."""
+    """Create the explicitly selected PyVISA ResourceManager without fallback."""
 
     import pyvisa
 

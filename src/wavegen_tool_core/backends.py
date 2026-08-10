@@ -10,6 +10,7 @@ from wavegen_tool_core.transport import TCPIP_TRANSPORT, USB_TRANSPORT
 
 SYSTEM_BACKEND = "system"
 PYVISA_PY_BACKEND = "@py"
+PYVISA_BT_BACKEND = "@bt"
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class VisaBackend:
 
 
 def normalize_backend(value: str | None) -> VisaBackend:
-    """Resolve the two supported backend scopes without fallback."""
+    """Resolve the supported backend scopes without fallback."""
 
     if value is None or (isinstance(value, str) and not value.strip()):
         return VisaBackend(SYSTEM_BACKEND, "system_visa", "@ivi")
@@ -34,8 +35,10 @@ def normalize_backend(value: str | None) -> VisaBackend:
         return VisaBackend(SYSTEM_BACKEND, "system_visa", "@ivi")
     if normalized == PYVISA_PY_BACKEND:
         return VisaBackend(PYVISA_PY_BACKEND, "pyvisa_py", PYVISA_PY_BACKEND)
+    if normalized == PYVISA_BT_BACKEND:
+        return VisaBackend(PYVISA_BT_BACKEND, "pyvisa_bt", PYVISA_BT_BACKEND)
     raise UnsupportedBackendError(
-        f"Unsupported VISA backend {value!r}; choose 'system' or '@py'."
+        f"Unsupported VISA backend {value!r}; choose 'system', '@py', or '@bt'."
     )
 
 
@@ -51,6 +54,13 @@ def validate_backend_transport(backend: VisaBackend, transport: str) -> None:
             "The '@py' backend does not currently support USB resources. "
             "USB resources are supported with the 'system' backend; "
             "'@py' currently accepts TCPIP/LAN resources only.",
+            backend=backend.name,
+            transport=transport,
+        )
+    if backend.name == PYVISA_BT_BACKEND:
+        raise UnsupportedConnectionScopeError(
+            "The '@bt' backend is recognized as 'pyvisa_bt', but currently has no "
+            "Product-open live connection scope.",
             backend=backend.name,
             transport=transport,
         )

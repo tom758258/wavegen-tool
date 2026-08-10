@@ -28,10 +28,22 @@ def test_explicit_pyvisa_py_backend():
     assert backend.pyvisa_library == "@py"
 
 
+def test_explicit_pyvisa_bt_backend():
+    backend = normalize_backend("@bt")
+
+    assert backend.name == "@bt"
+    assert backend.internal_name == "pyvisa_bt"
+    assert backend.pyvisa_library == "@bt"
+
+
 @pytest.mark.parametrize("value", ["py", "@ivi", "default", object()])
 def test_unsupported_backend_is_rejected(value):
-    with pytest.raises(UnsupportedBackendError):
+    with pytest.raises(UnsupportedBackendError) as error:
         normalize_backend(value)
+    if isinstance(value, str):
+        assert "choose 'system', '@py', or '@bt'." in str(error.value)
+    else:
+        assert "VISA backend must be text." in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -55,3 +67,15 @@ def test_pyvisa_py_usb_combination_is_rejected_with_clear_guidance():
     message = str(error.value)
     assert "USB resources are supported with the 'system' backend" in message
     assert "'@py' currently accepts TCPIP/LAN resources only" in message
+
+
+@pytest.mark.parametrize("transport", ["usb", "tcpip"])
+def test_pyvisa_bt_live_scope_is_rejected_for_admitted_transports(transport):
+    with pytest.raises(UnsupportedConnectionScopeError) as error:
+        validate_backend_transport(normalize_backend("@bt"), transport)
+
+    assert error.value.backend == "@bt"
+    assert error.value.transport == transport
+    message = str(error.value)
+    assert "The '@bt' backend is recognized as 'pyvisa_bt'" in message
+    assert "no Product-open live connection scope" in message

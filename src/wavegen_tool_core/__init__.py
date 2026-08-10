@@ -1,6 +1,7 @@
 """Core API for safe waveform-generator identification."""
 
 from wavegen_tool_core.backends import (
+    PYVISA_BT_BACKEND,
     PYVISA_PY_BACKEND,
     SYSTEM_BACKEND,
     VisaBackend,
@@ -121,6 +122,7 @@ __all__ = [
     "ErrorQueueResult",
     "DcDryRunResult",
     "LIVE_VERIFY_TIMEOUT_MS",
+    "PYVISA_BT_BACKEND",
     "PYVISA_PY_BACKEND",
     "SYSTEM_BACKEND",
     "IdentificationResult",

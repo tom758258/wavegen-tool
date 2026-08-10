@@ -2734,3 +2734,40 @@ def test_simulate_and_explicit_resource_conflict_is_usage_error_without_visa(
     assert manager.opened_resources == []
     assert "--resource cannot be used with --simulate" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_pyvisa_bt_human_error_is_fail_closed(monkeypatch, capsys):
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["identify", "--resource", TCPIP_RESOURCE, "--backend", "@bt"])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.UNSUPPORTED_CONNECTION_SCOPE
+    assert calls == []
+    assert manager.opened_resources == []
+    assert captured.out == ""
+    assert "Error [unsupported_connection_scope]" in captured.err
+    assert "The '@bt' backend is recognized as 'pyvisa_bt'" in captured.err
+    assert "no Product-open live connection scope" in captured.err
+
+
+def test_pyvisa_bt_json_error_is_one_object(monkeypatch, capsys):
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        ["identify", "--resource", TCPIP_RESOURCE, "--backend", "@bt", "--json"]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.UNSUPPORTED_CONNECTION_SCOPE
+    assert calls == []
+    assert manager.opened_resources == []
+    assert payload["backend"] == "@bt"
+    assert payload["transport"] == "tcpip"
+    assert payload["model_supported"] is False
+    assert payload["error"].startswith("unsupported_connection_scope:")
+    assert captured.out.count("\n") == 1
+    assert captured.err == ""

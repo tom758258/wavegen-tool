@@ -30,9 +30,10 @@ frequency sweeps for Keysight or Agilent 33512B and 33521B instruments.
 - Explicit Channel 1 output on/off control
 - Read-only Channel 1 status query
 - Bounded instrument error queue reads
-- System VISA explicitly selects the IVI VISA backend and accepts explicit USB
+- System VISA (`system_visa`) explicitly selects the IVI VISA backend and accepts explicit USB
   and TCPIP/LAN resources
-- The `@py` backend from `pyvisa-py` accepts explicit TCPIP/LAN resources only
+- The `@py` backend (`pyvisa_py`) from `pyvisa-py` accepts explicit TCPIP/LAN resources only
+- The `@bt` selector is recognized as the `pyvisa_bt` backend identity, but currently has no Product-open or Validation-open live connection scope
 - Raw VISA resource listing and opt-in live-only connectivity checks
 - Human-readable and JSON CLI output
 
@@ -210,9 +211,9 @@ uv run wavegen-tool list-resources --live-only --json
 ```
 
 System live-only checks accept USB, TCPIP/LAN, and ASRL/RS-232 candidates.
-`@py` live-only checks accept TCPIP/LAN candidates only. GPIB, PXI, VXI,
+`@py` live-only checks accept TCPIP/LAN candidates only. The `@bt` selector is recognized as the `pyvisa_bt` backend identity, but live-only checks skip `@bt` because no live connection scope is open for `pyvisa_bt`. GPIB, PXI, VXI,
 unknown transports, and unsupported backend/transport combinations remain
-visible in raw results but are skipped in live-only mode.
+visible in raw results but are skipped in live-only mode. Recognizing `@bt` adds no `pyvisa_bt` dependency, optional extra, bundled runtime, Product scope, or Validation scope.
 
 Provide serial settings explicitly when an ASRL candidate requires them. These
 settings apply only to system-backend ASRL candidates; omitted settings leave
@@ -879,7 +880,7 @@ first turn Channel 1 off and leave it off after configuration. They cannot
 enable output. The `output` command changes only the Channel 1 output state
 and does not reconfigure or reset the instrument.
 
-For identify, the `@py` plus USB combination is rejected before the
+For identify, the `@py` plus USB combination and any `@bt` live connection request are rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain
 available through the system backend. There is no automatic backend fallback.
 

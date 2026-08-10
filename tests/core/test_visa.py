@@ -3220,3 +3220,36 @@ def test_read_error_queue_query_failure_chains_and_closes():
     assert session.queries == [IDN_QUERY, "SYSTem:ERRor?"]
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize("resource", [USB_RESOURCE, TCPIP_RESOURCE])
+def test_pyvisa_bt_is_rejected_before_resource_manager_creation(resource):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(UnsupportedConnectionScopeError) as error:
+        identify_instrument(resource, "@bt", resource_manager_factory=factory)
+
+    assert factory.calls == []
+    assert manager.opened_resources == []
+    assert manager.session.queries == []
+    assert error.value.backend == "@bt"
+
+
+def test_pyvisa_bt_live_only_skips_all_resources():
+    tcpip_session = FakeSession(response="any non-empty response")
+    manager = FakeManager(
+        resources=(USB_RESOURCE, TCPIP_RESOURCE),
+        sessions_by_resource={TCPIP_RESOURCE: tcpip_session},
+    )
+    factory = RecordingFactory(manager)
+
+    result = list_resources(
+        "@bt",
+        live_only=True,
+        resource_manager_factory=factory,
+    )
+
+    assert factory.calls == ["@bt"]
+    assert manager.opened_resources == []
+    assert result.resources == ()
