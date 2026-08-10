@@ -118,7 +118,6 @@ def _check_independent_channel_guard(
             backend=context.backend,
             transport=context.transport,
             identity=context.identity,
-            output_state="off",
         ) from exc
     if freq_coup not in {"0", "OFF"}:
         raise WaveformVerificationError(
@@ -126,7 +125,6 @@ def _check_independent_channel_guard(
             backend=context.backend,
             transport=context.transport,
             identity=context.identity,
-            output_state="off",
         )
 
     try:
@@ -137,7 +135,6 @@ def _check_independent_channel_guard(
             backend=context.backend,
             transport=context.transport,
             identity=context.identity,
-            output_state="off",
         ) from exc
     if volt_coup not in {"0", "OFF"}:
         raise WaveformVerificationError(
@@ -145,7 +142,6 @@ def _check_independent_channel_guard(
             backend=context.backend,
             transport=context.transport,
             identity=context.identity,
-            output_state="off",
         )
 
     for trk_cmd in ("SOURce1:TRACk?", "SOURce2:TRACk?"):
@@ -157,7 +153,6 @@ def _check_independent_channel_guard(
                 backend=context.backend,
                 transport=context.transport,
                 identity=context.identity,
-                output_state="off",
             ) from exc
         if track_resp != "OFF":
             raise WaveformVerificationError(
@@ -165,7 +160,6 @@ def _check_independent_channel_guard(
                 backend=context.backend,
                 transport=context.transport,
                 identity=context.identity,
-                output_state="off",
             )
 
 
@@ -4471,8 +4465,8 @@ def _run_on_supported_instrument(
     if cleanup_errors:
         if output_state_after_operation == "on":
             message = (
-                "The Channel 1 output ON command was sent, but VISA cleanup failed; "
-                "Channel 1 output may remain on: "
+                "The selected output ON command was sent, but VISA cleanup failed; "
+                "selected output may remain on: "
                 + "; ".join(cleanup_errors)
                 + "."
             )

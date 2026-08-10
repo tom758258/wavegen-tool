@@ -2884,10 +2884,33 @@ def test_output_on_cleanup_failure_preserves_possible_output_state():
         )
 
     assert error.value.output_state == "on"
-    assert "Channel 1 output may remain on" in str(error.value)
+    assert "selected output may remain on" in str(error.value)
     assert session.writes == ["OUTPut1 ON"]
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_channel_two_output_on_cleanup_failure_does_not_claim_channel_one():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        close_error=RuntimeError("session close failed"),
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(VisaCleanupError) as error:
+        set_output(
+            USB_RESOURCE,
+            "on",
+            channel=2,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert error.value.output_state == "on"
+    assert "selected output may remain on" in str(error.value)
+    assert "Channel 1" not in str(error.value)
+    assert session.writes == ["OUTPut2 ON"]
 
 
 def test_invalid_output_state_is_domain_error_before_visa_io():
@@ -3350,7 +3373,7 @@ def test_independent_channel_guard_fails_closed_before_any_write(
     )
     manager = FakeManager(session)
 
-    with pytest.raises(WaveformVerificationError):
+    with pytest.raises(WaveformVerificationError) as error:
         configure_sine(
             USB_RESOURCE,
             1000,
@@ -3361,6 +3384,7 @@ def test_independent_channel_guard_fails_closed_before_any_write(
             resource_manager_factory=RecordingFactory(manager),
         )
 
+    assert error.value.output_state is None
     assert session.writes == []
     assert any(event[0] == "query" for event in session.events)
     assert all(event[0] != "write" for event in session.events)

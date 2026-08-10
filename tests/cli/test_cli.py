@@ -1849,7 +1849,7 @@ def test_output_on_cleanup_failure_json_preserves_possible_output_state(
     assert exit_code == ExitCode.VISA_CLEANUP_ERROR
     assert payload["success"] is False
     assert payload["output_state"] == "on"
-    assert "Channel 1 output may remain on" in payload["error"]
+    assert "selected output may remain on" in payload["error"]
     assert session.writes == ["OUTPut1 ON"]
 
 
@@ -2547,6 +2547,50 @@ def test_all_public_cli_routes_support_simulation_without_real_visa(
     assert payload.get("action") == expected_action
     assert payload[field] == expected
     assert captured.err == ""
+
+
+def test_output_simulator_dispatches_33512b_channel_two(capsys):
+    exit_code = main(
+        [
+            "output",
+            "--simulate",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--state",
+            "on",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["model"] == "33512B"
+    assert payload["channel"] == 2
+    assert payload["output_state"] == "on"
+    assert payload["mode"] == "simulate"
+
+
+def test_status_simulator_dispatches_33512b_channel_two(capsys):
+    exit_code = main(
+        [
+            "status",
+            "--simulate",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["model"] == "33512B"
+    assert payload["channel"] == 2
+    assert payload["output_state"] == "off"
+    assert payload["mode"] == "simulate"
 
 
 def test_configure_sine_simulator_dispatches_33510b_identity_and_capability(

@@ -839,27 +839,30 @@ PRBS dry-run applies the live pattern, bit-rate, and edge-time/bit-period
 validation and previews the same SCPI plan. It performs no VISA I/O; live
 `configure-prbs` still requires an explicit resource.
 
-## Control Channel 1 Output
+## Control the Selected-Channel Output
 
-Output state changes are always explicit. Turn Channel 1 on only after
+Output state changes are always explicit. Select Channel 1 or Channel 2 with
+`--channel`; the default is Channel 1. Turn the selected channel on only after
 reviewing the configured signal and connected load:
 
 ```powershell
 uv run wavegen-tool output `
   --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --channel 2 `
   --state on
 ```
 
-Turn Channel 1 off:
+Turn the selected channel off:
 
 ```powershell
 uv run wavegen-tool output `
   --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --channel 2 `
   --state off
 ```
 
 The `output` command identifies the instrument in the same session and writes
-only the requested Channel 1 output state. Only an explicit
+only the requested selected-channel output state. Only an explicit
 `output --state on` command enables the output.
 
 ## Safety Boundary

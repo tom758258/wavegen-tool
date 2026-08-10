@@ -1312,6 +1312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "read-errors",
         "output",
     }
+    standalone_simulator_model_commands = {"status", "output"}
     if (
         args.command in waveform_commands
         and args.dry_run
@@ -1325,7 +1326,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in validation_only_live_commands:
         if args.simulate and (
             args.validation_allow_pending_live_support
-            or args.model is not None
+            or (
+                args.model is not None
+                and args.command not in standalone_simulator_model_commands
+            )
         ):
             parser.error(
                 "validation-only live arguments cannot be used with --simulate"
@@ -1339,6 +1343,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if (
             args.model is not None
+            and not args.simulate
             and not args.validation_allow_pending_live_support
         ):
             parser.error(
@@ -2468,7 +2473,9 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
 
 def _run_output(args: argparse.Namespace) -> int:
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model or CANONICAL_MODEL_ID)
+        if args.simulate
+        else (args.resource, None)
     )
     return _run_control(
         args,
@@ -2485,7 +2492,9 @@ def _run_output(args: argparse.Namespace) -> int:
 
 def _run_status(args: argparse.Namespace) -> int:
     resource, factory = (
-        _simulated_target() if args.simulate else (args.resource, None)
+        _simulated_target(args.model or CANONICAL_MODEL_ID)
+        if args.simulate
+        else (args.resource, None)
     )
     try:
         result = query_status(
