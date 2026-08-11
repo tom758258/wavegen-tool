@@ -7,6 +7,7 @@ import pytest
 from wavegen_tool_core import (
     AMConfig,
     FMConfig,
+    PMConfig,
     SIMULATED_33521B_IDN,
     SIMULATED_33521B_RESOURCE,
     Simulated33521BState,
@@ -630,6 +631,79 @@ def test_two_channel_simulator_fm_state_queries_and_static_recovery() -> None:
     assert state.ch1.fm_enabled is False
     assert state.ch2.fm_enabled is False
     assert state.ch2.active_function == "TRIANGLE"
+    assert state.ch2.output_enabled is False
+
+
+def test_two_channel_simulator_pm_state_writes_and_queries() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_sine(
+        factory.resource_name,
+        100_000,
+        0.2,
+        channel=2,
+        pm=PMConfig(1_000, 90),
+        resource_manager_factory=factory,
+    )
+
+    assert result.pm == PMConfig(1_000.0, 90.0)
+    assert state.ch2.pm_enabled is True
+    assert state.ch2.am_enabled is False
+    assert state.ch2.fm_enabled is False
+    assert state.ch2.pm_source == "internal"
+    assert state.ch2.pm_internal_function == "sine"
+    assert state.ch2.pm_internal_frequency_hz == 1_000.0
+    assert state.ch2.pm_deviation_deg == 90.0
+    assert state.ch2.output_enabled is False
+
+    manager = SimulatedResourceManager(state)
+    session = manager.open_resource(factory.resource_name)
+    assert session.query("SOURce2:PM:STATe?") == "1"
+    assert session.query("SOURce2:PM:SOURce?") == "internal"
+    assert session.query("SOURce2:PM:INTernal:FUNCtion?") == "sine"
+    assert session.query("SOURce2:PM:INTernal:FREQuency?") == "1000"
+    assert session.query("SOURce2:PM:DEViation?") == "90"
+    session.close()
+    manager.close()
+
+
+def test_two_channel_simulator_sweep_clears_pm_only_on_selected_channel() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        100_000,
+        0.1,
+        channel=1,
+        pm=PMConfig(1_000, 90),
+        resource_manager_factory=factory,
+    )
+    configure_triangle(
+        factory.resource_name,
+        80_000,
+        0.1,
+        channel=2,
+        pm=PMConfig(1_000, 180),
+        resource_manager_factory=factory,
+    )
+
+    configure_sine_sweep(
+        factory.resource_name,
+        1_000,
+        10_000,
+        "linear",
+        1,
+        0.1,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.pm_enabled is True
+    assert state.ch2.pm_enabled is False
+    assert state.ch2.frequency_mode == "SWEep"
+    assert state.ch1.output_enabled is False
     assert state.ch2.output_enabled is False
 
 

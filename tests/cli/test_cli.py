@@ -563,6 +563,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
                 "OUTPut1 OFF",
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
+                "SOURce1:PM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -624,6 +625,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -676,10 +678,11 @@ def test_configure_sine_internal_am_dry_run_emits_ordered_json_without_visa(
     assert payload["am_depth_percent"] == 50.0
     assert payload["am_type"] == "normal"
     assert payload["output_state"] == "off"
-    assert payload["commands"][:4] == [
+    assert payload["commands"][:5] == [
         "OUTPut2 OFF",
         "SOURce2:AM:STATe OFF",
         "SOURce2:FM:STATe OFF",
+        "SOURce2:PM:STATe OFF",
         "SOURce2:FREQuency:MODE CW",
     ]
     assert payload["commands"][-6:] == [
@@ -765,10 +768,11 @@ def test_configure_sine_internal_fm_dry_run_emits_ordered_json_without_visa(
     assert payload["fm_frequency_hz"] == 1000.0
     assert payload["fm_deviation_hz"] == 100000.0
     assert payload["output_state"] == "off"
-    assert payload["commands"][:4] == [
+    assert payload["commands"][:5] == [
         "OUTPut2 OFF",
         "SOURce2:AM:STATe OFF",
         "SOURce2:FM:STATe OFF",
+        "SOURce2:PM:STATe OFF",
         "SOURce2:FREQuency:MODE CW",
     ]
     assert payload["commands"][-5:] == [
@@ -795,6 +799,84 @@ def test_incomplete_fm_cli_group_fails_closed_without_visa(monkeypatch, capsys):
             "0.1",
             "--fm-frequency",
             "100",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["success"] is False
+    assert payload["error"].startswith("waveform_parameter_error:")
+
+
+def test_configure_sine_internal_pm_dry_run_emits_ordered_json_without_visa(
+    monkeypatch,
+    capsys,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--frequency-hz",
+            "100000",
+            "--amplitude-vpp",
+            "0.1",
+            "--pm-frequency",
+            "1000",
+            "--pm-deviation-deg",
+            "90",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["pm_enabled"] is True
+    assert payload["pm_frequency_hz"] == 1000.0
+    assert payload["pm_deviation_deg"] == 90.0
+    assert payload["output_state"] == "off"
+    assert payload["commands"][:5] == [
+        "OUTPut2 OFF",
+        "SOURce2:AM:STATe OFF",
+        "SOURce2:FM:STATe OFF",
+        "SOURce2:PM:STATe OFF",
+        "SOURce2:FREQuency:MODE CW",
+    ]
+    assert payload["commands"][-5:] == [
+        "SOURce2:PM:SOURce INTernal",
+        "SOURce2:PM:INTernal:FUNCtion SINusoid",
+        "SOURce2:PM:INTernal:FREQuency 1000",
+        "SOURce2:PM:DEViation 90",
+        "SOURce2:PM:STATe ON",
+    ]
+    assert "OUTPut2 ON" not in payload["commands"]
+
+
+def test_incomplete_pm_cli_group_fails_closed_without_visa(monkeypatch, capsys):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--frequency-hz",
+            "100000",
+            "--amplitude-vpp",
+            "0.1",
+            "--pm-frequency",
+            "1000",
             "--json",
         ]
     )
@@ -946,6 +1028,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
                 "OUTPut1 OFF",
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
+                "SOURce1:PM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -1009,6 +1092,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1136,6 +1220,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
                 "OUTPut1 OFF",
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
+                "SOURce1:PM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -1202,6 +1287,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1291,6 +1377,7 @@ def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD INF",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1603,6 +1690,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
                 "OUTPut1 OFF",
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
+                "SOURce1:PM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -1685,6 +1773,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1721,6 +1810,7 @@ def test_configure_dc_dry_run_cli_emits_hardware_free_json(
                 "OUTPut1 OFF",
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
+                "SOURce1:PM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:FUNCtion DC",
                 "SOURce1:VOLTage:OFFSet 1.5",
@@ -1765,6 +1855,7 @@ def test_configure_dc_dry_run_cli_emits_hardware_free_json(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "OUTPut1:LOAD 50",
             "SOURce1:FUNCtion DC",
             "SOURce1:VOLTage:OFFSet 1.5",
@@ -1795,6 +1886,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
                 "OUTPut1 OFF",
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
+                "SOURce1:PM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion NOISe",
@@ -1852,6 +1944,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FUNCtion NOISe",
@@ -1887,6 +1980,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
                 "OUTPut1 OFF",
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
+                "SOURce1:PM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion PRBS",
@@ -1960,6 +2054,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
             "OUTPut1 OFF",
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
+            "SOURce1:PM:STATe OFF",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FUNCtion PRBS",

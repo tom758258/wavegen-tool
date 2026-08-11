@@ -4,8 +4,9 @@ Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. It
 supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
-Internal Sine amplitude and frequency modulation for supported static carriers, explicit
-output control, and sine, square, ramp, and triangle frequency sweeps for
+Internal Sine amplitude, frequency, and phase modulation for supported static
+carriers, explicit output control, and sine, square, ramp, and triangle
+frequency sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
 
 ## Current Scope
@@ -23,6 +24,7 @@ Keysight or Agilent 33512B and 33521B instruments.
   pulse carriers, with Normal and DSSC modes
 - Internal Sine frequency modulation for sine, square, ramp, and triangle
   carriers
+- Internal Sine phase modulation for sine, square, ramp, and triangle carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
@@ -108,7 +110,7 @@ The four static carrier commands `configure-sine`, `configure-square`,
 settings. The modulation source is fixed to Internal and the internal
 modulating waveform is fixed to Sine. Provide `--fm-frequency` and
 `--fm-deviation` together; partial option groups and configurations that also
-specify AM are rejected.
+specify AM or PM are rejected.
 
 Preview a representative Square FM configuration without VISA I/O:
 
@@ -133,6 +135,35 @@ off before changing modulation state and leaves it off; only the explicit
 `output --state on` command enables it. Ordinary static waveform and sweep
 configuration explicitly disable FM on the selected channel.
 
+## Configure Internal Phase Modulation
+
+The four static carrier commands `configure-sine`, `configure-square`,
+`configure-ramp`, and `configure-triangle` accept optional Internal PM
+settings. The modulation source is fixed to Internal and the internal
+modulating waveform is fixed to Sine. Provide `--pm-frequency` and
+`--pm-deviation-deg` together; partial option groups are rejected. AM, FM, and
+PM are mutually exclusive.
+
+Preview a representative Sine PM configuration without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 100000 `
+  --amplitude-vpp 0.1 `
+  --pm-frequency 1000 `
+  --pm-deviation-deg 90
+```
+
+PM modulation frequency must be at least 0.000001 Hz and cannot exceed the
+selected model profile's Sine frequency capability. Phase deviation must be
+from 0 through 360 degrees. The carrier frequency must be strictly greater
+than 20 times the modulation frequency. PM configuration turns the selected
+output off before changing modulation state and leaves it off; only the
+explicit `output --state on` command enables it. Ordinary static waveform and
+sweep configuration explicitly disable PM on the selected channel.
+
 ## Requirements and Installation
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the
@@ -151,8 +182,8 @@ The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep commands, and explicit output control. Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep and
-Internal AM/FM state; normal waveform configuration restores CW mode and
-disables AM and FM only on the selected channel. The 33521B profile rejects
+Internal AM/FM/PM state; normal waveform configuration restores CW mode and
+disables AM, FM, and PM only on the selected channel. The 33521B profile rejects
 Channel 2.
 Standalone configure commands can select the registered 33510B, 33512B, or
 33521B model; the default remains 33521B. The simulator never creates a real
@@ -522,8 +553,8 @@ preview and is not executed. The sine preview includes the explicit
 `UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run does not execute
 SCPI or access hardware. Live waveform configuration continues to require an
 explicit VISA resource, and configuration leaves output off.
-Internal AM and FM dry-runs use the same model capability, channel, and safety
-validation as the corresponding configuration command.
+Internal AM, FM, and PM dry-runs use the same model capability, channel, and
+safety validation as the corresponding configuration command.
 
 ## Configure a Selected-Channel Sine Frequency Sweep
 

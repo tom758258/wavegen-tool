@@ -46,6 +46,7 @@ from wavegen_tool_core.transport import classify_transport, detect_resource_tran
 from wavegen_tool_core.visa import (
     AMConfig,
     FMConfig,
+    PMConfig,
     DEFAULT_TIMEOUT_MS,
     ErrorQueueResult,
     SystemErrorEntry,
@@ -117,6 +118,7 @@ from wavegen_tool_core.visa import (
 __all__ = [
     "AMConfig",
     "FMConfig",
+    "PMConfig",
     "CANONICAL_MANUFACTURER",
     "CANONICAL_MODEL",
     "CANONICAL_MODEL_ID",
