@@ -18,8 +18,8 @@ for Keysight or Agilent 33512B and 33521B instruments.
 - Stateful in-memory simulator with independent channels for the two-channel
   33510B and 33512B profiles
 - Basic sine, square, ramp, triangle, and pulse configuration
-- Channel 1 sine, square, ramp, and triangle linear and logarithmic frequency
-  sweep configuration with Immediate trigger
+- Selected-channel sine, square, ramp, and triangle linear and logarithmic
+  frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
 - Basic DC voltage, noise, and PRBS configuration
 - Explicit selected-channel output on/off control
@@ -47,23 +47,24 @@ The public scope excludes other waveform types, automatic resource scanning,
 WebUI features, and release executables. Identification sends only `*IDN?`; it
 does not reset the instrument, change settings, or enable an output.
 
-## Basic Channel Control
+## Selected-Channel Control
 
-The Direct CLI basic commands `status`, `output`, `configure-sine`,
+The Direct CLI commands `status`, `output`, `configure-sine`,
 `configure-square`, `configure-ramp`, `configure-triangle`, `configure-pulse`,
-`configure-dc`, `configure-noise`, and `configure-prbs` accept `--channel 1`
-or `--channel 2`. The default is Channel 1. 33512B supports both channels for
-Product Live, dry-run, and simulator operation. 33510B supports both channels
-only in dry-run and simulator operation. 33521B has one channel, so Channel 2
-is rejected by Core in live, dry-run, and simulator paths. Sine, square, ramp,
-and triangle sweep commands remain Channel 1 only.
+`configure-dc`, `configure-noise`, `configure-prbs`, and the sine, square, ramp,
+and triangle sweep commands accept `--channel 1` or `--channel 2`. The default
+is Channel 1. 33512B supports both channels for Product Live, dry-run, and
+simulator operation. 33510B supports both channels only in dry-run and
+simulator operation. 33521B has one channel, so Channel 2 is rejected by Core
+in live, dry-run, and simulator paths.
 
-Basic configuration turns off only the selected channel and leaves it off; it
-never enables output implicitly. On two-channel live instruments, independent
-state-changing operations fail closed unless frequency coupling, voltage
-coupling, and tracking are all explicitly reported as off. The tool never
-disables coupling or tracking automatically. Read-only status does not require
-these independent-channel checks.
+Configuration turns off only the selected channel and leaves it off; it never
+enables output implicitly. On two-channel live instruments, independent
+state-changing operations, including sweeps on Channel 1 or Channel 2, fail
+closed unless frequency coupling, voltage coupling, Channel 1 tracking, and
+Channel 2 tracking are all explicitly reported as off. The tool never disables
+coupling or tracking automatically. Read-only status does not require these
+independent-channel checks.
 
 ## Requirements and Installation
 
@@ -82,8 +83,9 @@ reserved WebUI import packages.
 The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep commands, and explicit output control. Two-channel model
-profiles retain independent Channel 1 and Channel 2 state; the 33521B profile
-rejects Channel 2. Standalone configure
+profiles retain independent Channel 1 and Channel 2 state, including sweep
+state; normal waveform configuration restores CW mode only on the selected
+channel. The 33521B profile rejects Channel 2. Standalone configure
 commands can select the registered 33510B, 33512B, or 33521B model; the default
 remains 33521B. The simulator never creates a real VISA ResourceManager, runs
 real resource discovery, opens hardware, or performs hardware I/O. Supported
@@ -437,8 +439,8 @@ uv run wavegen-tool configure-sine `
   --load 50
 ```
 
-Dry-run supports sine, square, ramp, triangle, pulse, DC, noise, PRBS, and
-square/ramp/triangle frequency sweep configuration. Its exact `--model`
+Dry-run supports sine, square, ramp, triangle, pulse, DC, noise, PRBS, and all
+four frequency sweep configurations. Its exact `--model`
 choices are `keysight-33510b`, `keysight-33512b`, and `keysight-33521b`, with
 `keysight-33521b` as the default. Standalone configure simulation uses the same
 selection. Model selection never overrides Live `*IDN?` detection; non-default
@@ -451,15 +453,18 @@ preview and is not executed. The sine preview includes the explicit
 SCPI or access hardware. Live waveform configuration continues to require an
 explicit VISA resource, and configuration leaves output off.
 
-## Configure a Channel 1 Sine Frequency Sweep
+## Configure a Selected-Channel Sine Frequency Sweep
 
 Sine sweeps support linear or logarithmic spacing, separate start and stop
-frequencies, sweep time, hold time, and return time. The command uses the
-Immediate trigger source only and leaves output off:
+frequencies, sweep time, hold time, and return time. Select Channel 1 or Channel
+2 with `--channel`; the default is Channel 1. The command uses the Immediate
+trigger source only and leaves the selected output off:
 
 ```powershell
 uv run wavegen-tool configure-sine-sweep `
   --dry-run `
+  --model keysight-33512b `
+  --channel 2 `
   --start-frequency-hz 1000 `
   --stop-frequency-hz 10000 `
   --spacing logarithmic `
@@ -474,14 +479,15 @@ uv run wavegen-tool configure-sine-sweep `
 The dry-run previews the start/stop, spacing, sweep/hold/return time, Immediate
 trigger, and sweep-mode SCPI commands without VISA I/O. Normal sine, square,
 ramp, triangle, and pulse configuration explicitly restores CW frequency mode
-after a sweep while leaving output off.
+on the selected channel after a sweep while leaving that output off.
 
-## Configure Channel 1 Square, Ramp, and Triangle Frequency Sweeps
+## Configure Selected-Channel Square, Ramp, and Triangle Frequency Sweeps
 
 The `configure-square-sweep`, `configure-ramp-sweep`, and
 `configure-triangle-sweep` commands support linear or logarithmic spacing,
 separate start and stop frequencies, sweep time, hold time, and return time.
-They use the Immediate trigger source only and leave Channel 1 output off.
+They accept `--channel 1` or `--channel 2`, default to Channel 1, use the
+Immediate trigger source only, and leave the selected output off.
 
 Square sweeps accept `--duty-cycle-percent`; its frequency-dependent limit is
 validated at the higher endpoint of the complete sweep. Ramp sweeps accept
@@ -508,7 +514,9 @@ uv run wavegen-tool configure-square-sweep `
 
 The dry-run uses the same Core validation and ordered SCPI planning as live
 configuration. It does not create a ResourceManager, open a session, query, or
-write. Live use continues to require an explicit VISA resource.
+write. Live use continues to require an explicit VISA resource. These commands
+configure one selected channel; they do not add coupled or synchronized
+dual-channel sweep start.
 
 ## Configure a Channel 1 Square Wave
 
@@ -896,7 +904,10 @@ the error queue, or change output state.
 `configure-noise`, and `configure-prbs` first turn only the selected channel
 off and leave it off after configuration. They cannot enable output. The
 `output` command changes only the selected channel output state and does not
-reconfigure or reset the instrument. Sweep commands remain Channel 1 only.
+reconfigure or reset the instrument. On two-channel live instruments, sweep
+configuration on either channel requires frequency coupling, voltage coupling,
+and tracking on both channels to be reported as off before any write. The tool
+does not change those coupling or tracking settings automatically.
 
 For identify, the `@py` plus USB combination and any `@bt` live connection request are rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain

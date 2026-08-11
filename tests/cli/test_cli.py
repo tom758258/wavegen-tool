@@ -2273,6 +2273,7 @@ def test_frequency_sweep_dry_run_cli_json_matrix(
     assert payload["mode"] == "dry-run"
     assert payload["model"] == "33521B"
     assert payload["canonical_model_id"] == "keysight-33521b"
+    assert payload["channel"] == 1
     assert payload["trigger_source"] == "immediate"
     assert payload["output_state"] == "off"
     assert payload[specific_field] == specific_value
@@ -2281,6 +2282,40 @@ def test_frequency_sweep_dry_run_cli_json_matrix(
     assert "SOURce1:FREQuency:MODE CW" not in payload["commands"]
     assert payload["executed"] is False
     assert captured.err == ""
+
+
+def test_configure_sine_sweep_cli_channel_two_json(capsys):
+    exit_code = main(
+        [
+            "configure-sine-sweep",
+            "--simulate",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--start-frequency-hz",
+            "1000",
+            "--stop-frequency-hz",
+            "10000",
+            "--spacing",
+            "linear",
+            "--sweep-time-s",
+            "1",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["success"] is True
+    assert payload["mode"] == "simulate"
+    assert payload["model"] == "33512B"
+    assert payload["channel"] == 2
+    assert payload["start_frequency_hz"] == 1000.0
+    assert payload["stop_frequency_hz"] == 10000.0
+    assert payload["output_state"] == "off"
 
 
 @pytest.mark.parametrize(

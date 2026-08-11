@@ -1267,6 +1267,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
     assert result.phase_deg == 90.0
     assert result.load == "high-z"
     assert result.output_state == "off"
+    assert result.channel == 1
 
     preview = dry_run_sine_sweep(
         "keysight-33521b",
@@ -1284,6 +1285,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
     assert preview.commands == expected_commands
     assert preview.executed is False
     assert preview.output_state == "off"
+    assert preview.channel == 1
 
 
 @pytest.mark.parametrize(
@@ -1433,11 +1435,138 @@ def test_square_ramp_triangle_sweep_core_and_dry_run_share_ordered_write_plan(
     assert result.phase_deg == float(live_common[11])
     assert result.load == live_common[9]
     assert result.output_state == "off"
+    assert result.channel == 1
     assert "OUTPut1 ON" not in session.writes
     assert "SOURce1:FREQuency:MODE CW" not in session.writes
     assert session.writes[-1] == "SOURce1:FREQuency:MODE SWEep"
     assert preview.executed is False
     assert preview.output_state == "off"
+    assert preview.channel == 1
+
+
+@pytest.mark.parametrize(
+    ("configure_sweep", "dry_run_sweep"),
+    [
+        (configure_sine_sweep, dry_run_sine_sweep),
+        (configure_square_sweep, dry_run_square_sweep),
+        (configure_ramp_sweep, dry_run_ramp_sweep),
+        (configure_triangle_sweep, dry_run_triangle_sweep),
+    ],
+)
+def test_channel_two_sweeps_share_core_and_dry_run_plan(
+    configure_sweep,
+    dry_run_sweep,
+):
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = configure_sweep(
+        USB_RESOURCE,
+        1000,
+        10000,
+        "linear",
+        1,
+        0.2,
+        channel=2,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+    preview = dry_run_sweep(
+        "keysight-33512b",
+        1000,
+        10000,
+        "linear",
+        1,
+        0.2,
+        channel=2,
+    )
+
+    assert result.channel == 2
+    assert preview.channel == 2
+    assert session.writes == list(preview.commands)
+    assert any(command.startswith("OUTPut2") for command in preview.commands)
+    assert any(command.startswith("SOURce2") for command in preview.commands)
+    assert "TRIGger2:SOURce IMMediate" in preview.commands
+    assert all("OUTPut1" not in command for command in preview.commands)
+    assert all("SOURce1" not in command for command in preview.commands)
+    assert all("TRIGger1" not in command for command in preview.commands)
+
+
+def test_channel_two_sweep_dry_run_model_admission():
+    result = dry_run_sine_sweep(
+        "keysight-33510b",
+        1000,
+        10000,
+        "linear",
+        1,
+        0.2,
+        channel=2,
+    )
+
+    assert result.channel == 2
+    assert result.commands[-2] == "TRIGger2:SOURce IMMediate"
+
+    with pytest.raises(WaveformParameterError, match="Channel 2"):
+        dry_run_sine_sweep(
+            "keysight-33521b",
+            1000,
+            10000,
+            "linear",
+            1,
+            0.2,
+            channel=2,
+        )
+
+
+def test_33521b_channel_two_sweep_rejects_before_writes():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError, match="Channel 2"):
+        configure_sine_sweep(
+            USB_RESOURCE,
+            1000,
+            10000,
+            "linear",
+            1,
+            0.2,
+            channel=2,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == []
+
+
+@pytest.mark.parametrize("channel", [1, 2])
+def test_two_channel_sweep_guard_fails_closed_before_writes(channel):
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={"SOURce2:TRACk?": "ON"},
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformVerificationError, match="tracking is active"):
+        configure_sine_sweep(
+            USB_RESOURCE,
+            1000,
+            10000,
+            "linear",
+            1,
+            0.2,
+            channel=channel,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == [
+        IDN_QUERY,
+        "SOURce1:FREQuency:COUPle:STATe?",
+        "SOURce1:VOLTage:COUPle:STATe?",
+        "SOURce1:TRACk?",
+        "SOURce2:TRACk?",
+    ]
+    assert session.writes == []
 
 
 @pytest.mark.parametrize(

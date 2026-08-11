@@ -131,7 +131,7 @@ def _add_channel_argument(parser: argparse.ArgumentParser) -> None:
         type=int,
         choices=(1, 2),
         default=1,
-        help="Basic waveform channel (1 or 2; default: 1).",
+        help="Instrument channel (1 or 2; default: 1).",
     )
 
 
@@ -390,9 +390,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sine_sweep_parser = subparsers.add_parser(
         "configure-sine-sweep",
-        help="Configure a validated Channel 1 sine frequency sweep with output off.",
+        help="Configure a validated selected-channel sine frequency sweep with output off.",
     )
     _add_simulate_argument(sine_sweep_parser)
+    _add_channel_argument(sine_sweep_parser)
     _add_validation_support_policy_argument(sine_sweep_parser)
     sine_sweep_parser.add_argument(
         "--resource",
@@ -469,9 +470,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     square_sweep_parser = subparsers.add_parser(
         "configure-square-sweep",
-        help="Configure a validated Channel 1 square frequency sweep with output off.",
+        help="Configure a validated selected-channel square frequency sweep with output off.",
     )
     _add_simulate_argument(square_sweep_parser)
+    _add_channel_argument(square_sweep_parser)
     _add_validation_support_policy_argument(square_sweep_parser)
     square_sweep_parser.add_argument(
         "--resource",
@@ -553,9 +555,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ramp_sweep_parser = subparsers.add_parser(
         "configure-ramp-sweep",
-        help="Configure a validated Channel 1 ramp frequency sweep with output off.",
+        help="Configure a validated selected-channel ramp frequency sweep with output off.",
     )
     _add_simulate_argument(ramp_sweep_parser)
+    _add_channel_argument(ramp_sweep_parser)
     _add_validation_support_policy_argument(ramp_sweep_parser)
     ramp_sweep_parser.add_argument(
         "--resource",
@@ -637,9 +640,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     triangle_sweep_parser = subparsers.add_parser(
         "configure-triangle-sweep",
-        help="Configure a validated Channel 1 triangle frequency sweep with output off.",
+        help="Configure a validated selected-channel triangle frequency sweep with output off.",
     )
     _add_simulate_argument(triangle_sweep_parser)
+    _add_channel_argument(triangle_sweep_parser)
     _add_validation_support_policy_argument(triangle_sweep_parser)
     triangle_sweep_parser.add_argument(
         "--resource",
@@ -1672,6 +1676,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1693,6 +1698,7 @@ def _run_sine_sweep_dry_run(args: argparse.Namespace) -> int:
             args.return_time_s,
             args.load,
             args.phase_deg,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1752,6 +1758,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             duty_cycle_percent=args.duty_cycle_percent,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1774,6 +1781,7 @@ def _run_square_sweep_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             duty_cycle_percent=args.duty_cycle_percent,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1833,6 +1841,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             symmetry_percent=args.symmetry_percent,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1855,6 +1864,7 @@ def _run_ramp_sweep_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             symmetry_percent=args.symmetry_percent,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -1913,6 +1923,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1934,6 +1945,7 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
             args.return_time_s,
             args.load,
             args.phase_deg,
+            channel=args.channel,
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2799,6 +2811,10 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     }
     if action in {
         "configure-sine",
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -2926,6 +2942,7 @@ def _sine_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": result.channel,
         "start_frequency_hz": result.start_frequency_hz,
         "stop_frequency_hz": result.stop_frequency_hz,
         "spacing": result.spacing,
@@ -2969,6 +2986,7 @@ def _square_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": result.channel,
         "start_frequency_hz": result.start_frequency_hz,
         "stop_frequency_hz": result.stop_frequency_hz,
         "spacing": result.spacing,
@@ -3013,6 +3031,7 @@ def _ramp_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": result.channel,
         "start_frequency_hz": result.start_frequency_hz,
         "stop_frequency_hz": result.stop_frequency_hz,
         "spacing": result.spacing,
@@ -3057,6 +3076,7 @@ def _triangle_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "mode": "dry-run",
         "model": result.model,
         "canonical_model_id": result.canonical_model_id,
+        "channel": result.channel,
         "start_frequency_hz": result.start_frequency_hz,
         "stop_frequency_hz": result.stop_frequency_hz,
         "spacing": result.spacing,
@@ -3381,6 +3401,10 @@ def _control_error_payload(
     }
     if action in {
         "configure-sine",
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -3578,13 +3602,13 @@ def _human_control_success(action: str, result: Any) -> str:
     if action == "configure-sine":
         heading = f"Channel {channel} sine waveform configured with output off."
     elif action == "configure-sine-sweep":
-        heading = "Channel 1 sine frequency sweep configured with output off."
+        heading = f"Channel {channel} sine frequency sweep configured with output off."
     elif action == "configure-square-sweep":
-        heading = "Channel 1 square frequency sweep configured with output off."
+        heading = f"Channel {channel} square frequency sweep configured with output off."
     elif action == "configure-ramp-sweep":
-        heading = "Channel 1 ramp frequency sweep configured with output off."
+        heading = f"Channel {channel} ramp frequency sweep configured with output off."
     elif action == "configure-triangle-sweep":
-        heading = "Channel 1 triangle frequency sweep configured with output off."
+        heading = f"Channel {channel} triangle frequency sweep configured with output off."
     elif action == "configure-square":
         heading = f"Channel {channel} square waveform configured with output off."
     elif action == "configure-ramp":
@@ -3693,7 +3717,7 @@ def _human_sine_sweep_dry_run_success(result: Any) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     return "\n".join(
         (
-            "Channel 1 sine sweep dry-run completed; no VISA I/O was performed.",
+            f"Channel {result.channel} sine sweep dry-run completed; no VISA I/O was performed.",
             f"Target model: {result.model}",
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
@@ -3718,7 +3742,8 @@ def _human_frequency_sweep_dry_run_success(
 ) -> str:
     commands = "\n".join(f"- {command}" for command in result.commands)
     lines = [
-        f"Channel 1 {waveform} sweep dry-run completed; no VISA I/O was performed.",
+        f"Channel {result.channel} {waveform} sweep dry-run completed; "
+        "no VISA I/O was performed.",
         f"Target model: {result.model}",
         f"Canonical model ID: {result.canonical_model_id}",
         "Executed: no",

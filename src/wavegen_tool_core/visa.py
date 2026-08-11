@@ -164,12 +164,14 @@ def _check_independent_channel_guard(
 
 
 def _channelize_commands(commands: tuple[str, ...], channel: int) -> tuple[str, ...]:
-    """Apply the selected channel to channel-specific basic commands."""
+    """Apply the selected channel to channel-specific commands."""
 
     if channel == 1:
         return commands
     return tuple(
-        command.replace("SOURce1", "SOURce2").replace("OUTPut1", "OUTPut2")
+        command.replace("SOURce1", "SOURce2")
+        .replace("OUTPut1", "OUTPut2")
+        .replace("TRIGger1", "TRIGger2")
         for command in commands
     )
 
@@ -292,7 +294,7 @@ class SineDryRunResult:
 
 @dataclass(frozen=True)
 class SineSweepConfigurationResult:
-    """A successful Channel 1 sine frequency sweep configuration."""
+    """A successful selected-channel sine frequency sweep configuration."""
 
     resource: str
     backend: str
@@ -310,11 +312,12 @@ class SineSweepConfigurationResult:
     phase_deg: float
     load: str
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class SineSweepDryRunResult:
-    """A hardware-free preview of a Channel 1 sine frequency sweep."""
+    """A hardware-free preview of a selected-channel sine frequency sweep."""
 
     model: str
     canonical_model_id: str
@@ -332,11 +335,12 @@ class SineSweepDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class SquareSweepConfigurationResult:
-    """A successful Channel 1 square frequency sweep configuration."""
+    """A successful selected-channel square frequency sweep configuration."""
 
     resource: str
     backend: str
@@ -355,11 +359,12 @@ class SquareSweepConfigurationResult:
     duty_cycle_percent: float
     load: str
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class SquareSweepDryRunResult:
-    """A hardware-free preview of a Channel 1 square frequency sweep."""
+    """A hardware-free preview of a selected-channel square frequency sweep."""
 
     model: str
     canonical_model_id: str
@@ -378,11 +383,12 @@ class SquareSweepDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class RampSweepConfigurationResult:
-    """A successful Channel 1 ramp frequency sweep configuration."""
+    """A successful selected-channel ramp frequency sweep configuration."""
 
     resource: str
     backend: str
@@ -401,11 +407,12 @@ class RampSweepConfigurationResult:
     symmetry_percent: float
     load: str
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class RampSweepDryRunResult:
-    """A hardware-free preview of a Channel 1 ramp frequency sweep."""
+    """A hardware-free preview of a selected-channel ramp frequency sweep."""
 
     model: str
     canonical_model_id: str
@@ -424,11 +431,12 @@ class RampSweepDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class TriangleSweepConfigurationResult:
-    """A successful Channel 1 triangle frequency sweep configuration."""
+    """A successful selected-channel triangle frequency sweep configuration."""
 
     resource: str
     backend: str
@@ -446,11 +454,12 @@ class TriangleSweepConfigurationResult:
     phase_deg: float
     load: str
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
 class TriangleSweepDryRunResult:
-    """A hardware-free preview of a Channel 1 triangle frequency sweep."""
+    """A hardware-free preview of a selected-channel triangle frequency sweep."""
 
     model: str
     canonical_model_id: str
@@ -468,6 +477,7 @@ class TriangleSweepDryRunResult:
     commands: tuple[str, ...]
     executed: bool = False
     output_state: str = "off"
+    channel: int = 1
 
 
 @dataclass(frozen=True)
@@ -1444,11 +1454,12 @@ def configure_sine_sweep(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SineSweepConfigurationResult:
-    """Validate and configure a Channel 1 sine frequency sweep."""
+    """Validate and configure a selected-channel sine frequency sweep."""
 
     def prepare_configuration(
         capabilities: WavegenCapabilities,
@@ -1472,6 +1483,8 @@ def configure_sine_sweep(
         resource,
         backend,
         prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -1504,6 +1517,7 @@ def configure_sine_sweep(
         offset_v=offset,
         phase_deg=phase,
         load=normalized_load,
+        channel=channel,
     )
 
 
@@ -1519,10 +1533,15 @@ def dry_run_sine_sweep(
     return_time_s: object = 0,
     load: object = 50,
     phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
 ) -> SineSweepDryRunResult:
-    """Preview a validated Channel 1 sine sweep without VISA I/O."""
+    """Preview a validated selected-channel sine sweep without VISA I/O."""
 
     model_info, capabilities = _require_hardware_free_model(model, "sine sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         start_frequency,
         stop_frequency,
@@ -1562,7 +1581,8 @@ def dry_run_sine_sweep(
         offset_v=offset,
         phase_deg=phase,
         load=normalized_load,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -1581,11 +1601,12 @@ def configure_square_sweep(
     phase_deg: object = 0.0,
     duty_cycle_percent: object = 50,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SquareSweepConfigurationResult:
-    """Validate and configure a Channel 1 square frequency sweep."""
+    """Validate and configure a selected-channel square frequency sweep."""
 
     def prepare_configuration(
         capabilities: WavegenCapabilities,
@@ -1610,6 +1631,8 @@ def configure_square_sweep(
         resource,
         backend,
         prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -1644,6 +1667,7 @@ def configure_square_sweep(
         phase_deg=phase,
         duty_cycle_percent=duty_cycle,
         load=normalized_load,
+        channel=channel,
     )
 
 
@@ -1660,10 +1684,15 @@ def dry_run_square_sweep(
     load: object = 50,
     phase_deg: object = 0.0,
     duty_cycle_percent: object = 50,
+    *,
+    channel: int = 1,
 ) -> SquareSweepDryRunResult:
-    """Preview a validated Channel 1 square sweep without VISA I/O."""
+    """Preview a validated selected-channel square sweep without VISA I/O."""
 
     model_info, capabilities = _require_hardware_free_model(model, "square sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         start_frequency,
         stop_frequency,
@@ -1706,7 +1735,8 @@ def dry_run_square_sweep(
         phase_deg=phase,
         duty_cycle_percent=duty_cycle,
         load=normalized_load,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -1725,11 +1755,12 @@ def configure_ramp_sweep(
     phase_deg: object = 0.0,
     symmetry_percent: object = 100,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> RampSweepConfigurationResult:
-    """Validate and configure a Channel 1 ramp frequency sweep."""
+    """Validate and configure a selected-channel ramp frequency sweep."""
 
     (
         start_frequency,
@@ -1762,6 +1793,8 @@ def configure_ramp_sweep(
         backend,
         commands,
         output_state_after_writes="off",
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -1783,6 +1816,7 @@ def configure_ramp_sweep(
         phase_deg=phase,
         symmetry_percent=symmetry,
         load=normalized_load,
+        channel=channel,
     )
 
 
@@ -1799,10 +1833,15 @@ def dry_run_ramp_sweep(
     load: object = 50,
     phase_deg: object = 0.0,
     symmetry_percent: object = 100,
+    *,
+    channel: int = 1,
 ) -> RampSweepDryRunResult:
-    """Preview a validated Channel 1 ramp sweep without VISA I/O."""
+    """Preview a validated selected-channel ramp sweep without VISA I/O."""
 
-    model_info, _capabilities = _require_hardware_free_model(model, "ramp sweep")
+    model_info, capabilities = _require_hardware_free_model(model, "ramp sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         start_frequency,
         stop_frequency,
@@ -1844,7 +1883,8 @@ def dry_run_ramp_sweep(
         phase_deg=phase,
         symmetry_percent=symmetry,
         load=normalized_load,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 
@@ -1862,11 +1902,12 @@ def configure_triangle_sweep(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> TriangleSweepConfigurationResult:
-    """Validate and configure a Channel 1 triangle frequency sweep."""
+    """Validate and configure a selected-channel triangle frequency sweep."""
 
     (
         start_frequency,
@@ -1897,6 +1938,8 @@ def configure_triangle_sweep(
         backend,
         commands,
         output_state_after_writes="off",
+        channel=channel,
+        independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -1917,6 +1960,7 @@ def configure_triangle_sweep(
         offset_v=offset,
         phase_deg=phase,
         load=normalized_load,
+        channel=channel,
     )
 
 
@@ -1932,10 +1976,15 @@ def dry_run_triangle_sweep(
     return_time_s: object = 0,
     load: object = 50,
     phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
 ) -> TriangleSweepDryRunResult:
-    """Preview a validated Channel 1 triangle sweep without VISA I/O."""
+    """Preview a validated selected-channel triangle sweep without VISA I/O."""
 
-    model_info, _capabilities = _require_hardware_free_model(model, "triangle sweep")
+    model_info, capabilities = _require_hardware_free_model(model, "triangle sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
     (
         start_frequency,
         stop_frequency,
@@ -1974,7 +2023,8 @@ def dry_run_triangle_sweep(
         offset_v=offset,
         phase_deg=phase,
         load=normalized_load,
-        commands=commands,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
     )
 
 

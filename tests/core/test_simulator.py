@@ -467,6 +467,49 @@ def test_two_channel_simulator_preserves_independent_channel_state() -> None:
     assert status_two.amplitude == 0.2
     assert status_two.output_state == "on"
 
+
+def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    sweep_result = configure_square_sweep(
+        factory.resource_name,
+        2000,
+        20000,
+        "linear",
+        2,
+        0.2,
+        duty_cycle_percent=25,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert sweep_result.channel == 2
+    assert state.ch1.active_function == "SIN"
+    assert state.ch1.frequency_mode == "CW"
+    assert state.ch1.sweep_start_frequency_hz == 1000.0
+    assert state.ch1.sweep_stop_frequency_hz == 10000.0
+    assert state.ch2.active_function == "SQUARE"
+    assert state.ch2.frequency_mode == "SWEep"
+    assert state.ch2.sweep_start_frequency_hz == 2000.0
+    assert state.ch2.sweep_stop_frequency_hz == 20000.0
+
+    configure_square(
+        factory.resource_name,
+        3000,
+        0.3,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.active_function == "SIN"
+    assert state.ch1.frequency_mode == "CW"
+    assert state.ch1.frequency_hz == 1000.0
+    assert state.ch2.active_function == "SQUARE"
+    assert state.ch2.frequency_mode == "CW"
+    assert state.ch2.frequency_hz == 3000.0
+
+
 def test_simulator_error_queue_fifo() -> None:
     """SYSTem:ERRor? drains the shared state FIFO; status does not consume it."""
     state = Simulated33521BState()
