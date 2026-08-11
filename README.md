@@ -4,7 +4,7 @@ Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. It
 supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
-Internal Sine amplitude modulation for supported static carriers, explicit
+Internal Sine amplitude and frequency modulation for supported static carriers, explicit
 output control, and sine, square, ramp, and triangle frequency sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
 
@@ -21,6 +21,8 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Basic sine, square, ramp, triangle, and pulse configuration
 - Internal Sine amplitude modulation for sine, square, ramp, triangle, and
   pulse carriers, with Normal and DSSC modes
+- Internal Sine frequency modulation for sine, square, ramp, and triangle
+  carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
@@ -99,6 +101,38 @@ output off; only the explicit `output --state on` command enables it. A later
 ordinary static waveform configuration explicitly disables AM on the selected
 channel before configuring the non-modulated waveform.
 
+## Configure Internal Frequency Modulation
+
+The four static carrier commands `configure-sine`, `configure-square`,
+`configure-ramp`, and `configure-triangle` accept optional Internal FM
+settings. The modulation source is fixed to Internal and the internal
+modulating waveform is fixed to Sine. Provide `--fm-frequency` and
+`--fm-deviation` together; partial option groups and configurations that also
+specify AM are rejected.
+
+Preview a representative Square FM configuration without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-square `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 400000 `
+  --amplitude-vpp 0.1 `
+  --duty-cycle-percent 50 `
+  --fm-frequency 1000 `
+  --fm-deviation 350000
+```
+
+FM modulation frequency and deviation must each be at least 0.000001 Hz. The
+modulation frequency cannot exceed the selected model profile's Sine frequency
+capability. Peak deviation cannot exceed 15 MHz or the carrier frequency, and
+carrier plus deviation cannot exceed the selected carrier function maximum by
+more than 100 kHz. Square duty-cycle validation uses the instantaneous maximum
+frequency, `carrier + deviation`. FM configuration turns the selected output
+off before changing modulation state and leaves it off; only the explicit
+`output --state on` command enables it. Ordinary static waveform and sweep
+configuration explicitly disable FM on the selected channel.
+
 ## Requirements and Installation
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the
@@ -117,8 +151,9 @@ The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep commands, and explicit output control. Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep and
-Internal AM state; normal waveform configuration restores CW mode and disables
-AM only on the selected channel. The 33521B profile rejects Channel 2.
+Internal AM/FM state; normal waveform configuration restores CW mode and
+disables AM and FM only on the selected channel. The 33521B profile rejects
+Channel 2.
 Standalone configure commands can select the registered 33510B, 33512B, or
 33521B model; the default remains 33521B. The simulator never creates a real
 VISA ResourceManager, runs
@@ -487,7 +522,7 @@ preview and is not executed. The sine preview includes the explicit
 `UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run does not execute
 SCPI or access hardware. Live waveform configuration continues to require an
 explicit VISA resource, and configuration leaves output off.
-Internal AM dry-runs use the same model capability, channel, and safety
+Internal AM and FM dry-runs use the same model capability, channel, and safety
 validation as the corresponding configuration command.
 
 ## Configure a Selected-Channel Sine Frequency Sweep

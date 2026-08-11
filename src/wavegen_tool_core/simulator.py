@@ -53,6 +53,11 @@ class SimulatedChannelState:
     am_internal_function: str = "sine"
     am_internal_frequency_hz: float = 100.0
     am_depth_percent: float = 100.0
+    fm_enabled: bool = False
+    fm_source: str = "internal"
+    fm_internal_function: str = "sine"
+    fm_internal_frequency_hz: float = 10.0
+    fm_deviation_hz: float = 100.0
 
 
 class Simulated33521BState:
@@ -485,6 +490,15 @@ class SimulatedResource:
         ch_num, ch_state = self._target_channel_and_state(command)
         prefix_ch = f"{ch_num}"
 
+        if command == f"SOURce{prefix_ch}:AM:STATe ON":
+            ch_state.am_enabled = True
+            ch_state.fm_enabled = False
+            return
+        if command == f"SOURce{prefix_ch}:FM:STATe ON":
+            ch_state.fm_enabled = True
+            ch_state.am_enabled = False
+            return
+
         exact_updates = {
             f"OUTPut{prefix_ch} OFF": ("output_enabled", False),
             f"OUTPut{prefix_ch} ON": ("output_enabled", True),
@@ -504,12 +518,17 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:FREQuency:MODE CW": ("frequency_mode", "CW"),
             f"SOURce{prefix_ch}:FREQuency:MODE SWEep": ("frequency_mode", "SWEep"),
             f"SOURce{prefix_ch}:AM:STATe OFF": ("am_enabled", False),
-            f"SOURce{prefix_ch}:AM:STATe ON": ("am_enabled", True),
             f"SOURce{prefix_ch}:AM:DSSC OFF": ("am_type", "normal"),
             f"SOURce{prefix_ch}:AM:DSSC ON": ("am_type", "dssc"),
             f"SOURce{prefix_ch}:AM:SOURce INTernal": ("am_source", "internal"),
             f"SOURce{prefix_ch}:AM:INTernal:FUNCtion SINusoid": (
                 "am_internal_function",
+                "sine",
+            ),
+            f"SOURce{prefix_ch}:FM:STATe OFF": ("fm_enabled", False),
+            f"SOURce{prefix_ch}:FM:SOURce INTernal": ("fm_source", "internal"),
+            f"SOURce{prefix_ch}:FM:INTernal:FUNCtion SINusoid": (
+                "fm_internal_function",
                 "sine",
             ),
             f"SOURce{prefix_ch}:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
@@ -546,6 +565,8 @@ class SimulatedResource:
         numeric_updates = (
             (f"SOURce{prefix_ch}:AM:INTernal:FREQuency ", "am_internal_frequency_hz"),
             (f"SOURce{prefix_ch}:AM:DEPTh ", "am_depth_percent"),
+            (f"SOURce{prefix_ch}:FM:INTernal:FREQuency ", "fm_internal_frequency_hz"),
+            (f"SOURce{prefix_ch}:FM:DEViation ", "fm_deviation_hz"),
             (f"SOURce{prefix_ch}:FREQuency ", "frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STARt ", "sweep_start_frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STOP ", "sweep_stop_frequency_hz"),
@@ -671,6 +692,15 @@ class SimulatedResource:
                 "9.9E37"
                 if ch_state.output_load == "high-z"
                 else ch_state.output_load
+            ),
+            f"SOURce{prefix_ch}:FM:STATe?": "1" if ch_state.fm_enabled else "0",
+            f"SOURce{prefix_ch}:FM:SOURce?": ch_state.fm_source,
+            f"SOURce{prefix_ch}:FM:INTernal:FUNCtion?": ch_state.fm_internal_function,
+            f"SOURce{prefix_ch}:FM:INTernal:FREQuency?": _format_number(
+                ch_state.fm_internal_frequency_hz
+            ),
+            f"SOURce{prefix_ch}:FM:DEViation?": _format_number(
+                ch_state.fm_deviation_hz
             ),
         }
         try:

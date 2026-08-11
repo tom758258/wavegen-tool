@@ -6,6 +6,7 @@ import pytest
 
 from wavegen_tool_core import (
     AMConfig,
+    FMConfig,
     SIMULATED_33521B_IDN,
     SIMULATED_33521B_RESOURCE,
     Simulated33521BState,
@@ -580,6 +581,113 @@ def test_two_channel_simulator_am_state_is_isolated_and_static_config_recovers()
     assert state.ch2.am_enabled is False
     assert state.ch2.active_function == "TRIANGLE"
     assert state.ch2.output_enabled is False
+
+
+def test_two_channel_simulator_fm_state_queries_and_static_recovery() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_square(
+        factory.resource_name,
+        400_000,
+        0.2,
+        channel=2,
+        fm=FMConfig(1_000, 350_000),
+        resource_manager_factory=factory,
+    )
+
+    assert result.channel == 2
+    assert result.fm == FMConfig(1_000.0, 350_000.0)
+    assert state.ch1.fm_enabled is False
+    assert state.ch1.fm_internal_frequency_hz == 10.0
+    assert state.ch1.fm_deviation_hz == 100.0
+    assert state.ch2.fm_enabled is True
+    assert state.ch2.am_enabled is False
+    assert state.ch2.fm_source == "internal"
+    assert state.ch2.fm_internal_function == "sine"
+    assert state.ch2.fm_internal_frequency_hz == 1_000.0
+    assert state.ch2.fm_deviation_hz == 350_000.0
+    assert state.ch2.output_enabled is False
+
+    manager = SimulatedResourceManager(state)
+    session = manager.open_resource(factory.resource_name)
+    assert session.query("SOURce2:FM:STATe?") == "1"
+    assert session.query("SOURce2:FM:SOURce?") == "internal"
+    assert session.query("SOURce2:FM:INTernal:FUNCtion?") == "sine"
+    assert session.query("SOURce2:FM:INTernal:FREQuency?") == "1000"
+    assert session.query("SOURce2:FM:DEViation?") == "350000"
+    session.close()
+    manager.close()
+
+    configure_triangle(
+        factory.resource_name,
+        100_000,
+        0.2,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.fm_enabled is False
+    assert state.ch2.fm_enabled is False
+    assert state.ch2.active_function == "TRIANGLE"
+    assert state.ch2.output_enabled is False
+
+
+def test_simulator_am_fm_mutual_exclusion_and_sweep_recovery() -> None:
+    state = Simulated33521BState()
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1_000_000,
+        0.1,
+        am=AMConfig(1_000, 50),
+        resource_manager_factory=factory,
+    )
+    assert state.ch1.am_enabled is True
+    assert state.ch1.fm_enabled is False
+
+    configure_square(
+        factory.resource_name,
+        400_000,
+        0.1,
+        fm=FMConfig(1_000, 350_000),
+        resource_manager_factory=factory,
+    )
+    assert state.ch1.am_enabled is False
+    assert state.ch1.fm_enabled is True
+
+    configure_ramp(
+        factory.resource_name,
+        100_000,
+        0.1,
+        am=AMConfig(1_000, 50),
+        resource_manager_factory=factory,
+    )
+    assert state.ch1.am_enabled is True
+    assert state.ch1.fm_enabled is False
+
+    configure_sine(
+        factory.resource_name,
+        1_000_000,
+        0.1,
+        fm=FMConfig(1_000, 100_000),
+        resource_manager_factory=factory,
+    )
+    configure_sine_sweep(
+        factory.resource_name,
+        1_000,
+        10_000,
+        "linear",
+        1,
+        0.1,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.am_enabled is False
+    assert state.ch1.fm_enabled is False
+    assert state.ch1.frequency_mode == "SWEep"
+    assert state.ch1.output_enabled is False
 
 
 def test_simulator_error_queue_fifo() -> None:

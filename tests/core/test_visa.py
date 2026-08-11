@@ -29,6 +29,7 @@ from wavegen_tool_core.simulator import (
 from wavegen_tool_core.visa import (
     AMConfig,
     DEFAULT_TIMEOUT_MS,
+    FMConfig,
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
@@ -1059,6 +1060,7 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1088,9 +1090,10 @@ def test_configure_sine_internal_am_writes_ordered_normal_sequence_with_output_o
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.writes[:3] == [
+    assert session.writes[:4] == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     ]
     assert session.writes[-6:] == [
@@ -1263,6 +1266,200 @@ def test_33512b_channel_two_am_is_scoped_and_33521b_channel_two_rejects():
         )
 
 
+@pytest.mark.parametrize(
+    ("runner", "arguments", "deviation"),
+    [
+        (dry_run_sine, (1_000_000, 0.1), 100_000),
+        (dry_run_square, (400_000, 0.1), 350_000),
+        (dry_run_ramp, (100_000, 0.1), 50_000),
+        (dry_run_triangle, (100_000, 0.1), 50_000),
+    ],
+)
+def test_supported_static_carriers_enter_internal_fm_path(
+    runner,
+    arguments,
+    deviation,
+):
+    result = runner(
+        "keysight-33521b",
+        *arguments,
+        fm=FMConfig(1_000, deviation),
+    )
+
+    assert result.commands[:4] == (
+        "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
+        "SOURce1:FREQuency:MODE CW",
+    )
+    assert result.commands[-5:] == (
+        "SOURce1:FM:SOURce INTernal",
+        "SOURce1:FM:INTernal:FUNCtion SINusoid",
+        "SOURce1:FM:INTernal:FREQuency 1000",
+        f"SOURce1:FM:DEViation {deviation}",
+        "SOURce1:FM:STATe ON",
+    )
+    assert result.fm == FMConfig(1_000.0, float(deviation))
+    assert "OUTPut1 ON" not in result.commands
+
+
+def test_33512b_channel_two_fm_is_scoped_to_selected_channel():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = configure_triangle(
+        USB_RESOURCE,
+        100_000,
+        0.1,
+        channel=2,
+        fm=FMConfig(1_000, 50_000),
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.channel == 2
+    assert result.fm == FMConfig(1_000.0, 50_000.0)
+    assert session.writes[-1] == "SOURce2:FM:STATe ON"
+    assert all("SOURce1" not in command for command in session.writes)
+    with pytest.raises(WaveformParameterError, match="Channel 2"):
+        dry_run_sine(
+            "keysight-33521b",
+            1_000_000,
+            0.1,
+            channel=2,
+            fm=FMConfig(1_000, 100_000),
+        )
+
+
+@pytest.mark.parametrize(
+    ("carrier_frequency", "deviation"),
+    [
+        (1_000_000, 0.0000009),
+        (1_000, 1_001),
+        (29_000_000, 1_200_000),
+        (15_050_000, 15_000_001),
+    ],
+)
+def test_invalid_fm_deviation_fails_before_state_changing_writes(
+    carrier_frequency,
+    deviation,
+):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="FM deviation"):
+        configure_sine(
+            USB_RESOURCE,
+            carrier_frequency,
+            0.1,
+            fm=FMConfig(1_000, deviation),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
+def test_ramp_fm_uses_200khz_function_maximum_before_visa_io():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="FM deviation"):
+        configure_ramp(
+            USB_RESOURCE,
+            160_000,
+            0.1,
+            fm=FMConfig(1_000, 150_000),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
+@pytest.mark.parametrize(
+    "fm",
+    [
+        FMConfig(None, 100),
+        FMConfig(1_000, None),
+    ],
+)
+def test_partial_fm_configuration_fails_before_visa_io(fm):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError):
+        configure_sine(
+            USB_RESOURCE,
+            1_000,
+            0.1,
+            fm=fm,
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
+def test_am_and_fm_are_rejected_together_before_visa_io():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="AM and FM"):
+        configure_sine(
+            USB_RESOURCE,
+            1_000,
+            0.1,
+            am=AMConfig(100, 50),
+            fm=FMConfig(1_000, 100),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
+def test_fm_frequency_uses_selected_model_sine_capability_before_writes():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError, match="20000000 Hz"):
+        configure_sine(
+            USB_RESOURCE,
+            1_000_000,
+            0.1,
+            fm=FMConfig(20_000_001, 100_000),
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.writes == []
+
+
+def test_square_fm_validates_duty_cycle_at_peak_frequency_before_visa_io():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="Square duty cycle"):
+        configure_square(
+            USB_RESOURCE,
+            10_000_000,
+            0.1,
+            duty_cycle_percent=25,
+            fm=FMConfig(1_000, 9_000_000),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
 def test_configure_sine_validation_policy_accepts_matching_33512b():
     session = FakeSession(
         response="Keysight Technologies,33512B,MY00000000,1.00"
@@ -1354,6 +1551,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
         "phase_deg",
         "channel",
         "am",
+        "fm",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1364,6 +1562,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
     assert result.commands == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1426,6 +1625,8 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
     )
     expected_commands = (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -1487,6 +1688,8 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
             50,
             (
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
+                "SOURce1:FM:STATe OFF",
                 "OUTPut1:LOAD INF",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion SQUare",
@@ -1511,6 +1714,8 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
             25,
             (
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
+                "SOURce1:FM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FREQuency MINimum",
@@ -1536,6 +1741,8 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
             None,
             (
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
+                "SOURce1:FM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FREQuency MINimum",
@@ -2047,6 +2254,7 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2089,6 +2297,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
         "phase_deg",
         "channel",
         "am",
+        "fm",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2100,6 +2309,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
     assert result.commands == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2169,6 +2379,7 @@ def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2212,6 +2423,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
         "phase_deg",
         "channel",
         "am",
+        "fm",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2223,6 +2435,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
     assert result.commands == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2258,6 +2471,7 @@ def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2373,6 +2587,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2392,6 +2607,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         ("query", IDN_QUERY),
         ("write", "OUTPut1 OFF"),
         ("write", "SOURce1:AM:STATe OFF"),
+        ("write", "SOURce1:FM:STATe OFF"),
         ("write", "SOURce1:FREQuency:MODE CW"),
         ("write", "OUTPut1:LOAD 50"),
         ("write", "SOURce1:VOLTage:UNIT VPP"),
@@ -2472,6 +2688,7 @@ def test_configure_pulse_supports_independent_edges_and_hardware_free_preview():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2653,6 +2870,7 @@ def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
     assert result.commands == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2780,6 +2998,7 @@ def test_configure_dc_identifies_then_writes_safe_channel_one_sequence():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -2818,6 +3037,7 @@ def test_dry_run_dc_returns_validated_hardware_free_command_preview():
     assert result.commands == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -2868,6 +3088,7 @@ def test_configure_noise_identifies_then_writes_safe_channel_one_sequence():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -2914,6 +3135,7 @@ def test_dry_run_noise_returns_validated_hardware_free_command_preview():
     assert result.commands == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -2965,6 +3187,7 @@ def test_configure_prbs_identifies_then_writes_safe_channel_one_sequence():
     assert session.writes == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",
@@ -3021,6 +3244,7 @@ def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
     assert result.commands == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",
