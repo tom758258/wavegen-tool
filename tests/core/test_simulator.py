@@ -468,6 +468,38 @@ def test_two_channel_simulator_preserves_independent_channel_state() -> None:
     assert status_two.output_state == "on"
 
 
+def test_prbs_status_preserves_simulator_channel_isolation() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_prbs(
+        factory.resource_name,
+        2_000_000,
+        0.2,
+        resource_manager_factory=factory,
+        channel=2,
+    )
+
+    status_one = query_status(
+        factory.resource_name,
+        resource_manager_factory=factory,
+        channel=1,
+    )
+    status_two = query_status(
+        factory.resource_name,
+        resource_manager_factory=factory,
+        channel=2,
+    )
+
+    assert status_one.function == "SIN"
+    assert status_one.frequency_hz == 1000.0
+    assert status_one.bit_rate_bps is None
+    assert state.ch1.prbs_bit_rate_bps == 1_000_000.0
+    assert status_two.function == "PRBS"
+    assert status_two.frequency_hz is None
+    assert status_two.bit_rate_bps == 2_000_000.0
+
+
 def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     factory = SimulatedResourceManagerFactory(state)

@@ -351,10 +351,11 @@ Status reports the Channel 1 output state, function, offset, and instrument
 output-load setting. Frequency, amplitude, and amplitude unit are reported only
 when they are valid for the active function. DC does not report stale retained
 frequency or amplitude values. Noise reports its bandwidth rather than treating
-the ordinary frequency query as bandwidth. In JSON output, fields that do not
-apply to the active function are `null`. Status does not modify settings or turn
-the output on or off. The output-load setting does not detect or verify the
-physically connected load.
+the ordinary frequency query as bandwidth. PRBS reports its bit rate and leaves
+`frequency_hz` as `null` rather than reporting the retained ordinary waveform
+frequency. In JSON output, fields that do not apply to the active function are
+`null`. Status does not modify settings or turn the output on or off. The
+output-load setting does not detect or verify the physically connected load.
 
 ## Read the Instrument Error Queue
 

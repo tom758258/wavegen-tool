@@ -3165,10 +3165,52 @@ def test_status_uses_one_session_and_parses_mode_aware_channel_one_state(
     assert result.amplitude == expected_amplitude
     assert result.amplitude_unit == expected_unit
     assert result.bandwidth_hz == expected_bandwidth
+    assert result.bit_rate_bps is None
     assert result.offset_v == expected_offset
     assert result.load == "high-z"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+@pytest.mark.parametrize("channel", [1, 2])
+def test_prbs_status_uses_selected_channel_bit_rate_query(channel):
+    responses = {
+        f"OUTPut{channel}?": "0",
+        f"SOURce{channel}:FUNCtion?": "PRBS",
+        f"SOURce{channel}:VOLTage:OFFSet?": "0",
+        f"OUTPut{channel}:LOAD?": "50",
+        f"SOURce{channel}:FUNCtion:PRBS:BRATe?": "1e6",
+        f"SOURce{channel}:VOLTage:UNIT?": "VPP",
+        f"SOURce{channel}:VOLTage?": "0.1",
+    }
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command=responses,
+    )
+    manager = FakeManager(session)
+
+    result = query_status(
+        USB_RESOURCE,
+        channel=channel,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.channel == channel
+    assert result.function == "PRBS"
+    assert result.frequency_hz is None
+    assert result.bit_rate_bps == 1_000_000.0
+    assert session.queries == [
+        IDN_QUERY,
+        f"OUTPut{channel}?",
+        f"SOURce{channel}:FUNCtion?",
+        f"SOURce{channel}:VOLTage:OFFSet?",
+        f"OUTPut{channel}:LOAD?",
+        f"SOURce{channel}:FUNCtion:PRBS:BRATe?",
+        f"SOURce{channel}:VOLTage:UNIT?",
+        f"SOURce{channel}:VOLTage?",
+    ]
+    assert f"SOURce{channel}:FREQuency?" not in session.queries
+    assert session.writes == []
 
 
 def test_status_validation_policy_accepts_matching_33512b():

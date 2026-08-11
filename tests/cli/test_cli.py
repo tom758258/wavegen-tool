@@ -1868,6 +1868,7 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
             output_state="off",
             function="SIN",
             frequency_hz=1000.0,
+            bit_rate_bps=None,
             amplitude=0.1,
             amplitude_unit="VPP",
             bandwidth_hz=None,
@@ -1895,6 +1896,7 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
         "output_state": "off",
         "function": "SIN",
         "frequency_hz": 1000.0,
+        "bit_rate_bps": None,
         "amplitude": 0.1,
         "amplitude_unit": "VPP",
         "bandwidth_hz": None,
@@ -1902,6 +1904,59 @@ def test_status_cli_parses_arguments_calls_core_and_emits_json(monkeypatch, caps
         "load": "50",
         "error": None,
     }
+
+
+def test_prbs_status_cli_reports_bit_rate(monkeypatch, capsys):
+    calls = []
+    result = SimpleNamespace(
+        backend="system",
+        transport="usb",
+        identity=SimpleNamespace(
+            manufacturer="Keysight Technologies",
+            model="33512B",
+        ),
+        channel=2,
+        output_state="off",
+        function="PRBS",
+        frequency_hz=None,
+        bit_rate_bps=1_000_000.0,
+        amplitude=0.1,
+        amplitude_unit="VPP",
+        bandwidth_hz=None,
+        offset_v=0.0,
+        load="50",
+    )
+
+    def fake_query_status(*args, **kwargs):
+        calls.append((args, kwargs))
+        return result
+
+    monkeypatch.setattr(cli_module, "query_status", fake_query_status)
+    argv = [
+        "status",
+        "--resource",
+        USB_RESOURCE,
+        "--channel",
+        "2",
+    ]
+
+    json_exit_code = main([*argv, "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert json_exit_code == ExitCode.SUCCESS
+    assert payload["channel"] == 2
+    assert payload["function"] == "PRBS"
+    assert payload["frequency_hz"] is None
+    assert payload["bit_rate_bps"] == 1_000_000.0
+
+    human_exit_code = main(argv)
+    human_output = capsys.readouterr().out
+
+    assert human_exit_code == ExitCode.SUCCESS
+    assert "Bit rate: 1e+06 bit/s" in human_output
+    assert "Frequency:" not in human_output
+    assert len(calls) == 2
+    assert all(call[1]["channel"] == 2 for call in calls)
 
 
 def test_read_errors_cli_json_success_with_instrument_error(monkeypatch, capsys):
@@ -2007,6 +2062,7 @@ def test_validation_direct_routes_forward_policy_and_expected_model(
             output_state="off",
             function="SIN",
             frequency_hz=1000.0,
+            bit_rate_bps=None,
             amplitude=0.1,
             amplitude_unit="VPP",
             bandwidth_hz=None,

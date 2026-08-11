@@ -3443,6 +3443,7 @@ def _status_success_payload(result: Any) -> dict[str, object]:
         "output_state": result.output_state,
         "function": result.function,
         "frequency_hz": result.frequency_hz,
+        "bit_rate_bps": result.bit_rate_bps,
         "amplitude": result.amplitude,
         "amplitude_unit": result.amplitude_unit,
         "bandwidth_hz": result.bandwidth_hz,
@@ -3924,6 +3925,14 @@ def _human_status_success(result: Any) -> str:
             (
                 f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
                 f"Bandwidth: {result.bandwidth_hz:g} Hz",
+                f"Offset: {result.offset_v:g} V",
+            )
+        )
+    elif result.function == "PRBS":
+        lines.extend(
+            (
+                f"Bit rate: {result.bit_rate_bps:g} bit/s",
+                f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
                 f"Offset: {result.offset_v:g} V",
             )
         )

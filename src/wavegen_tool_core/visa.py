@@ -84,6 +84,11 @@ STATUS_NOISE_QUERIES = (
     "SOURce1:VOLTage?",
     "SOURce1:FUNCtion:NOISe:BANDwidth?",
 )
+STATUS_PRBS_QUERIES = (
+    "SOURce1:FUNCtion:PRBS:BRATe?",
+    "SOURce1:VOLTage:UNIT?",
+    "SOURce1:VOLTage?",
+)
 
 def _validate_channel(
     channel: object,
@@ -256,6 +261,7 @@ class StatusResult:
     offset_v: float
     load: str
     channel: int = 1
+    bit_rate_bps: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1193,6 +1199,8 @@ def query_status(
                                 function_queries = ()
                             elif function in {"NOIS", "NOISE"}:
                                 function_queries = STATUS_NOISE_QUERIES
+                            elif function == "PRBS":
+                                function_queries = STATUS_PRBS_QUERIES
                             else:
                                 function_queries = STATUS_FREQUENCY_AMPLITUDE_QUERIES
                             function_queries = tuple(
@@ -1217,6 +1225,9 @@ def query_status(
                                 amplitude_query = f"SOURce{selected_channel}:VOLTage?"
                                 bandwidth_query = (
                                     f"SOURce{selected_channel}:FUNCtion:NOISe:BANDwidth?"
+                                )
+                                bit_rate_query = (
+                                    f"SOURce{selected_channel}:FUNCtion:PRBS:BRATe?"
                                 )
                                 offset_query = (
                                     f"SOURce{selected_channel}:VOLTage:OFFSet?"
@@ -1252,6 +1263,14 @@ def query_status(
                                     if bandwidth_query in responses
                                     else None
                                 )
+                                bit_rate_bps = (
+                                    _parse_status_number(
+                                        responses[bit_rate_query],
+                                        "PRBS bit rate",
+                                    )
+                                    if bit_rate_query in responses
+                                    else None
+                                )
                                 result = StatusResult(
                                     resource=resource_name,
                                     backend=backend_selection.name,
@@ -1271,6 +1290,7 @@ def query_status(
                                     ),
                                     load=_parse_status_load(responses[load_query]),
                                     channel=selected_channel,
+                                    bit_rate_bps=bit_rate_bps,
                                 )
                             except StatusQueryError as exc:
                                 primary_error = exc.attach_context(

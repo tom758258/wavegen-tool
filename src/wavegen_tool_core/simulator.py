@@ -644,6 +644,9 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:FUNCtion:NOISe:BANDwidth?": _format_number(
                 ch_state.noise_bandwidth_hz
             ),
+            f"SOURce{prefix_ch}:FUNCtion:PRBS:BRATe?": _format_number(
+                ch_state.prbs_bit_rate_bps
+            ),
             f"SOURce{prefix_ch}:VOLTage:UNIT?": ch_state.voltage_unit,
             f"SOURce{prefix_ch}:VOLTage?": _format_number(ch_state.amplitude_vpp),
             f"SOURce{prefix_ch}:VOLTage:OFFSet?": _format_number(ch_state.offset_v),
