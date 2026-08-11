@@ -9,6 +9,7 @@ from enum import IntEnum
 from typing import Any, Sequence
 
 from wavegen_tool_core import (
+    AMConfig,
     ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
@@ -181,6 +182,36 @@ def _add_voltage_input_arguments(
         "--low-level-v",
         default=None,
         help="Low voltage level in volts; use with --high-level-v.",
+    )
+
+
+def _add_am_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--am-frequency",
+        default=None,
+        help="Internal sine AM modulation frequency in Hz.",
+    )
+    parser.add_argument(
+        "--am-depth",
+        default=None,
+        help="AM depth in percent (range: 0-100).",
+    )
+    parser.add_argument(
+        "--am-type",
+        choices=("normal", "dssc"),
+        default=None,
+        help="AM type (default: normal when AM is configured).",
+    )
+
+
+def _am_config_from_args(args: argparse.Namespace) -> AMConfig | None:
+    values = (args.am_frequency, args.am_depth, args.am_type)
+    if all(value is None for value in values):
+        return None
+    return AMConfig(
+        modulation_frequency_hz=args.am_frequency,
+        depth_percent=args.am_depth,
+        am_type="normal" if args.am_type is None else args.am_type,
     )
 
 
@@ -358,6 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
         sine_parser,
         amplitude_help="Sine amplitude in Vpp.",
     )
+    _add_am_arguments(sine_parser)
     sine_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -743,6 +775,7 @@ def build_parser() -> argparse.ArgumentParser:
         square_parser,
         amplitude_help="Square amplitude in Vpp.",
     )
+    _add_am_arguments(square_parser)
     square_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -803,6 +836,7 @@ def build_parser() -> argparse.ArgumentParser:
         ramp_parser,
         amplitude_help="Ramp amplitude in Vpp.",
     )
+    _add_am_arguments(ramp_parser)
     ramp_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -863,6 +897,7 @@ def build_parser() -> argparse.ArgumentParser:
         triangle_parser,
         amplitude_help="Triangle amplitude in Vpp.",
     )
+    _add_am_arguments(triangle_parser)
     triangle_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -923,6 +958,7 @@ def build_parser() -> argparse.ArgumentParser:
         pulse_parser,
         amplitude_help="Pulse amplitude in Vpp.",
     )
+    _add_am_arguments(pulse_parser)
     pulse_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -1601,6 +1637,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1618,6 +1655,7 @@ def _run_sine_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2001,6 +2039,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2019,6 +2058,7 @@ def _run_square_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2074,6 +2114,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2092,6 +2133,7 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2146,6 +2188,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2163,6 +2206,7 @@ def _run_triangle_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             channel=args.channel,
+            am=_am_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2221,6 +2265,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.leading_edge_s,
             args.trailing_edge_s,
             channel=args.channel,
+            am=_am_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2242,6 +2287,7 @@ def _run_pulse_dry_run(args: argparse.Namespace) -> int:
             args.leading_edge_s,
             args.trailing_edge_s,
             channel=args.channel,
+            am=_am_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2798,6 +2844,18 @@ def _resource_list_internal_error_payload() -> dict[str, object]:
     }
 
 
+def _am_payload_fields(result: Any) -> dict[str, object]:
+    am = getattr(result, "am", None)
+    if am is None:
+        return {}
+    return {
+        "am_enabled": True,
+        "am_frequency_hz": am.modulation_frequency_hz,
+        "am_depth_percent": am.depth_percent,
+        "am_type": am.am_type,
+    }
+
+
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     payload = {
         "success": True,
@@ -2894,6 +2952,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             edge_time_s=result.edge_time_s,
             load=result.load,
         )
+    payload.update(_am_payload_fields(result))
     return payload
 
 
@@ -2913,6 +2972,7 @@ def _sine_dry_run_success_payload(result: Any) -> dict[str, object]:
         "commands": list(result.commands),
         "executed": result.executed,
         "output_state": result.output_state,
+        **_am_payload_fields(result),
         "error": None,
     }
 
@@ -3130,6 +3190,7 @@ def _square_dry_run_success_payload(result: Any) -> dict[str, object]:
         "commands": list(result.commands),
         "executed": result.executed,
         "output_state": result.output_state,
+        **_am_payload_fields(result),
         "error": None,
     }
 
@@ -3169,6 +3230,7 @@ def _ramp_dry_run_success_payload(result: Any) -> dict[str, object]:
         "commands": list(result.commands),
         "executed": result.executed,
         "output_state": result.output_state,
+        **_am_payload_fields(result),
         "error": None,
     }
 
@@ -3207,6 +3269,7 @@ def _triangle_dry_run_success_payload(result: Any) -> dict[str, object]:
         "commands": list(result.commands),
         "executed": result.executed,
         "output_state": result.output_state,
+        **_am_payload_fields(result),
         "error": None,
     }
 
@@ -3249,6 +3312,7 @@ def _pulse_dry_run_success_payload(result: Any) -> dict[str, object]:
         "commands": list(result.commands),
         "executed": result.executed,
         "output_state": result.output_state,
+        **_am_payload_fields(result),
         "error": None,
     }
 
@@ -3598,6 +3662,17 @@ def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
     return "\n".join(lines)
 
 
+def _human_am_lines(result: Any) -> tuple[str, ...]:
+    am = getattr(result, "am", None)
+    if am is None:
+        return ()
+    return (
+        f"AM type: {am.am_type}",
+        f"AM modulation frequency (Hz): {am.modulation_frequency_hz}",
+        f"AM depth (percent): {am.depth_percent}",
+    )
+
+
 def _human_control_success(action: str, result: Any) -> str:
     channel = getattr(result, "channel", 1)
     if action == "configure-sine":
@@ -3695,6 +3770,7 @@ def _human_control_success(action: str, result: Any) -> str:
                     f"Trailing edge (seconds): {result.trailing_edge_s}",
                 )
             )
+    lines.extend(_human_am_lines(result))
     return "\n".join(lines)
 
 
@@ -3707,6 +3783,7 @@ def _human_sine_dry_run_success(result: Any) -> str:
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
             f"Phase (degrees): {result.phase_deg}",
+            *_human_am_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -3801,6 +3878,7 @@ def _human_square_dry_run_success(result: Any) -> str:
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
             f"Phase (degrees): {result.phase_deg}",
+            *_human_am_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -3817,6 +3895,7 @@ def _human_ramp_dry_run_success(result: Any) -> str:
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
             f"Phase (degrees): {result.phase_deg}",
+            *_human_am_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -3833,6 +3912,7 @@ def _human_triangle_dry_run_success(result: Any) -> str:
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
             f"Phase (degrees): {result.phase_deg}",
+            *_human_am_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -3858,6 +3938,7 @@ def _human_pulse_dry_run_success(result: Any) -> str:
             "Executed: no",
             f"Phase (degrees): {result.phase_deg}",
             *edge_lines,
+            *_human_am_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,

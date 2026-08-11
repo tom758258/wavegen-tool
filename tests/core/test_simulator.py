@@ -5,6 +5,7 @@ from collections.abc import Callable
 import pytest
 
 from wavegen_tool_core import (
+    AMConfig,
     SIMULATED_33521B_IDN,
     SIMULATED_33521B_RESOURCE,
     Simulated33521BState,
@@ -540,6 +541,45 @@ def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
     assert state.ch2.active_function == "SQUARE"
     assert state.ch2.frequency_mode == "CW"
     assert state.ch2.frequency_hz == 3000.0
+
+
+def test_two_channel_simulator_am_state_is_isolated_and_static_config_recovers() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_sine(
+        factory.resource_name,
+        2_000,
+        0.2,
+        channel=2,
+        am=AMConfig(250, 75, "dssc"),
+        resource_manager_factory=factory,
+    )
+
+    assert result.channel == 2
+    assert result.output_state == "off"
+    assert state.ch1.am_enabled is False
+    assert state.ch1.am_internal_frequency_hz == 100.0
+    assert state.ch2.am_enabled is True
+    assert state.ch2.am_type == "dssc"
+    assert state.ch2.am_source == "internal"
+    assert state.ch2.am_internal_function == "sine"
+    assert state.ch2.am_internal_frequency_hz == 250.0
+    assert state.ch2.am_depth_percent == 75.0
+    assert state.ch2.output_enabled is False
+
+    configure_triangle(
+        factory.resource_name,
+        3_000,
+        0.3,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.am_enabled is False
+    assert state.ch2.am_enabled is False
+    assert state.ch2.active_function == "TRIANGLE"
+    assert state.ch2.output_enabled is False
 
 
 def test_simulator_error_queue_fifo() -> None:

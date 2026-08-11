@@ -47,6 +47,12 @@ class SimulatedChannelState:
     prbs_bit_rate_bps: float = 1000000.0
     prbs_pattern: str = "PN7"
     prbs_edge_time_s: float = 8.4e-9
+    am_enabled: bool = False
+    am_type: str = "normal"
+    am_source: str = "internal"
+    am_internal_function: str = "sine"
+    am_internal_frequency_hz: float = 100.0
+    am_depth_percent: float = 100.0
 
 
 class Simulated33521BState:
@@ -497,6 +503,15 @@ class SimulatedResource:
             f"TRIGger{prefix_ch}:SOURce IMMediate": ("trigger_source", "immediate"),
             f"SOURce{prefix_ch}:FREQuency:MODE CW": ("frequency_mode", "CW"),
             f"SOURce{prefix_ch}:FREQuency:MODE SWEep": ("frequency_mode", "SWEep"),
+            f"SOURce{prefix_ch}:AM:STATe OFF": ("am_enabled", False),
+            f"SOURce{prefix_ch}:AM:STATe ON": ("am_enabled", True),
+            f"SOURce{prefix_ch}:AM:DSSC OFF": ("am_type", "normal"),
+            f"SOURce{prefix_ch}:AM:DSSC ON": ("am_type", "dssc"),
+            f"SOURce{prefix_ch}:AM:SOURce INTernal": ("am_source", "internal"),
+            f"SOURce{prefix_ch}:AM:INTernal:FUNCtion SINusoid": (
+                "am_internal_function",
+                "sine",
+            ),
             f"SOURce{prefix_ch}:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
             f"SOURce{prefix_ch}:SWEep:SPACing LOGarithmic": (
                 "sweep_spacing",
@@ -529,6 +544,8 @@ class SimulatedResource:
                 return
 
         numeric_updates = (
+            (f"SOURce{prefix_ch}:AM:INTernal:FREQuency ", "am_internal_frequency_hz"),
+            (f"SOURce{prefix_ch}:AM:DEPTh ", "am_depth_percent"),
             (f"SOURce{prefix_ch}:FREQuency ", "frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STARt ", "sweep_start_frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STOP ", "sweep_stop_frequency_hz"),

@@ -561,6 +561,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -620,6 +621,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -634,6 +636,95 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
         "output_state": "off",
         "error": None,
     }
+
+
+def test_configure_sine_internal_am_dry_run_emits_ordered_json_without_visa(
+    monkeypatch,
+    capsys,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--frequency-hz",
+            "1000000",
+            "--amplitude-vpp",
+            "0.1",
+            "--am-frequency",
+            "1000",
+            "--am-depth",
+            "50",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["am_enabled"] is True
+    assert payload["am_frequency_hz"] == 1000.0
+    assert payload["am_depth_percent"] == 50.0
+    assert payload["am_type"] == "normal"
+    assert payload["output_state"] == "off"
+    assert payload["commands"][:3] == [
+        "OUTPut2 OFF",
+        "SOURce2:AM:STATe OFF",
+        "SOURce2:FREQuency:MODE CW",
+    ]
+    assert payload["commands"][-6:] == [
+        "SOURce2:AM:SOURce INTernal",
+        "SOURce2:AM:DSSC OFF",
+        "SOURce2:AM:INTernal:FUNCtion SINusoid",
+        "SOURce2:AM:INTernal:FREQuency 1000",
+        "SOURce2:AM:DEPTh 50",
+        "SOURce2:AM:STATe ON",
+    ]
+    assert "OUTPut2 ON" not in payload["commands"]
+
+
+@pytest.mark.parametrize(
+    "am_arguments",
+    [
+        ["--am-frequency", "100"],
+        ["--am-depth", "50"],
+        ["--am-type", "dssc"],
+    ],
+)
+def test_incomplete_am_cli_group_fails_closed_without_visa(
+    monkeypatch,
+    capsys,
+    am_arguments,
+):
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            *am_arguments,
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["success"] is False
+    assert payload["error"].startswith("waveform_parameter_error:")
 
 
 def test_configure_sine_live_missing_resource_is_usage_error(
@@ -744,6 +835,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -805,6 +897,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -930,6 +1023,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -994,6 +1088,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1081,6 +1176,7 @@ def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
         "load": "high-z",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD INF",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1391,6 +1487,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
             phase_deg=0.0,
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
                 "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -1471,6 +1568,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1505,6 +1603,7 @@ def test_configure_dc_dry_run_cli_emits_hardware_free_json(
             load="50",
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:FUNCtion DC",
                 "SOURce1:VOLTage:OFFSet 1.5",
@@ -1547,6 +1646,7 @@ def test_configure_dc_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "OUTPut1:LOAD 50",
             "SOURce1:FUNCtion DC",
             "SOURce1:VOLTage:OFFSet 1.5",
@@ -1575,6 +1675,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
             load="50",
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion NOISe",
@@ -1630,6 +1731,7 @@ def test_configure_noise_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FUNCtion NOISe",
@@ -1663,6 +1765,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
             load="50",
             commands=(
                 "OUTPut1 OFF",
+                "SOURce1:AM:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion PRBS",
@@ -1734,6 +1837,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
         "load": "50",
         "commands": [
             "OUTPut1 OFF",
+            "SOURce1:AM:STATe OFF",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
             "SOURce1:FUNCtion PRBS",

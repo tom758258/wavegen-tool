@@ -265,6 +265,15 @@ class StatusResult:
 
 
 @dataclass(frozen=True)
+class AMConfig:
+    """Internal sine amplitude-modulation settings."""
+
+    modulation_frequency_hz: object
+    depth_percent: object
+    am_type: object = "normal"
+
+
+@dataclass(frozen=True)
 class SineConfigurationResult:
     """A successful sine configuration."""
 
@@ -279,6 +288,7 @@ class SineConfigurationResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -296,6 +306,7 @@ class SineDryRunResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -502,6 +513,7 @@ class SquareConfigurationResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -520,6 +532,7 @@ class SquareDryRunResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -538,6 +551,7 @@ class RampConfigurationResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -556,6 +570,7 @@ class RampDryRunResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -573,6 +588,7 @@ class TriangleConfigurationResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -590,6 +606,7 @@ class TriangleDryRunResult:
     output_state: str = "off"
     phase_deg: float = 0.0
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -611,6 +628,7 @@ class PulseConfigurationResult:
     leading_edge_s: float | None = None
     trailing_edge_s: float | None = None
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -632,6 +650,7 @@ class PulseDryRunResult:
     leading_edge_s: float | None = None
     trailing_edge_s: float | None = None
     channel: int = 1
+    am: AMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -1378,6 +1397,7 @@ def configure_sine(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -1395,7 +1415,12 @@ def configure_sine(
             phase_deg,
             capabilities=capabilities,
         )
-        return prepared[:-1], prepared[-1]
+        normalized_am, am_commands = _prepare_am(
+            "sine",
+            am,
+            capabilities=capabilities,
+        )
+        return (*prepared[:-1], normalized_am), (*prepared[-1], *am_commands)
 
     context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
@@ -1407,7 +1432,7 @@ def configure_sine(
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
     )
-    frequency, amplitude, offset, normalized_load, phase = prepared
+    frequency, amplitude, offset, normalized_load, phase, normalized_am = prepared
     return SineConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -1419,6 +1444,7 @@ def configure_sine(
         load=normalized_load,
         phase_deg=phase,
         channel=channel,
+        am=normalized_am,
     )
 
 
@@ -1431,6 +1457,7 @@ def dry_run_sine(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
@@ -1447,6 +1474,11 @@ def dry_run_sine(
         phase_deg,
         capabilities=capabilities,
     )
+    normalized_am, am_commands = _prepare_am(
+        "sine",
+        am,
+        capabilities=capabilities,
+    )
     return SineDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -1455,8 +1487,9 @@ def dry_run_sine(
         offset_v=offset,
         load=normalized_load,
         phase_deg=phase,
-        commands=_channelize_commands(commands, selected_channel),
+        commands=_channelize_commands((*commands, *am_commands), selected_channel),
         channel=selected_channel,
+        am=normalized_am,
     )
 
 
@@ -2652,6 +2685,63 @@ def _normalize_sine_sweep_spacing(value: object) -> str:
     return _normalize_sweep_spacing(value, waveform="Sine sweep")
 
 
+def _prepare_am(
+    carrier: str,
+    config: AMConfig | None,
+    *,
+    capabilities: WavegenCapabilities,
+) -> tuple[AMConfig | None, tuple[str, ...]]:
+    if config is None:
+        return None, ()
+    if not isinstance(config, AMConfig):
+        raise WaveformParameterError("AM configuration must use AMConfig.")
+    if carrier not in {"sine", "square", "ramp", "triangle", "pulse"}:
+        raise WaveformParameterError(
+            f"{carrier.upper()} carrier is not supported for AM configuration."
+        )
+
+    frequency = _normalize_finite_number(
+        config.modulation_frequency_hz,
+        "modulation frequency",
+        waveform="AM",
+    )
+    depth = _normalize_finite_number(
+        config.depth_percent,
+        "depth",
+        waveform="AM",
+    )
+    if not isinstance(config.am_type, str):
+        raise WaveformParameterError("AM type must be normal or dssc.")
+    am_type = config.am_type.strip().casefold()
+    if am_type not in {"normal", "dssc"}:
+        raise WaveformParameterError("AM type must be normal or dssc.")
+
+    maximum_frequency = capabilities.max_sine_square_pulse_noise_frequency_hz
+    if not 0.000001 <= frequency <= maximum_frequency:
+        raise WaveformParameterError(
+            "AM modulation frequency must be between 0.000001 Hz and "
+            f"{_format_scpi_number(maximum_frequency)} Hz."
+        )
+    if not 0 <= depth <= 100:
+        raise WaveformParameterError("AM depth must be between 0% and 100%.")
+
+    normalized = AMConfig(
+        modulation_frequency_hz=frequency,
+        depth_percent=depth,
+        am_type=am_type,
+    )
+    commands = (
+        "SOURce1:AM:SOURce INTernal",
+        f"SOURce1:AM:DSSC {'ON' if am_type == 'dssc' else 'OFF'}",
+        "SOURce1:AM:INTernal:FUNCtion SINusoid",
+        "SOURce1:AM:INTernal:FREQuency "
+        f"{_format_scpi_number(frequency)}",
+        f"SOURce1:AM:DEPTh {_format_scpi_number(depth)}",
+        "SOURce1:AM:STATe ON",
+    )
+    return normalized, commands
+
+
 def _prepare_sine(
     frequency_hz: object,
     amplitude_vpp: object,
@@ -2678,12 +2768,17 @@ def _prepare_sine(
     _validate_vpp_levels(amplitude, offset, normalized_load, "Sine")
 
     load_command = "50" if normalized_load == "50" else "INF"
-    frequency_mode_command = (
-        ("SOURce1:FREQuency:MODE CW",) if include_cw_mode else ()
+    static_recovery_commands = (
+        (
+            "SOURce1:AM:STATe OFF",
+            "SOURce1:FREQuency:MODE CW",
+        )
+        if include_cw_mode
+        else ()
     )
     commands = (
         "OUTPut1 OFF",
-        *frequency_mode_command,
+        *static_recovery_commands,
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -2707,6 +2802,7 @@ def configure_square(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2725,7 +2821,12 @@ def configure_square(
             phase_deg,
             capabilities=capabilities,
         )
-        return prepared[:-1], prepared[-1]
+        normalized_am, am_commands = _prepare_am(
+            "square",
+            am,
+            capabilities=capabilities,
+        )
+        return (*prepared[:-1], normalized_am), (*prepared[-1], *am_commands)
 
     context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
@@ -2737,7 +2838,15 @@ def configure_square(
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
     )
-    frequency, amplitude, offset, duty_cycle, normalized_load, phase = prepared
+    (
+        frequency,
+        amplitude,
+        offset,
+        duty_cycle,
+        normalized_load,
+        phase,
+        normalized_am,
+    ) = prepared
     return SquareConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -2750,6 +2859,7 @@ def configure_square(
         load=normalized_load,
         phase_deg=phase,
         channel=channel,
+        am=normalized_am,
     )
 
 
@@ -2763,6 +2873,7 @@ def dry_run_square(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
 ) -> SquareDryRunResult:
     """Preview a validated Channel 1 square configuration without VISA I/O."""
 
@@ -2787,6 +2898,11 @@ def dry_run_square(
         phase_deg,
         capabilities=capabilities,
     )
+    normalized_am, am_commands = _prepare_am(
+        "square",
+        am,
+        capabilities=capabilities,
+    )
     return SquareDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -2796,8 +2912,9 @@ def dry_run_square(
         duty_cycle_percent=duty_cycle,
         load=normalized_load,
         phase_deg=phase,
-        commands=_channelize_commands(commands, selected_channel),
+        commands=_channelize_commands((*commands, *am_commands), selected_channel),
         channel=selected_channel,
+        am=normalized_am,
     )
 
 
@@ -2868,12 +2985,17 @@ def _prepare_square(
         )
 
     load_command = "50" if normalized_load == "50" else "INF"
-    frequency_mode_command = (
-        ("SOURce1:FREQuency:MODE CW",) if include_cw_mode else ()
+    static_recovery_commands = (
+        (
+            "SOURce1:AM:STATe OFF",
+            "SOURce1:FREQuency:MODE CW",
+        )
+        if include_cw_mode
+        else ()
     )
     commands = (
         "OUTPut1 OFF",
-        *frequency_mode_command,
+        *static_recovery_commands,
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SQUare",
@@ -2907,12 +3029,41 @@ def configure_ramp(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> RampConfigurationResult:
     """Validate and configure a selected-channel ramp wave while keeping output off."""
 
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_ramp(
+            frequency_hz,
+            amplitude_vpp,
+            offset_v,
+            symmetry_percent,
+            load,
+            phase_deg,
+        )
+        normalized_am, am_commands = _prepare_am(
+            "ramp",
+            am,
+            capabilities=capabilities,
+        )
+        return (*prepared[:-1], normalized_am), (*prepared[-1], *am_commands)
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
     (
         frequency,
         amplitude,
@@ -2920,26 +3071,8 @@ def configure_ramp(
         symmetry,
         normalized_load,
         phase,
-        commands,
-    ) = _prepare_ramp(
-        frequency_hz,
-        amplitude_vpp,
-        offset_v,
-        symmetry_percent,
-        load,
-        phase_deg,
-    )
-    context = _write_to_supported_instrument(
-        resource,
-        backend,
-        commands,
-        output_state_after_writes="off",
-        channel=channel,
-        independent_channel_guard=True,
-        resource_manager_factory=resource_manager_factory,
-        support_policy_mode=support_policy_mode,
-        expected_model_id=expected_model_id,
-    )
+        normalized_am,
+    ) = prepared
     return RampConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -2952,6 +3085,7 @@ def configure_ramp(
         load=normalized_load,
         phase_deg=phase,
         channel=channel,
+        am=normalized_am,
     )
 
 
@@ -2965,6 +3099,7 @@ def dry_run_ramp(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
 ) -> RampDryRunResult:
     """Preview a validated Channel 1 ramp configuration without VISA I/O."""
 
@@ -2988,6 +3123,11 @@ def dry_run_ramp(
         load,
         phase_deg,
     )
+    normalized_am, am_commands = _prepare_am(
+        "ramp",
+        am,
+        capabilities=capabilities,
+    )
     return RampDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -2997,8 +3137,9 @@ def dry_run_ramp(
         symmetry_percent=symmetry,
         load=normalized_load,
         phase_deg=phase,
-        commands=_channelize_commands(commands, selected_channel),
+        commands=_channelize_commands((*commands, *am_commands), selected_channel),
         channel=selected_channel,
+        am=normalized_am,
     )
 
 
@@ -3042,12 +3183,17 @@ def _prepare_ramp(
     _validate_vpp_levels(amplitude, offset, normalized_load, "Ramp")
 
     load_command = "50" if normalized_load == "50" else "INF"
-    frequency_mode_command = (
-        ("SOURce1:FREQuency:MODE CW",) if include_cw_mode else ()
+    static_recovery_commands = (
+        (
+            "SOURce1:AM:STATe OFF",
+            "SOURce1:FREQuency:MODE CW",
+        )
+        if include_cw_mode
+        else ()
     )
     commands = (
         "OUTPut1 OFF",
-        *frequency_mode_command,
+        *static_recovery_commands,
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FREQuency MINimum",
@@ -3081,30 +3227,41 @@ def configure_triangle(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> TriangleConfigurationResult:
     """Validate and configure a selected-channel triangle wave while keeping output off."""
 
-    frequency, amplitude, offset, normalized_load, phase, commands = _prepare_triangle(
-        frequency_hz,
-        amplitude_vpp,
-        offset_v,
-        load,
-        phase_deg,
-    )
-    context = _write_to_supported_instrument(
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_triangle(
+            frequency_hz,
+            amplitude_vpp,
+            offset_v,
+            load,
+            phase_deg,
+        )
+        normalized_am, am_commands = _prepare_am(
+            "triangle",
+            am,
+            capabilities=capabilities,
+        )
+        return (*prepared[:-1], normalized_am), (*prepared[-1], *am_commands)
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
         backend,
-        commands,
-        output_state_after_writes="off",
+        prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
     )
+    frequency, amplitude, offset, normalized_load, phase, normalized_am = prepared
     return TriangleConfigurationResult(
         resource=context.resource,
         backend=context.backend,
@@ -3116,6 +3273,7 @@ def configure_triangle(
         load=normalized_load,
         phase_deg=phase,
         channel=channel,
+        am=normalized_am,
     )
 
 
@@ -3128,6 +3286,7 @@ def dry_run_triangle(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
 ) -> TriangleDryRunResult:
     """Preview a validated Channel 1 triangle configuration without VISA I/O."""
 
@@ -3142,6 +3301,11 @@ def dry_run_triangle(
         load,
         phase_deg,
     )
+    normalized_am, am_commands = _prepare_am(
+        "triangle",
+        am,
+        capabilities=capabilities,
+    )
     return TriangleDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -3150,8 +3314,9 @@ def dry_run_triangle(
         offset_v=offset,
         load=normalized_load,
         phase_deg=phase,
-        commands=_channelize_commands(commands, selected_channel),
+        commands=_channelize_commands((*commands, *am_commands), selected_channel),
         channel=selected_channel,
+        am=normalized_am,
     )
 
 
@@ -3185,12 +3350,17 @@ def _prepare_triangle(
     _validate_vpp_levels(amplitude, offset, normalized_load, "Triangle")
 
     load_command = "50" if normalized_load == "50" else "INF"
-    frequency_mode_command = (
-        ("SOURce1:FREQuency:MODE CW",) if include_cw_mode else ()
+    static_recovery_commands = (
+        (
+            "SOURce1:AM:STATe OFF",
+            "SOURce1:FREQuency:MODE CW",
+        )
+        if include_cw_mode
+        else ()
     )
     commands = (
         "OUTPut1 OFF",
-        *frequency_mode_command,
+        *static_recovery_commands,
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FREQuency MINimum",
@@ -3218,6 +3388,7 @@ def configure_pulse(
     trailing_edge_s: object = None,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3226,19 +3397,8 @@ def configure_pulse(
 
     def prepare_configuration(
         capabilities: WavegenCapabilities,
-    ) -> tuple[
-        float,
-        float,
-        float,
-        float,
-        float | None,
-        float,
-        float,
-        str,
-        float,
-        tuple[str, ...],
-    ]:
-        return _prepare_pulse(
+    ) -> tuple[object, ...]:
+        prepared = _prepare_pulse(
             frequency_hz,
             amplitude_vpp,
             pulse_width_s,
@@ -3250,6 +3410,12 @@ def configure_pulse(
             trailing_edge_s,
             capabilities=capabilities,
         )
+        normalized_am, am_commands = _prepare_am(
+            "pulse",
+            am,
+            capabilities=capabilities,
+        )
+        return (*prepared, normalized_am, am_commands)
 
     prepare_configuration(
         _preflight_capabilities_for_configuration(resource_manager_factory)
@@ -3277,8 +3443,11 @@ def configure_pulse(
             normalized_load,
             phase,
             commands,
+            normalized_am,
+            am_commands,
         ) = prepare_configuration(capabilities)
         commands = _channelize_commands(commands, selected_channel)
+        am_commands = _channelize_commands(am_commands, selected_channel)
         source_prefix = f"SOURce{selected_channel}"
         output_prefix = f"OUTPut{selected_channel}"
 
@@ -3292,7 +3461,7 @@ def configure_pulse(
                 ) from exc
 
         write_pulse_command(commands[0], None)
-        for command in commands[1:10]:
+        for command in commands[1:11]:
             write_pulse_command(command, "off")
 
         if edge_time is not None:
@@ -3308,7 +3477,7 @@ def configure_pulse(
                 "BOTH",
                 context,
             )
-            remaining_commands = commands[10:]
+            remaining_commands = commands[11:]
         else:
             leading_maximum = _query_pulse_verification(
                 session,
@@ -3322,7 +3491,7 @@ def configure_pulse(
                 "leading",
                 context,
             )
-            write_pulse_command(commands[10], "off")
+            write_pulse_command(commands[11], "off")
 
             trailing_maximum = _query_pulse_verification(
                 session,
@@ -3336,7 +3505,7 @@ def configure_pulse(
                 "trailing",
                 context,
             )
-            remaining_commands = commands[11:]
+            remaining_commands = commands[12:]
 
         for command in remaining_commands:
             write_pulse_command(command, "off")
@@ -3460,6 +3629,8 @@ def configure_pulse(
             abs_tolerance=0.0,
             context=context,
         )
+        for command in am_commands:
+            write_pulse_command(command, "off")
         return (
             amplitude,
             offset,
@@ -3470,6 +3641,7 @@ def configure_pulse(
             readback_leading,
             readback_trailing,
             readback_phase,
+            normalized_am,
         )
 
     context, readback = _run_on_supported_instrument(
@@ -3491,6 +3663,7 @@ def configure_pulse(
         readback_leading,
         readback_trailing,
         readback_phase,
+        normalized_am,
     ) = readback
     shared_edge = readback_leading if edge_time is not None else None
     return PulseConfigurationResult(
@@ -3508,6 +3681,7 @@ def configure_pulse(
         leading_edge_s=readback_leading,
         trailing_edge_s=readback_trailing,
         channel=channel,
+        am=normalized_am,
     )
 
 
@@ -3524,6 +3698,7 @@ def dry_run_pulse(
     trailing_edge_s: object = None,
     *,
     channel: int = 1,
+    am: AMConfig | None = None,
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
@@ -3554,6 +3729,11 @@ def dry_run_pulse(
         trailing_edge_s,
         capabilities=capabilities,
     )
+    normalized_am, am_commands = _prepare_am(
+        "pulse",
+        am,
+        capabilities=capabilities,
+    )
     return PulseDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -3566,8 +3746,9 @@ def dry_run_pulse(
         phase_deg=phase,
         leading_edge_s=leading_edge,
         trailing_edge_s=trailing_edge,
-        commands=_channelize_commands(commands, selected_channel),
+        commands=_channelize_commands((*commands, *am_commands), selected_channel),
         channel=selected_channel,
+        am=normalized_am,
     )
 
 
@@ -3680,6 +3861,7 @@ def _prepare_pulse(
     )
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
@@ -3786,6 +3968,7 @@ def _prepare_dc(
     load_command = "50" if normalized_load == "50" else "INF"
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:FUNCtion DC",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(voltage)}",
@@ -3916,6 +4099,7 @@ def _prepare_noise(
     load_command = "50" if normalized_load == "50" else "INF"
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -4091,6 +4275,7 @@ def _prepare_prbs(
     load_command = "50" if normalized_load == "50" else "INF"
     commands = (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",

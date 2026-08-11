@@ -27,6 +27,7 @@ from wavegen_tool_core.simulator import (
     SimulatedResourceManager,
 )
 from wavegen_tool_core.visa import (
+    AMConfig,
     DEFAULT_TIMEOUT_MS,
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
@@ -1057,6 +1058,7 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1072,6 +1074,193 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
     assert result.load == "50"
     assert session.close_calls == 1
     assert manager.close_calls == 1
+
+
+def test_configure_sine_internal_am_writes_ordered_normal_sequence_with_output_off():
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_sine(
+        USB_RESOURCE,
+        1_000_000,
+        0.1,
+        am=AMConfig(1_000, 50),
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.writes[:3] == [
+        "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
+        "SOURce1:FREQuency:MODE CW",
+    ]
+    assert session.writes[-6:] == [
+        "SOURce1:AM:SOURce INTernal",
+        "SOURce1:AM:DSSC OFF",
+        "SOURce1:AM:INTernal:FUNCtion SINusoid",
+        "SOURce1:AM:INTernal:FREQuency 1000",
+        "SOURce1:AM:DEPTh 50",
+        "SOURce1:AM:STATe ON",
+    ]
+    assert "OUTPut1 ON" not in session.writes
+    assert result.output_state == "off"
+    assert result.am == AMConfig(1_000.0, 50.0, "normal")
+
+
+def test_dssc_am_differs_from_normal_only_in_dssc_selection():
+    normal = dry_run_sine(
+        "keysight-33521b",
+        1_000,
+        0.1,
+        am=AMConfig(100, 25),
+    )
+    dssc = dry_run_sine(
+        "keysight-33521b",
+        1_000,
+        0.1,
+        am=AMConfig(100, 25, "dssc"),
+    )
+
+    differences = [
+        (normal_command, dssc_command)
+        for normal_command, dssc_command in zip(normal.commands, dssc.commands)
+        if normal_command != dssc_command
+    ]
+    assert differences == [
+        ("SOURce1:AM:DSSC OFF", "SOURce1:AM:DSSC ON")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("runner", "arguments"),
+    [
+        (dry_run_sine, (1_000, 0.1)),
+        (dry_run_square, (1_000, 0.1)),
+        (dry_run_ramp, (1_000, 0.1)),
+        (dry_run_triangle, (1_000, 0.1)),
+        (dry_run_pulse, (1_000, 0.1, 0.0001)),
+    ],
+)
+def test_supported_static_carriers_enter_internal_am_path(runner, arguments):
+    result = runner(
+        "keysight-33521b",
+        *arguments,
+        am=AMConfig(100, 50),
+    )
+
+    assert result.commands[-1] == "SOURce1:AM:STATe ON"
+    assert "OUTPut1 ON" not in result.commands
+    assert result.am == AMConfig(100.0, 50.0, "normal")
+
+
+@pytest.mark.parametrize("depth", [0, 100])
+def test_am_depth_boundaries_are_accepted(depth):
+    result = dry_run_sine(
+        "keysight-33521b",
+        1_000,
+        0.1,
+        am=AMConfig(100, depth),
+    )
+
+    assert result.am.depth_percent == float(depth)
+
+
+def test_33510b_hardware_free_am_accepts_one_microhertz_minimum():
+    result = dry_run_sine(
+        "keysight-33510b",
+        1_000,
+        0.1,
+        am=AMConfig(0.000001, 50),
+    )
+
+    assert result.am == AMConfig(0.000001, 50.0, "normal")
+    with pytest.raises(WaveformParameterError, match="0.000001 Hz"):
+        dry_run_sine(
+            "keysight-33510b",
+            1_000,
+            0.1,
+            am=AMConfig(0.0000009, 50),
+        )
+
+
+@pytest.mark.parametrize("depth", [-0.01, 100.01])
+def test_invalid_am_depth_fails_before_visa_io(depth):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="AM depth"):
+        configure_sine(
+            USB_RESOURCE,
+            1_000,
+            0.1,
+            am=AMConfig(100, depth),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
+@pytest.mark.parametrize("carrier", ["dc", "noise", "prbs"])
+def test_am_rejects_unsupported_static_carriers(carrier):
+    capabilities = capabilities_for_model_id("keysight-33521b")
+
+    assert capabilities is not None
+    with pytest.raises(WaveformParameterError, match="not supported"):
+        visa_module._prepare_am(
+            carrier,
+            AMConfig(100, 50),
+            capabilities=capabilities,
+        )
+
+
+def test_am_frequency_uses_selected_model_sine_capability_before_writes():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError, match="20000000 Hz"):
+        configure_sine(
+            USB_RESOURCE,
+            1_000,
+            0.1,
+            am=AMConfig(20_000_001, 50),
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.writes == []
+
+
+def test_33512b_channel_two_am_is_scoped_and_33521b_channel_two_rejects():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00"
+    )
+    manager = FakeManager(session)
+
+    result = configure_sine(
+        USB_RESOURCE,
+        1_000,
+        0.1,
+        channel=2,
+        am=AMConfig(100, 50, "dssc"),
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.channel == 2
+    assert session.writes[-1] == "SOURce2:AM:STATe ON"
+    assert all("SOURce1" not in command for command in session.writes)
+    with pytest.raises(WaveformParameterError, match="Channel 2"):
+        dry_run_sine(
+            "keysight-33521b",
+            1_000,
+            0.1,
+            channel=2,
+            am=AMConfig(100, 50),
+        )
 
 
 def test_configure_sine_validation_policy_accepts_matching_33512b():
@@ -1164,6 +1353,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
         "load",
         "phase_deg",
         "channel",
+        "am",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1173,6 +1363,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1855,6 +2046,7 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1896,6 +2088,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
         "load",
         "phase_deg",
         "channel",
+        "am",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1906,6 +2099,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1974,6 +2168,7 @@ def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2016,6 +2211,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
         "load",
         "phase_deg",
         "channel",
+        "am",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2026,6 +2222,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2060,6 +2257,7 @@ def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2174,6 +2372,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     ]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2192,6 +2391,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
     assert session.events == [
         ("query", IDN_QUERY),
         ("write", "OUTPut1 OFF"),
+        ("write", "SOURce1:AM:STATe OFF"),
         ("write", "SOURce1:FREQuency:MODE CW"),
         ("write", "OUTPut1:LOAD 50"),
         ("write", "SOURce1:VOLTage:UNIT VPP"),
@@ -2271,6 +2471,7 @@ def test_configure_pulse_supports_independent_edges_and_hardware_free_preview():
     ]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2437,6 +2638,7 @@ def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
         "leading_edge_s",
         "trailing_edge_s",
         "channel",
+        "am",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2450,6 +2652,7 @@ def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2576,6 +2779,7 @@ def test_configure_dc_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -2613,6 +2817,7 @@ def test_dry_run_dc_returns_validated_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -2662,6 +2867,7 @@ def test_configure_noise_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -2707,6 +2913,7 @@ def test_dry_run_noise_returns_validated_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -2757,6 +2964,7 @@ def test_configure_prbs_identifies_then_writes_safe_channel_one_sequence():
     assert session.queries == [IDN_QUERY]
     assert session.writes == [
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",
@@ -2812,6 +3020,7 @@ def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
     assert result.load == "50"
     assert result.commands == (
         "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",

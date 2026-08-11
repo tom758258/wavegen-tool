@@ -4,8 +4,9 @@ Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. It
 supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
-explicit output control, and sine, square, ramp, and triangle frequency sweeps
-for Keysight or Agilent 33512B and 33521B instruments.
+Internal Sine amplitude modulation for supported static carriers, explicit
+output control, and sine, square, ramp, and triangle frequency sweeps for
+Keysight or Agilent 33512B and 33521B instruments.
 
 ## Current Scope
 
@@ -18,6 +19,8 @@ for Keysight or Agilent 33512B and 33521B instruments.
 - Stateful in-memory simulator with independent channels for the two-channel
   33510B and 33512B profiles
 - Basic sine, square, ramp, triangle, and pulse configuration
+- Internal Sine amplitude modulation for sine, square, ramp, triangle, and
+  pulse carriers, with Normal and DSSC modes
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
@@ -66,6 +69,36 @@ Channel 2 tracking are all explicitly reported as off. The tool never disables
 coupling or tracking automatically. Read-only status does not require these
 independent-channel checks.
 
+## Configure Internal Amplitude Modulation
+
+The five static carrier commands `configure-sine`, `configure-square`,
+`configure-ramp`, `configure-triangle`, and `configure-pulse` accept optional
+Internal AM settings. The modulation source is fixed to Internal and the
+internal modulating waveform is fixed to Sine. Provide `--am-frequency` and
+`--am-depth` together to enable AM. The AM type defaults to `normal`; use
+`--am-type dssc` for double-sideband suppressed-carrier operation.
+
+Preview a representative Normal AM sine configuration without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run `
+  --model keysight-33512b `
+  --channel 2 `
+  --frequency-hz 1000000 `
+  --amplitude-vpp 0.1 `
+  --am-frequency 1000 `
+  --am-depth 50
+```
+
+AM depth must be from 0% through 100%. Internal modulation frequency must be
+at least 0.000001 Hz and cannot exceed the selected model profile's Sine
+frequency capability. Partial AM option groups are rejected. AM configuration
+turns the selected output off before changing modulation state and leaves the
+output off; only the explicit `output --state on` command enables it. A later
+ordinary static waveform configuration explicitly disables AM on the selected
+channel before configuring the non-modulated waveform.
+
 ## Requirements and Installation
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the
@@ -83,11 +116,12 @@ reserved WebUI import packages.
 The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep commands, and explicit output control. Two-channel model
-profiles retain independent Channel 1 and Channel 2 state, including sweep
-state; normal waveform configuration restores CW mode only on the selected
-channel. The 33521B profile rejects Channel 2. Standalone configure
-commands can select the registered 33510B, 33512B, or 33521B model; the default
-remains 33521B. The simulator never creates a real VISA ResourceManager, runs
+profiles retain independent Channel 1 and Channel 2 state, including sweep and
+Internal AM state; normal waveform configuration restores CW mode and disables
+AM only on the selected channel. The 33521B profile rejects Channel 2.
+Standalone configure commands can select the registered 33510B, 33512B, or
+33521B model; the default remains 33521B. The simulator never creates a real
+VISA ResourceManager, runs
 real resource discovery, opens hardware, or performs hardware I/O. Supported
 writes update in-memory state, subsequent queries read that state, and
 unsupported resources or SCPI fail closed.
@@ -453,6 +487,8 @@ preview and is not executed. The sine preview includes the explicit
 `UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run does not execute
 SCPI or access hardware. Live waveform configuration continues to require an
 explicit VISA resource, and configuration leaves output off.
+Internal AM dry-runs use the same model capability, channel, and safety
+validation as the corresponding configuration command.
 
 ## Configure a Selected-Channel Sine Frequency Sweep
 

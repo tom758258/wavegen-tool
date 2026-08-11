@@ -44,6 +44,7 @@ from wavegen_tool_core.simulator import (
 )
 from wavegen_tool_core.transport import classify_transport, detect_resource_transport
 from wavegen_tool_core.visa import (
+    AMConfig,
     DEFAULT_TIMEOUT_MS,
     ErrorQueueResult,
     SystemErrorEntry,
@@ -113,6 +114,7 @@ from wavegen_tool_core.visa import (
 )
 
 __all__ = [
+    "AMConfig",
     "CANONICAL_MANUFACTURER",
     "CANONICAL_MODEL",
     "CANONICAL_MODEL_ID",
