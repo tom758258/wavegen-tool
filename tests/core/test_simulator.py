@@ -7,6 +7,7 @@ import pytest
 from wavegen_tool_core import (
     AMConfig,
     BPSKConfig,
+    CountedBurstConfig,
     FMConfig,
     FSKConfig,
     PMConfig,
@@ -40,6 +41,50 @@ def _factory_for(
     state: Simulated33521BState,
 ) -> Callable[[str], SimulatedResourceManager]:
     return lambda _library: SimulatedResourceManager(state)
+
+
+def test_simulator_records_counted_burst_state_and_queries() -> None:
+    state = Simulated33521BState()
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_sine(
+        factory.resource_name,
+        1000,
+        0.1,
+        burst=CountedBurstConfig(2, 0.01),
+        resource_manager_factory=factory,
+    )
+
+    assert result.output_state == "off"
+    assert state.ch1.burst_enabled is True
+    assert state.ch1.burst_mode == "triggered"
+    assert state.ch1.burst_count == 2
+    assert state.ch1.burst_period_s == 0.01
+    assert state.ch1.burst_phase_deg == 0.0
+    session = SimulatedResource(state)
+    assert session.query("SOURce1:BURSt:STATe?") == "1"
+    assert session.query("SOURce1:BURSt:MODE?") == "triggered"
+    assert session.query("SOURce1:BURSt:NCYCles?") == "2"
+    assert session.query("SOURce1:BURSt:INTernal:PERiod?") == "0.01"
+    assert session.query("SOURce1:BURSt:PHASe?") == "0"
+
+
+def test_two_channel_simulator_cleans_only_selected_channel_burst() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    state.ch1.burst_enabled = True
+    state.ch2.burst_enabled = True
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_square(
+        factory.resource_name,
+        1000,
+        0.1,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.burst_enabled is True
+    assert state.ch2.burst_enabled is False
 
 
 def test_simulator_exposes_one_deterministic_recognized_resource() -> None:

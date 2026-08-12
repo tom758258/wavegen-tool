@@ -6,6 +6,7 @@ supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
 Internal Sine amplitude, frequency, and phase modulation, Internal FSK, and
 Internal BPSK for supported static carriers, Internal PWM for pulse carriers,
+Immediate-triggered Counted Burst for supported static carriers,
 explicit output control, and sine,
 square, ramp, and triangle frequency sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
@@ -29,6 +30,7 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Internal frequency-shift keying for sine, square, ramp, and triangle carriers
 - Internal binary phase-shift keying for sine, square, ramp, and triangle carriers
 - Internal sine pulse-width modulation for pulse carriers
+- Counted Burst for sine, square, ramp, triangle, pulse, and PRBS carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
@@ -253,6 +255,38 @@ output off before changing modulation state and leaves it off; only the
 explicit `output --state on` command enables it. Ordinary static waveform and
 sweep configuration explicitly disable PWM on the selected channel.
 
+## Configure Counted Burst
+
+The six static carrier commands `configure-sine`, `configure-square`,
+`configure-ramp`, `configure-triangle`, `configure-pulse`, and
+`configure-prbs` accept optional Counted Burst settings. Provide
+`--burst-count` and `--burst-period-s` together. The mode is fixed to
+Triggered, the trigger source is fixed to Immediate, and Burst phase is fixed
+to 0 degrees. Count is a waveform-cycle count except for PRBS, where it is a
+bit count.
+
+Preview a representative sine Burst without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000 `
+  --amplitude-vpp 0.1 `
+  --burst-count 2 `
+  --burst-period-s 0.01
+```
+
+Count must be from 1 through 100000000 and period must be from 0.000001
+through 8000 seconds. The carrier frequency or PRBS bit rate must be at least
+0.002001 Hz; Sine and Square Burst carriers cannot exceed 6000000 Hz. The
+period must be at least `count / carrier-rate + 0.000001` seconds. Counted
+Burst is finite-only and mutually exclusive with AM, FM, PM, FSK, BPSK, and
+PWM. Configuration first disables Burst only on the selected channel, keeps
+the selected output off throughout, and enables Burst only after all carrier
+commands are complete. Ordinary static waveform and sweep configuration also
+disable Burst only on the selected channel. Output-on remains explicit.
+
 ## Requirements and Installation
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the
@@ -271,8 +305,9 @@ The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep commands, and explicit output control. Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep and
-Internal AM/FM/PM/FSK/BPSK/PWM state; normal waveform configuration restores CW
-mode and disables AM, FM, PM, FSK, BPSK, and PWM only on the selected channel. The
+Internal AM/FM/PM/FSK/BPSK/PWM and Counted Burst state; normal waveform
+configuration restores CW mode and disables AM, FM, PM, FSK, BPSK, PWM, and
+Burst only on the selected channel. The
 33521B
 profile rejects Channel 2.
 Standalone configure commands can select the registered 33510B, 33512B, or

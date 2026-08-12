@@ -76,6 +76,11 @@ class SimulatedChannelState:
     pwm_internal_function: str = "sine"
     pwm_internal_frequency_hz: float = 10.0
     pwm_deviation_s: float = 1e-6
+    burst_enabled: bool = False
+    burst_mode: str = "triggered"
+    burst_count: int = 1
+    burst_period_s: float = 1.0
+    burst_phase_deg: float = 0.0
 
 
 class Simulated33521BState:
@@ -515,6 +520,7 @@ class SimulatedResource:
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FM:STATe ON":
             ch_state.fm_enabled = True
@@ -523,6 +529,7 @@ class SimulatedResource:
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:PM:STATe ON":
             ch_state.pm_enabled = True
@@ -531,6 +538,7 @@ class SimulatedResource:
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FSKey:STATe ON":
             ch_state.fsk_enabled = True
@@ -539,6 +547,7 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:BPSK:STATe ON":
             ch_state.bpsk_enabled = True
@@ -547,6 +556,7 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:PWM:STATe ON":
             ch_state.pwm_enabled = True
@@ -555,6 +565,16 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
+            ch_state.burst_enabled = False
+            return
+        if command == f"SOURce{prefix_ch}:BURSt:STATe ON":
+            ch_state.burst_enabled = True
+            ch_state.am_enabled = False
+            ch_state.fm_enabled = False
+            ch_state.pm_enabled = False
+            ch_state.fsk_enabled = False
+            ch_state.bpsk_enabled = False
+            ch_state.pwm_enabled = False
             return
 
         exact_updates = {
@@ -606,6 +626,11 @@ class SimulatedResource:
                 "internal",
             ),
             f"SOURce{prefix_ch}:PWM:STATe OFF": ("pwm_enabled", False),
+            f"SOURce{prefix_ch}:BURSt:STATe OFF": ("burst_enabled", False),
+            f"SOURce{prefix_ch}:BURSt:MODE TRIGgered": (
+                "burst_mode",
+                "triggered",
+            ),
             f"SOURce{prefix_ch}:PWM:SOURce INTernal": (
                 "pwm_source",
                 "internal",
@@ -681,6 +706,23 @@ class SimulatedResource:
             ),
         )
         for prefix, field in numeric_updates:
+            if command.startswith(prefix):
+                setattr(ch_state, field, _parse_finite_number(command[len(prefix) :]))
+                return
+
+        burst_count_prefix = f"SOURce{prefix_ch}:BURSt:NCYCles "
+        if command.startswith(burst_count_prefix):
+            count = _parse_finite_number(command[len(burst_count_prefix) :])
+            if not count.is_integer():
+                raise ValueError("Malformed simulated Burst count.")
+            ch_state.burst_count = int(count)
+            return
+
+        burst_numeric_updates = (
+            (f"SOURce{prefix_ch}:BURSt:INTernal:PERiod ", "burst_period_s"),
+            (f"SOURce{prefix_ch}:BURSt:PHASe ", "burst_phase_deg"),
+        )
+        for prefix, field in burst_numeric_updates:
             if command.startswith(prefix):
                 setattr(ch_state, field, _parse_finite_number(command[len(prefix) :]))
                 return
@@ -829,6 +871,15 @@ class SimulatedResource:
             ),
             f"SOURce{prefix_ch}:PWM:DEViation?": _format_number(
                 ch_state.pwm_deviation_s
+            ),
+            f"SOURce{prefix_ch}:BURSt:STATe?": "1" if ch_state.burst_enabled else "0",
+            f"SOURce{prefix_ch}:BURSt:MODE?": ch_state.burst_mode,
+            f"SOURce{prefix_ch}:BURSt:NCYCles?": str(ch_state.burst_count),
+            f"SOURce{prefix_ch}:BURSt:INTernal:PERiod?": _format_number(
+                ch_state.burst_period_s
+            ),
+            f"SOURce{prefix_ch}:BURSt:PHASe?": _format_number(
+                ch_state.burst_phase_deg
             ),
         }
         try:

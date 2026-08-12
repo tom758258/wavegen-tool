@@ -76,6 +76,15 @@ BPSK_MIN_RATE_HZ = 0.001
 BPSK_MAX_RATE_HZ = 1_000_000.0
 PWM_MAX_DEVIATION_S = 500_000.0
 PULSE_MIN_WIDTH_S = 16e-9
+BURST_MIN_COUNT = 1
+BURST_MAX_COUNT = 100_000_000
+BURST_MIN_PERIOD_S = 1e-6
+BURST_MAX_PERIOD_S = 8000.0
+# Deliberately follows the SCPI Programming Reference BURSt subsystem (page 225),
+# rather than the 126 uHz value elsewhere in Operating Information, to fail closed.
+BURST_MIN_CARRIER_RATE_HZ = 0.002001
+BURST_MAX_SINE_SQUARE_FREQUENCY_HZ = 6_000_000.0
+BURST_PERIOD_MARGIN_S = 1e-6
 STATUS_QUERIES = (
     "OUTPut1?",
     "SOURce1:FUNCtion?",
@@ -323,6 +332,14 @@ class PWMConfig:
 
 
 @dataclass(frozen=True)
+class CountedBurstConfig:
+    """Internal immediate-triggered counted-burst settings."""
+
+    count: object
+    period_s: object
+
+
+@dataclass(frozen=True)
 class SineConfigurationResult:
     """A successful sine configuration."""
 
@@ -342,6 +359,7 @@ class SineConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -364,6 +382,7 @@ class SineDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -575,6 +594,7 @@ class SquareConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -598,6 +618,7 @@ class SquareDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -621,6 +642,7 @@ class RampConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -644,6 +666,7 @@ class RampDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -666,6 +689,7 @@ class TriangleConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -688,6 +712,7 @@ class TriangleDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -711,6 +736,7 @@ class PulseConfigurationResult:
     channel: int = 1
     am: AMConfig | None = None
     pwm: PWMConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -734,6 +760,7 @@ class PulseDryRunResult:
     channel: int = 1
     am: AMConfig | None = None
     pwm: PWMConfig | None = None
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -812,6 +839,7 @@ class PrbsConfigurationResult:
     load: str
     output_state: str = "off"
     channel: int = 1
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -830,6 +858,7 @@ class PrbsDryRunResult:
     executed: bool = False
     output_state: str = "off"
     channel: int = 1
+    burst: CountedBurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -1485,6 +1514,7 @@ def configure_sine(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -1526,6 +1556,9 @@ def configure_sine(
             capabilities=capabilities,
         )
         normalized_bpsk, bpsk_commands = _prepare_bpsk("sine", bpsk)
+        normalized_burst, burst_commands = _prepare_counted_burst(
+            "sine", prepared[0], burst, am, fm, pm, fsk, bpsk
+        )
         return (
             *prepared[:-1],
             normalized_am,
@@ -1533,6 +1566,7 @@ def configure_sine(
             normalized_pm,
             normalized_fsk,
             normalized_bpsk,
+            normalized_burst,
         ), (
             *prepared[-1],
             *am_commands,
@@ -1540,6 +1574,7 @@ def configure_sine(
             *pm_commands,
             *fsk_commands,
             *bpsk_commands,
+            *burst_commands,
         )
 
     context, prepared = _prepare_and_write_to_supported_instrument(
@@ -1563,6 +1598,7 @@ def configure_sine(
         normalized_pm,
         normalized_fsk,
         normalized_bpsk,
+        normalized_burst,
     ) = prepared
     return SineConfigurationResult(
         resource=context.resource,
@@ -1580,6 +1616,7 @@ def configure_sine(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -1597,6 +1634,7 @@ def dry_run_sine(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
@@ -1637,6 +1675,9 @@ def dry_run_sine(
         capabilities=capabilities,
     )
     normalized_bpsk, bpsk_commands = _prepare_bpsk("sine", bpsk)
+    normalized_burst, burst_commands = _prepare_counted_burst(
+        "sine", frequency, burst, am, fm, pm, fsk, bpsk
+    )
     return SineDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -1653,6 +1694,7 @@ def dry_run_sine(
                 *pm_commands,
                 *fsk_commands,
                 *bpsk_commands,
+                *burst_commands,
             ),
             selected_channel,
         ),
@@ -1662,6 +1704,7 @@ def dry_run_sine(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -2522,6 +2565,7 @@ def _prepare_square_sweep(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2637,6 +2681,7 @@ def _prepare_ramp_sweep(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2748,6 +2793,7 @@ def _prepare_triangle_sweep(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2855,6 +2901,7 @@ def _prepare_sine_sweep(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2929,6 +2976,68 @@ def _validate_modulation_exclusive(
         raise WaveformParameterError(
             "AM, FM, PM, FSK, BPSK, and PWM cannot be configured at the same time."
         )
+
+
+def _prepare_counted_burst(
+    carrier: str,
+    carrier_rate_hz: float,
+    config: CountedBurstConfig | None,
+    *modulations: object,
+) -> tuple[CountedBurstConfig | None, tuple[str, ...]]:
+    if config is None:
+        return None, ()
+    if not isinstance(config, CountedBurstConfig):
+        raise WaveformParameterError(
+            "Burst configuration must use CountedBurstConfig."
+        )
+    if any(modulation is not None for modulation in modulations):
+        raise WaveformParameterError(
+            "Counted Burst cannot be configured with AM, FM, PM, FSK, BPSK, or PWM."
+        )
+    if isinstance(config.count, bool) or not isinstance(config.count, int):
+        raise WaveformParameterError(
+            "Burst count must be an integer between 1 and 100000000."
+        )
+    if not BURST_MIN_COUNT <= config.count <= BURST_MAX_COUNT:
+        raise WaveformParameterError(
+            "Burst count must be an integer between 1 and 100000000."
+        )
+    period = _normalize_finite_number(
+        config.period_s,
+        "period",
+        waveform="Burst",
+    )
+    if not BURST_MIN_PERIOD_S <= period <= BURST_MAX_PERIOD_S:
+        raise WaveformParameterError(
+            "Burst period must be between 0.000001 s and 8000 s."
+        )
+    if carrier_rate_hz < BURST_MIN_CARRIER_RATE_HZ:
+        raise WaveformParameterError(
+            "Burst carrier frequency or PRBS bit rate must be at least 0.002001 Hz."
+        )
+    if (
+        carrier in {"sine", "square"}
+        and carrier_rate_hz > BURST_MAX_SINE_SQUARE_FREQUENCY_HZ
+    ):
+        raise WaveformParameterError(
+            "Burst Sine and Square carrier frequency must not exceed 6000000 Hz."
+        )
+    minimum_period = config.count / carrier_rate_hz + BURST_PERIOD_MARGIN_S
+    if period < minimum_period:
+        raise WaveformParameterError(
+            "Burst period must be at least count divided by carrier frequency or "
+            "PRBS bit rate plus 0.000001 s."
+        )
+    normalized = CountedBurstConfig(count=config.count, period_s=period)
+    commands = (
+        "SOURce1:BURSt:MODE TRIGgered",
+        f"SOURce1:BURSt:NCYCles {config.count}",
+        f"SOURce1:BURSt:INTernal:PERiod {_format_scpi_number(period)}",
+        "SOURce1:BURSt:PHASe 0",
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:BURSt:STATe ON",
+    )
+    return normalized, commands
 
 
 def _prepare_am(
@@ -3276,6 +3385,7 @@ def _prepare_sine(
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
             "SOURce1:PWM:STATe OFF",
+            "SOURce1:BURSt:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3312,6 +3422,7 @@ def configure_square(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3374,6 +3485,9 @@ def configure_square(
             pm,
             capabilities=capabilities,
         )
+        normalized_burst, burst_commands = _prepare_counted_burst(
+            "square", prepared[0], burst, am, fm, pm, fsk, bpsk
+        )
         return (
             *prepared[:-1],
             normalized_am,
@@ -3381,6 +3495,7 @@ def configure_square(
             normalized_pm,
             normalized_fsk,
             normalized_bpsk,
+            normalized_burst,
         ), (
             *prepared[-1],
             *am_commands,
@@ -3388,6 +3503,7 @@ def configure_square(
             *pm_commands,
             *fsk_commands,
             *bpsk_commands,
+            *burst_commands,
         )
 
     context, prepared = _prepare_and_write_to_supported_instrument(
@@ -3412,6 +3528,7 @@ def configure_square(
         normalized_pm,
         normalized_fsk,
         normalized_bpsk,
+        normalized_burst,
     ) = prepared
     return SquareConfigurationResult(
         resource=context.resource,
@@ -3430,6 +3547,7 @@ def configure_square(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -3448,6 +3566,7 @@ def dry_run_square(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
 ) -> SquareDryRunResult:
     """Preview a validated Channel 1 square configuration without VISA I/O."""
 
@@ -3522,6 +3641,9 @@ def dry_run_square(
         pm,
         capabilities=capabilities,
     )
+    normalized_burst, burst_commands = _prepare_counted_burst(
+        "square", frequency, burst, am, fm, pm, fsk, bpsk
+    )
     return SquareDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -3539,6 +3661,7 @@ def dry_run_square(
                 *pm_commands,
                 *fsk_commands,
                 *bpsk_commands,
+                *burst_commands,
             ),
             selected_channel,
         ),
@@ -3548,6 +3671,7 @@ def dry_run_square(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -3626,6 +3750,7 @@ def _prepare_square(
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
             "SOURce1:PWM:STATe OFF",
+            "SOURce1:BURSt:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3672,6 +3797,7 @@ def configure_ramp(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3713,6 +3839,9 @@ def configure_ramp(
             capabilities=capabilities,
         )
         normalized_bpsk, bpsk_commands = _prepare_bpsk("ramp", bpsk)
+        normalized_burst, burst_commands = _prepare_counted_burst(
+            "ramp", prepared[0], burst, am, fm, pm, fsk, bpsk
+        )
         return (
             *prepared[:-1],
             normalized_am,
@@ -3720,6 +3849,7 @@ def configure_ramp(
             normalized_pm,
             normalized_fsk,
             normalized_bpsk,
+            normalized_burst,
         ), (
             *prepared[-1],
             *am_commands,
@@ -3727,6 +3857,7 @@ def configure_ramp(
             *pm_commands,
             *fsk_commands,
             *bpsk_commands,
+            *burst_commands,
         )
 
     context, prepared = _prepare_and_write_to_supported_instrument(
@@ -3751,6 +3882,7 @@ def configure_ramp(
         normalized_pm,
         normalized_fsk,
         normalized_bpsk,
+        normalized_burst,
     ) = prepared
     return RampConfigurationResult(
         resource=context.resource,
@@ -3769,6 +3901,7 @@ def configure_ramp(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -3787,6 +3920,7 @@ def dry_run_ramp(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
 ) -> RampDryRunResult:
     """Preview a validated Channel 1 ramp configuration without VISA I/O."""
 
@@ -3834,6 +3968,9 @@ def dry_run_ramp(
         capabilities=capabilities,
     )
     normalized_bpsk, bpsk_commands = _prepare_bpsk("ramp", bpsk)
+    normalized_burst, burst_commands = _prepare_counted_burst(
+        "ramp", frequency, burst, am, fm, pm, fsk, bpsk
+    )
     return RampDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -3851,6 +3988,7 @@ def dry_run_ramp(
                 *pm_commands,
                 *fsk_commands,
                 *bpsk_commands,
+                *burst_commands,
             ),
             selected_channel,
         ),
@@ -3860,6 +3998,7 @@ def dry_run_ramp(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -3911,6 +4050,7 @@ def _prepare_ramp(
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
             "SOURce1:PWM:STATe OFF",
+            "SOURce1:BURSt:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3957,6 +4097,7 @@ def configure_triangle(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3997,6 +4138,9 @@ def configure_triangle(
             capabilities=capabilities,
         )
         normalized_bpsk, bpsk_commands = _prepare_bpsk("triangle", bpsk)
+        normalized_burst, burst_commands = _prepare_counted_burst(
+            "triangle", prepared[0], burst, am, fm, pm, fsk, bpsk
+        )
         return (
             *prepared[:-1],
             normalized_am,
@@ -4004,6 +4148,7 @@ def configure_triangle(
             normalized_pm,
             normalized_fsk,
             normalized_bpsk,
+            normalized_burst,
         ), (
             *prepared[-1],
             *am_commands,
@@ -4011,6 +4156,7 @@ def configure_triangle(
             *pm_commands,
             *fsk_commands,
             *bpsk_commands,
+            *burst_commands,
         )
 
     context, prepared = _prepare_and_write_to_supported_instrument(
@@ -4034,6 +4180,7 @@ def configure_triangle(
         normalized_pm,
         normalized_fsk,
         normalized_bpsk,
+        normalized_burst,
     ) = prepared
     return TriangleConfigurationResult(
         resource=context.resource,
@@ -4051,6 +4198,7 @@ def configure_triangle(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -4068,6 +4216,7 @@ def dry_run_triangle(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
+    burst: CountedBurstConfig | None = None,
 ) -> TriangleDryRunResult:
     """Preview a validated Channel 1 triangle configuration without VISA I/O."""
 
@@ -4106,6 +4255,9 @@ def dry_run_triangle(
         capabilities=capabilities,
     )
     normalized_bpsk, bpsk_commands = _prepare_bpsk("triangle", bpsk)
+    normalized_burst, burst_commands = _prepare_counted_burst(
+        "triangle", frequency, burst, am, fm, pm, fsk, bpsk
+    )
     return TriangleDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -4122,6 +4274,7 @@ def dry_run_triangle(
                 *pm_commands,
                 *fsk_commands,
                 *bpsk_commands,
+                *burst_commands,
             ),
             selected_channel,
         ),
@@ -4131,6 +4284,7 @@ def dry_run_triangle(
         pm=normalized_pm,
         fsk=normalized_fsk,
         bpsk=normalized_bpsk,
+        burst=normalized_burst,
     )
 
 
@@ -4172,6 +4326,7 @@ def _prepare_triangle(
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
             "SOURce1:PWM:STATe OFF",
+            "SOURce1:BURSt:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -4209,6 +4364,7 @@ def configure_pulse(
     channel: int = 1,
     am: AMConfig | None = None,
     pwm: PWMConfig | None = None,
+    burst: CountedBurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -4244,12 +4400,17 @@ def configure_pulse(
             pwm,
             capabilities=capabilities,
         )
+        normalized_burst, burst_commands = _prepare_counted_burst(
+            "pulse", prepared[0], burst, am, pwm
+        )
         return (
             *prepared,
             normalized_am,
             am_commands,
             normalized_pwm,
             pwm_commands,
+            normalized_burst,
+            burst_commands,
         )
 
     prepare_configuration(
@@ -4282,10 +4443,13 @@ def configure_pulse(
             am_commands,
             normalized_pwm,
             pwm_commands,
+            normalized_burst,
+            burst_commands,
         ) = prepare_configuration(capabilities)
         commands = _channelize_commands(commands, selected_channel)
         am_commands = _channelize_commands(am_commands, selected_channel)
         pwm_commands = _channelize_commands(pwm_commands, selected_channel)
+        burst_commands = _channelize_commands(burst_commands, selected_channel)
         source_prefix = f"SOURce{selected_channel}"
         output_prefix = f"OUTPut{selected_channel}"
 
@@ -4299,7 +4463,7 @@ def configure_pulse(
                 ) from exc
 
         write_pulse_command(commands[0], None)
-        for command in commands[1:16]:
+        for command in commands[1:17]:
             write_pulse_command(command, "off")
 
         if edge_time is not None:
@@ -4315,7 +4479,7 @@ def configure_pulse(
                 "BOTH",
                 context,
             )
-            remaining_commands = commands[16:]
+            remaining_commands = commands[17:]
         else:
             leading_maximum = _query_pulse_verification(
                 session,
@@ -4329,7 +4493,7 @@ def configure_pulse(
                 "leading",
                 context,
             )
-            write_pulse_command(commands[16], "off")
+            write_pulse_command(commands[17], "off")
 
             trailing_maximum = _query_pulse_verification(
                 session,
@@ -4343,7 +4507,7 @@ def configure_pulse(
                 "trailing",
                 context,
             )
-            remaining_commands = commands[17:]
+            remaining_commands = commands[18:]
 
         for command in remaining_commands:
             write_pulse_command(command, "off")
@@ -4471,6 +4635,8 @@ def configure_pulse(
             write_pulse_command(command, "off")
         for command in pwm_commands:
             write_pulse_command(command, "off")
+        for command in burst_commands:
+            write_pulse_command(command, "off")
         return (
             amplitude,
             offset,
@@ -4483,6 +4649,7 @@ def configure_pulse(
             readback_phase,
             normalized_am,
             normalized_pwm,
+            normalized_burst,
         )
 
     context, readback = _run_on_supported_instrument(
@@ -4506,6 +4673,7 @@ def configure_pulse(
         readback_phase,
         normalized_am,
         normalized_pwm,
+        normalized_burst,
     ) = readback
     shared_edge = readback_leading if edge_time is not None else None
     return PulseConfigurationResult(
@@ -4525,6 +4693,7 @@ def configure_pulse(
         channel=channel,
         am=normalized_am,
         pwm=normalized_pwm,
+        burst=normalized_burst,
     )
 
 
@@ -4543,6 +4712,7 @@ def dry_run_pulse(
     channel: int = 1,
     am: AMConfig | None = None,
     pwm: PWMConfig | None = None,
+    burst: CountedBurstConfig | None = None,
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
@@ -4587,6 +4757,9 @@ def dry_run_pulse(
         pwm,
         capabilities=capabilities,
     )
+    normalized_burst, burst_commands = _prepare_counted_burst(
+        "pulse", frequency, burst, am, pwm
+    )
     return PulseDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -4600,11 +4773,12 @@ def dry_run_pulse(
         leading_edge_s=leading_edge,
         trailing_edge_s=trailing_edge,
         commands=_channelize_commands(
-            (*commands, *am_commands, *pwm_commands), selected_channel
+            (*commands, *am_commands, *pwm_commands, *burst_commands), selected_channel
         ),
         channel=selected_channel,
         am=normalized_am,
         pwm=normalized_pwm,
+        burst=normalized_burst,
     )
 
 
@@ -4723,6 +4897,7 @@ def _prepare_pulse(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
@@ -4835,6 +5010,7 @@ def _prepare_dc(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:FUNCtion DC",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(voltage)}",
@@ -4971,6 +5147,7 @@ def _prepare_noise(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -4999,6 +5176,7 @@ def configure_prbs(
     backend: str | None = None,
     *,
     channel: int = 1,
+    burst: CountedBurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -5021,10 +5199,13 @@ def configure_prbs(
         edge_time_s,
         load,
     )
+    normalized_burst, burst_commands = _prepare_counted_burst(
+        "prbs", bit_rate, burst
+    )
     context = _write_to_supported_instrument(
         resource,
         backend,
-        commands,
+        (*commands, *burst_commands),
         output_state_after_writes="off",
         channel=channel,
         independent_channel_guard=True,
@@ -5044,6 +5225,7 @@ def configure_prbs(
         edge_time_s=edge_time,
         load=normalized_load,
         channel=channel,
+        burst=normalized_burst,
     )
 
 
@@ -5057,6 +5239,7 @@ def dry_run_prbs(
     load: object = 50,
     *,
     channel: int = 1,
+    burst: CountedBurstConfig | None = None,
 ) -> PrbsDryRunResult:
     """Preview a validated Channel 1 PRBS configuration without VISA I/O."""
 
@@ -5080,6 +5263,9 @@ def dry_run_prbs(
         edge_time_s,
         load,
     )
+    normalized_burst, burst_commands = _prepare_counted_burst(
+        "prbs", bit_rate, burst
+    )
     return PrbsDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -5089,8 +5275,9 @@ def dry_run_prbs(
         offset_v=offset,
         edge_time_s=edge_time,
         load=normalized_load,
-        commands=_channelize_commands(commands, selected_channel),
+        commands=_channelize_commands((*commands, *burst_commands), selected_channel),
         channel=selected_channel,
+        burst=normalized_burst,
     )
 
 
@@ -5152,6 +5339,7 @@ def _prepare_prbs(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",

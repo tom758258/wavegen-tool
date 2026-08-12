@@ -46,6 +46,7 @@ from wavegen_tool_core.transport import classify_transport, detect_resource_tran
 from wavegen_tool_core.visa import (
     AMConfig,
     BPSKConfig,
+    CountedBurstConfig,
     FMConfig,
     FSKConfig,
     PMConfig,
@@ -121,6 +122,7 @@ from wavegen_tool_core.visa import (
 __all__ = [
     "AMConfig",
     "BPSKConfig",
+    "CountedBurstConfig",
     "FMConfig",
     "FSKConfig",
     "PMConfig",

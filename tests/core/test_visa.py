@@ -29,6 +29,7 @@ from wavegen_tool_core.simulator import (
 from wavegen_tool_core.visa import (
     AMConfig,
     BPSKConfig,
+    CountedBurstConfig,
     DEFAULT_TIMEOUT_MS,
     FMConfig,
     FSKConfig,
@@ -1069,6 +1070,7 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1098,7 +1100,7 @@ def test_configure_sine_internal_am_writes_ordered_normal_sequence_with_output_o
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.writes[:8] == [
+    assert session.writes[:9] == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
@@ -1106,6 +1108,7 @@ def test_configure_sine_internal_am_writes_ordered_normal_sequence_with_output_o
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     ]
     assert session.writes[-6:] == [
@@ -1298,7 +1301,7 @@ def test_supported_static_carriers_enter_internal_fm_path(
         fm=FMConfig(1_000, deviation),
     )
 
-    assert result.commands[:8] == (
+    assert result.commands[:9] == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
@@ -1306,6 +1309,7 @@ def test_supported_static_carriers_enter_internal_fm_path(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     )
     assert result.commands[-5:] == (
@@ -1499,7 +1503,7 @@ def test_dry_run_sine_internal_pm_returns_canonical_ordered_plan():
         pm=PMConfig(1_000, 90),
     )
 
-    assert result.commands[:8] == (
+    assert result.commands[:9] == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
@@ -1507,6 +1511,7 @@ def test_dry_run_sine_internal_pm_returns_canonical_ordered_plan():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     )
     assert result.commands[-5:] == (
@@ -1620,7 +1625,7 @@ def test_dry_run_sine_internal_fsk_returns_canonical_ordered_plan():
         fsk=FSKConfig(500_000, 80_000),
     )
 
-    assert result.commands[:8] == (
+    assert result.commands[:9] == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
@@ -1628,6 +1633,7 @@ def test_dry_run_sine_internal_fsk_returns_canonical_ordered_plan():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     )
     assert result.commands[-4:] == (
@@ -1702,7 +1708,7 @@ def test_dry_run_sine_internal_bpsk_returns_canonical_ordered_plan():
         bpsk=BPSKConfig(180, 1_000),
     )
 
-    assert result.commands[:8] == (
+    assert result.commands[:9] == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
@@ -1710,6 +1716,7 @@ def test_dry_run_sine_internal_bpsk_returns_canonical_ordered_plan():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     )
     assert result.commands[-4:] == (
@@ -1875,6 +1882,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
         "pm",
         "fsk",
         "bpsk",
+        "burst",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1890,6 +1898,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1958,6 +1967,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -2025,6 +2035,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
                 "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD INF",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion SQUare",
@@ -2055,6 +2066,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
                 "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FREQuency MINimum",
@@ -2086,6 +2098,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
                 "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FREQuency MINimum",
@@ -2602,6 +2615,7 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2648,6 +2662,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
         "pm",
         "fsk",
         "bpsk",
+        "burst",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2664,6 +2679,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2738,6 +2754,7 @@ def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2785,6 +2802,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
         "pm",
         "fsk",
         "bpsk",
+        "burst",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2801,6 +2819,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2841,6 +2860,7 @@ def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2961,6 +2981,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2985,6 +3006,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         ("write", "SOURce1:FSKey:STATe OFF"),
         ("write", "SOURce1:BPSK:STATe OFF"),
         ("write", "SOURce1:PWM:STATe OFF"),
+        ("write", "SOURce1:BURSt:STATe OFF"),
         ("write", "SOURce1:FREQuency:MODE CW"),
         ("write", "OUTPut1:LOAD 50"),
         ("write", "SOURce1:VOLTage:UNIT VPP"),
@@ -3070,6 +3092,7 @@ def test_configure_pulse_supports_independent_edges_and_hardware_free_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -3238,6 +3261,7 @@ def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
         "channel",
         "am",
         "pwm",
+        "burst",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -3257,6 +3281,7 @@ def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -3454,6 +3479,7 @@ def test_configure_dc_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -3497,6 +3523,7 @@ def test_dry_run_dc_returns_validated_hardware_free_command_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -3552,6 +3579,7 @@ def test_configure_noise_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -3603,6 +3631,7 @@ def test_dry_run_noise_returns_validated_hardware_free_command_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -3659,6 +3688,7 @@ def test_configure_prbs_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",
@@ -3703,6 +3733,7 @@ def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
         "edge_time_s",
         "load",
         "channel",
+        "burst",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -3720,6 +3751,7 @@ def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",
@@ -3731,6 +3763,170 @@ def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
     )
     assert result.executed is False
     assert result.output_state == "off"
+
+
+def test_counted_burst_sine_returns_canonical_ordered_plan() -> None:
+    result = dry_run_sine(
+        "keysight-33521b",
+        1000,
+        0.1,
+        burst=CountedBurstConfig(2, 0.01),
+    )
+
+    assert result.burst == CountedBurstConfig(2, 0.01)
+    assert result.commands[0] == "OUTPut1 OFF"
+    assert result.commands[7] == "SOURce1:BURSt:STATe OFF"
+    assert result.commands[-6:] == (
+        "SOURce1:BURSt:MODE TRIGgered",
+        "SOURce1:BURSt:NCYCles 2",
+        "SOURce1:BURSt:INTernal:PERiod 0.01",
+        "SOURce1:BURSt:PHASe 0",
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:BURSt:STATe ON",
+    )
+    assert "OUTPut1 ON" not in result.commands
+
+
+def test_configure_sine_counted_burst_writes_tail_and_returns_canonical_result() -> None:
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = configure_sine(
+        USB_RESOURCE,
+        1000,
+        0.1,
+        burst=CountedBurstConfig(2, 0.01),
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.burst == CountedBurstConfig(2, 0.01)
+    assert result.output_state == "off"
+    assert session.writes[0] == "OUTPut1 OFF"
+    assert session.writes[-6:] == [
+        "SOURce1:BURSt:MODE TRIGgered",
+        "SOURce1:BURSt:NCYCles 2",
+        "SOURce1:BURSt:INTernal:PERiod 0.01",
+        "SOURce1:BURSt:PHASe 0",
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:BURSt:STATe ON",
+    ]
+    assert "OUTPut1 ON" not in session.writes
+
+
+def test_invalid_counted_burst_fails_before_visa_io() -> None:
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError):
+        configure_sine(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            burst=CountedBurstConfig(2, 0.001),
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == []
+    assert session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("runner", "arguments"),
+    [
+        (dry_run_sine, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_square, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_ramp, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_triangle, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_pulse, ("keysight-33521b", 1000, 0.1, 0.0001)),
+        (dry_run_prbs, ("keysight-33521b", 1000, 0.1)),
+    ],
+)
+def test_counted_burst_supported_static_carriers_share_tail(runner, arguments) -> None:
+    result = runner(*arguments, burst=CountedBurstConfig(2, 0.01))
+
+    assert result.commands[-1] == "SOURce1:BURSt:STATe ON"
+    assert result.burst == CountedBurstConfig(2, 0.01)
+
+
+@pytest.mark.parametrize(
+    "burst",
+    [
+        CountedBurstConfig(None, 1),
+        CountedBurstConfig(1, None),
+        CountedBurstConfig(True, 1),
+        CountedBurstConfig(0, 1),
+        CountedBurstConfig(100_000_001, 1),
+        CountedBurstConfig(1, 0),
+        CountedBurstConfig(1, 8001),
+        CountedBurstConfig(1, float("nan")),
+        CountedBurstConfig(2, 0.001),
+    ],
+)
+def test_counted_burst_rejects_invalid_count_or_period(burst) -> None:
+    with pytest.raises(WaveformParameterError):
+        dry_run_sine("keysight-33521b", 1000, 0.1, burst=burst)
+
+
+@pytest.mark.parametrize("frequency", [0.002, 6_000_001])
+def test_counted_burst_rejects_sine_frequency_limits(frequency) -> None:
+    with pytest.raises(WaveformParameterError):
+        dry_run_sine(
+            "keysight-33521b",
+            frequency,
+            0.1,
+            burst=CountedBurstConfig(1, 8000),
+        )
+
+
+def test_counted_burst_prbs_count_represents_bits_for_minimum_period() -> None:
+    result = dry_run_prbs(
+        "keysight-33521b",
+        1000,
+        0.1,
+        burst=CountedBurstConfig(8, 0.008001),
+    )
+    assert result.burst == CountedBurstConfig(8, 0.008001)
+
+    with pytest.raises(WaveformParameterError):
+        dry_run_prbs(
+            "keysight-33521b",
+            1000,
+            0.1,
+            burst=CountedBurstConfig(8, 0.008),
+        )
+
+
+@pytest.mark.parametrize(
+    "modulation",
+    [
+        {"am": AMConfig(100, 50)},
+        {"fm": FMConfig(100, 100)},
+        {"pm": PMConfig(10, 90)},
+        {"fsk": FSKConfig(2000, 10)},
+        {"bpsk": BPSKConfig(180, 10)},
+    ],
+)
+def test_counted_burst_rejects_sine_modulation(modulation) -> None:
+    with pytest.raises(WaveformParameterError):
+        dry_run_sine(
+            "keysight-33521b",
+            1000,
+            0.1,
+            burst=CountedBurstConfig(2, 0.01),
+            **modulation,
+        )
+
+
+def test_counted_burst_rejects_pulse_pwm() -> None:
+    with pytest.raises(WaveformParameterError):
+        dry_run_pulse(
+            "keysight-33521b",
+            1000,
+            0.1,
+            0.0001,
+            pwm=PWMConfig(5, 0.00002),
+            burst=CountedBurstConfig(2, 0.01),
+        )
 
 
 def test_dry_run_prbs_rejects_edge_time_longer_than_bit_period():
