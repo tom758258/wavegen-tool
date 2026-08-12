@@ -70,6 +70,8 @@ ERROR_QUEUE_NO_ERROR_CODE = 0
 RAMP_TRIANGLE_MAX_FREQUENCY_HZ = 200_000.0
 FM_MAX_DEVIATION_HZ = 15_000_000.0
 MODULATION_MIN_FREQUENCY_HZ = 0.000001
+FSK_MIN_RATE_HZ = 0.000125
+FSK_MAX_RATE_HZ = 1_000_000.0
 STATUS_QUERIES = (
     "OUTPut1?",
     "SOURce1:FUNCtion?",
@@ -293,6 +295,14 @@ class PMConfig:
 
 
 @dataclass(frozen=True)
+class FSKConfig:
+    """Internal frequency-shift-keying settings."""
+
+    hop_frequency_hz: object
+    rate_hz: object
+
+
+@dataclass(frozen=True)
 class SineConfigurationResult:
     """A successful sine configuration."""
 
@@ -310,6 +320,7 @@ class SineConfigurationResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -330,6 +341,7 @@ class SineDryRunResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -539,6 +551,7 @@ class SquareConfigurationResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -560,6 +573,7 @@ class SquareDryRunResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -581,6 +595,7 @@ class RampConfigurationResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -602,6 +617,7 @@ class RampDryRunResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -622,6 +638,7 @@ class TriangleConfigurationResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -642,6 +659,7 @@ class TriangleDryRunResult:
     am: AMConfig | None = None
     fm: FMConfig | None = None
     pm: PMConfig | None = None
+    fsk: FSKConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -1435,6 +1453,7 @@ def configure_sine(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -1444,7 +1463,7 @@ def configure_sine(
     def prepare_configuration(
         capabilities: WavegenCapabilities,
     ) -> tuple[tuple[object, ...], tuple[str, ...]]:
-        _validate_modulation_exclusive(am, fm, pm)
+        _validate_modulation_exclusive(am, fm, pm, fsk)
         prepared = _prepare_sine(
             frequency_hz,
             amplitude_vpp,
@@ -1470,12 +1489,18 @@ def configure_sine(
             pm,
             capabilities=capabilities,
         )
+        normalized_fsk, fsk_commands = _prepare_fsk(
+            "sine",
+            fsk,
+            capabilities=capabilities,
+        )
         return (
             *prepared[:-1],
             normalized_am,
             normalized_fm,
             normalized_pm,
-        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands)
+            normalized_fsk,
+        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands, *fsk_commands)
 
     context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
@@ -1496,6 +1521,7 @@ def configure_sine(
         normalized_am,
         normalized_fm,
         normalized_pm,
+        normalized_fsk,
     ) = prepared
     return SineConfigurationResult(
         resource=context.resource,
@@ -1511,6 +1537,7 @@ def configure_sine(
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -1526,6 +1553,7 @@ def dry_run_sine(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
 
@@ -1534,7 +1562,7 @@ def dry_run_sine(
         channel, capabilities, model_info.canonical_model
     )
 
-    _validate_modulation_exclusive(am, fm, pm)
+    _validate_modulation_exclusive(am, fm, pm, fsk)
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_sine(
         frequency_hz,
         amplitude_vpp,
@@ -1560,6 +1588,11 @@ def dry_run_sine(
         pm,
         capabilities=capabilities,
     )
+    normalized_fsk, fsk_commands = _prepare_fsk(
+        "sine",
+        fsk,
+        capabilities=capabilities,
+    )
     return SineDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -1569,13 +1602,14 @@ def dry_run_sine(
         load=normalized_load,
         phase_deg=phase,
         commands=_channelize_commands(
-            (*commands, *am_commands, *fm_commands, *pm_commands),
+            (*commands, *am_commands, *fm_commands, *pm_commands, *fsk_commands),
             selected_channel,
         ),
         channel=selected_channel,
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -2433,6 +2467,7 @@ def _prepare_square_sweep(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2545,6 +2580,7 @@ def _prepare_ramp_sweep(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2653,6 +2689,7 @@ def _prepare_triangle_sweep(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2757,6 +2794,7 @@ def _prepare_sine_sweep(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2823,10 +2861,11 @@ def _validate_modulation_exclusive(
     am: AMConfig | None,
     fm: FMConfig | None,
     pm: PMConfig | None,
+    fsk: FSKConfig | None,
 ) -> None:
-    if sum(config is not None for config in (am, fm, pm)) > 1:
+    if sum(config is not None for config in (am, fm, pm, fsk)) > 1:
         raise WaveformParameterError(
-            "AM, FM, and PM cannot be configured at the same time."
+            "AM, FM, PM, and FSK cannot be configured at the same time."
         )
 
 
@@ -2999,6 +3038,52 @@ def _prepare_pm(
     return normalized, commands
 
 
+def _prepare_fsk(
+    carrier: str,
+    config: FSKConfig | None,
+    *,
+    capabilities: WavegenCapabilities,
+) -> tuple[FSKConfig | None, tuple[str, ...]]:
+    if config is None:
+        return None, ()
+    if not isinstance(config, FSKConfig):
+        raise WaveformParameterError("FSK configuration must use FSKConfig.")
+    if carrier not in {"sine", "square", "ramp", "triangle"}:
+        raise WaveformParameterError(
+            f"{carrier.upper()} carrier is not supported for FSK configuration."
+        )
+
+    hop_frequency = _normalize_finite_number(
+        config.hop_frequency_hz,
+        "hop frequency",
+        waveform="FSK",
+    )
+    rate = _normalize_finite_number(config.rate_hz, "rate", waveform="FSK")
+    maximum_frequency = (
+        capabilities.max_sine_square_pulse_noise_frequency_hz
+        if carrier in {"sine", "square"}
+        else RAMP_TRIANGLE_MAX_FREQUENCY_HZ
+    )
+    if not MODULATION_MIN_FREQUENCY_HZ <= hop_frequency <= maximum_frequency:
+        raise WaveformParameterError(
+            "FSK hop frequency must be between 0.000001 Hz and "
+            f"{_format_scpi_number(maximum_frequency)} Hz."
+        )
+    if not FSK_MIN_RATE_HZ <= rate <= FSK_MAX_RATE_HZ:
+        raise WaveformParameterError(
+            "FSK rate must be between 0.000125 Hz and 1000000 Hz."
+        )
+
+    normalized = FSKConfig(hop_frequency_hz=hop_frequency, rate_hz=rate)
+    commands = (
+        "SOURce1:FSKey:SOURce INTernal",
+        f"SOURce1:FSKey:FREQuency {_format_scpi_number(hop_frequency)}",
+        f"SOURce1:FSKey:INTernal:RATE {_format_scpi_number(rate)}",
+        "SOURce1:FSKey:STATe ON",
+    )
+    return normalized, commands
+
+
 def _prepare_sine(
     frequency_hz: object,
     amplitude_vpp: object,
@@ -3030,6 +3115,7 @@ def _prepare_sine(
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
             "SOURce1:PM:STATe OFF",
+            "SOURce1:FSKey:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3064,6 +3150,7 @@ def configure_square(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3073,7 +3160,7 @@ def configure_square(
     def prepare_configuration(
         capabilities: WavegenCapabilities,
     ) -> tuple[tuple[object, ...], tuple[str, ...]]:
-        _validate_modulation_exclusive(am, fm, pm)
+        _validate_modulation_exclusive(am, fm, pm, fsk)
         prepared = _prepare_square(
             frequency_hz,
             amplitude_vpp,
@@ -3089,7 +3176,21 @@ def configure_square(
             fm,
             capabilities=capabilities,
         )
-        if normalized_fm is not None:
+        normalized_fsk, fsk_commands = _prepare_fsk(
+            "square",
+            fsk,
+            capabilities=capabilities,
+        )
+        if normalized_fm is not None or normalized_fsk is not None:
+            duty_cycle_validation_frequency = prepared[0]
+            if normalized_fm is not None:
+                duty_cycle_validation_frequency = (
+                    prepared[0] + normalized_fm.deviation_hz
+                )
+            if normalized_fsk is not None:
+                duty_cycle_validation_frequency = max(
+                    prepared[0], normalized_fsk.hop_frequency_hz
+                )
             prepared = _prepare_square(
                 frequency_hz,
                 amplitude_vpp,
@@ -3098,9 +3199,7 @@ def configure_square(
                 load,
                 phase_deg,
                 capabilities=capabilities,
-                duty_cycle_validation_frequency_hz=(
-                    prepared[0] + normalized_fm.deviation_hz
-                ),
+                duty_cycle_validation_frequency_hz=duty_cycle_validation_frequency,
             )
         normalized_am, am_commands = _prepare_am(
             "square",
@@ -3118,7 +3217,8 @@ def configure_square(
             normalized_am,
             normalized_fm,
             normalized_pm,
-        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands)
+            normalized_fsk,
+        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands, *fsk_commands)
 
     context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
@@ -3140,6 +3240,7 @@ def configure_square(
         normalized_am,
         normalized_fm,
         normalized_pm,
+        normalized_fsk,
     ) = prepared
     return SquareConfigurationResult(
         resource=context.resource,
@@ -3156,6 +3257,7 @@ def configure_square(
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -3172,6 +3274,7 @@ def dry_run_square(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
 ) -> SquareDryRunResult:
     """Preview a validated Channel 1 square configuration without VISA I/O."""
 
@@ -3179,7 +3282,7 @@ def dry_run_square(
     selected_channel = _validate_channel(
         channel, capabilities, model_info.canonical_model
     )
-    _validate_modulation_exclusive(am, fm, pm)
+    _validate_modulation_exclusive(am, fm, pm, fsk)
     (
         frequency,
         amplitude,
@@ -3203,7 +3306,19 @@ def dry_run_square(
         fm,
         capabilities=capabilities,
     )
-    if normalized_fm is not None:
+    normalized_fsk, fsk_commands = _prepare_fsk(
+        "square",
+        fsk,
+        capabilities=capabilities,
+    )
+    if normalized_fm is not None or normalized_fsk is not None:
+        duty_cycle_validation_frequency = frequency
+        if normalized_fm is not None:
+            duty_cycle_validation_frequency = frequency + normalized_fm.deviation_hz
+        if normalized_fsk is not None:
+            duty_cycle_validation_frequency = max(
+                frequency, normalized_fsk.hop_frequency_hz
+            )
         (
             frequency,
             amplitude,
@@ -3220,9 +3335,7 @@ def dry_run_square(
             load,
             phase_deg,
             capabilities=capabilities,
-            duty_cycle_validation_frequency_hz=(
-                frequency + normalized_fm.deviation_hz
-            ),
+            duty_cycle_validation_frequency_hz=duty_cycle_validation_frequency,
         )
     normalized_am, am_commands = _prepare_am(
         "square",
@@ -3245,13 +3358,14 @@ def dry_run_square(
         load=normalized_load,
         phase_deg=phase,
         commands=_channelize_commands(
-            (*commands, *am_commands, *fm_commands, *pm_commands),
+            (*commands, *am_commands, *fm_commands, *pm_commands, *fsk_commands),
             selected_channel,
         ),
         channel=selected_channel,
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -3327,6 +3441,7 @@ def _prepare_square(
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
             "SOURce1:PM:STATe OFF",
+            "SOURce1:FSKey:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3371,6 +3486,7 @@ def configure_ramp(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3380,7 +3496,7 @@ def configure_ramp(
     def prepare_configuration(
         capabilities: WavegenCapabilities,
     ) -> tuple[tuple[object, ...], tuple[str, ...]]:
-        _validate_modulation_exclusive(am, fm, pm)
+        _validate_modulation_exclusive(am, fm, pm, fsk)
         prepared = _prepare_ramp(
             frequency_hz,
             amplitude_vpp,
@@ -3406,12 +3522,18 @@ def configure_ramp(
             pm,
             capabilities=capabilities,
         )
+        normalized_fsk, fsk_commands = _prepare_fsk(
+            "ramp",
+            fsk,
+            capabilities=capabilities,
+        )
         return (
             *prepared[:-1],
             normalized_am,
             normalized_fm,
             normalized_pm,
-        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands)
+            normalized_fsk,
+        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands, *fsk_commands)
 
     context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
@@ -3433,6 +3555,7 @@ def configure_ramp(
         normalized_am,
         normalized_fm,
         normalized_pm,
+        normalized_fsk,
     ) = prepared
     return RampConfigurationResult(
         resource=context.resource,
@@ -3449,6 +3572,7 @@ def configure_ramp(
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -3465,6 +3589,7 @@ def dry_run_ramp(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
 ) -> RampDryRunResult:
     """Preview a validated Channel 1 ramp configuration without VISA I/O."""
 
@@ -3472,7 +3597,7 @@ def dry_run_ramp(
     selected_channel = _validate_channel(
         channel, capabilities, model_info.canonical_model
     )
-    _validate_modulation_exclusive(am, fm, pm)
+    _validate_modulation_exclusive(am, fm, pm, fsk)
     (
         frequency,
         amplitude,
@@ -3506,6 +3631,11 @@ def dry_run_ramp(
         pm,
         capabilities=capabilities,
     )
+    normalized_fsk, fsk_commands = _prepare_fsk(
+        "ramp",
+        fsk,
+        capabilities=capabilities,
+    )
     return RampDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -3516,13 +3646,14 @@ def dry_run_ramp(
         load=normalized_load,
         phase_deg=phase,
         commands=_channelize_commands(
-            (*commands, *am_commands, *fm_commands, *pm_commands),
+            (*commands, *am_commands, *fm_commands, *pm_commands, *fsk_commands),
             selected_channel,
         ),
         channel=selected_channel,
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -3571,6 +3702,7 @@ def _prepare_ramp(
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
             "SOURce1:PM:STATe OFF",
+            "SOURce1:FSKey:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3615,6 +3747,7 @@ def configure_triangle(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3624,7 +3757,7 @@ def configure_triangle(
     def prepare_configuration(
         capabilities: WavegenCapabilities,
     ) -> tuple[tuple[object, ...], tuple[str, ...]]:
-        _validate_modulation_exclusive(am, fm, pm)
+        _validate_modulation_exclusive(am, fm, pm, fsk)
         prepared = _prepare_triangle(
             frequency_hz,
             amplitude_vpp,
@@ -3649,12 +3782,18 @@ def configure_triangle(
             pm,
             capabilities=capabilities,
         )
+        normalized_fsk, fsk_commands = _prepare_fsk(
+            "triangle",
+            fsk,
+            capabilities=capabilities,
+        )
         return (
             *prepared[:-1],
             normalized_am,
             normalized_fm,
             normalized_pm,
-        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands)
+            normalized_fsk,
+        ), (*prepared[-1], *am_commands, *fm_commands, *pm_commands, *fsk_commands)
 
     context, prepared = _prepare_and_write_to_supported_instrument(
         resource,
@@ -3675,6 +3814,7 @@ def configure_triangle(
         normalized_am,
         normalized_fm,
         normalized_pm,
+        normalized_fsk,
     ) = prepared
     return TriangleConfigurationResult(
         resource=context.resource,
@@ -3690,6 +3830,7 @@ def configure_triangle(
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -3705,6 +3846,7 @@ def dry_run_triangle(
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
+    fsk: FSKConfig | None = None,
 ) -> TriangleDryRunResult:
     """Preview a validated Channel 1 triangle configuration without VISA I/O."""
 
@@ -3712,7 +3854,7 @@ def dry_run_triangle(
     selected_channel = _validate_channel(
         channel, capabilities, model_info.canonical_model
     )
-    _validate_modulation_exclusive(am, fm, pm)
+    _validate_modulation_exclusive(am, fm, pm, fsk)
     frequency, amplitude, offset, normalized_load, phase, commands = _prepare_triangle(
         frequency_hz,
         amplitude_vpp,
@@ -3737,6 +3879,11 @@ def dry_run_triangle(
         pm,
         capabilities=capabilities,
     )
+    normalized_fsk, fsk_commands = _prepare_fsk(
+        "triangle",
+        fsk,
+        capabilities=capabilities,
+    )
     return TriangleDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -3746,13 +3893,14 @@ def dry_run_triangle(
         load=normalized_load,
         phase_deg=phase,
         commands=_channelize_commands(
-            (*commands, *am_commands, *fm_commands, *pm_commands),
+            (*commands, *am_commands, *fm_commands, *pm_commands, *fsk_commands),
             selected_channel,
         ),
         channel=selected_channel,
         am=normalized_am,
         fm=normalized_fm,
         pm=normalized_pm,
+        fsk=normalized_fsk,
     )
 
 
@@ -3791,6 +3939,7 @@ def _prepare_triangle(
             "SOURce1:AM:STATe OFF",
             "SOURce1:FM:STATe OFF",
             "SOURce1:PM:STATe OFF",
+            "SOURce1:FSKey:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3899,7 +4048,7 @@ def configure_pulse(
                 ) from exc
 
         write_pulse_command(commands[0], None)
-        for command in commands[1:13]:
+        for command in commands[1:14]:
             write_pulse_command(command, "off")
 
         if edge_time is not None:
@@ -3915,7 +4064,7 @@ def configure_pulse(
                 "BOTH",
                 context,
             )
-            remaining_commands = commands[13:]
+            remaining_commands = commands[14:]
         else:
             leading_maximum = _query_pulse_verification(
                 session,
@@ -3929,7 +4078,7 @@ def configure_pulse(
                 "leading",
                 context,
             )
-            write_pulse_command(commands[13], "off")
+            write_pulse_command(commands[14], "off")
 
             trailing_maximum = _query_pulse_verification(
                 session,
@@ -3943,7 +4092,7 @@ def configure_pulse(
                 "trailing",
                 context,
             )
-            remaining_commands = commands[14:]
+            remaining_commands = commands[15:]
 
         for command in remaining_commands:
             write_pulse_command(command, "off")
@@ -4302,6 +4451,7 @@ def _prepare_pulse(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
@@ -4411,6 +4561,7 @@ def _prepare_dc(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:FUNCtion DC",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(voltage)}",
@@ -4544,6 +4695,7 @@ def _prepare_noise(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -4722,6 +4874,7 @@ def _prepare_prbs(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",

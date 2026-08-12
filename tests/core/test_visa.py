@@ -30,6 +30,7 @@ from wavegen_tool_core.visa import (
     AMConfig,
     DEFAULT_TIMEOUT_MS,
     FMConfig,
+    FSKConfig,
     PMConfig,
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
@@ -1063,6 +1064,7 @@ def test_configure_sine_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1092,11 +1094,12 @@ def test_configure_sine_internal_am_writes_ordered_normal_sequence_with_output_o
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.writes[:5] == [
+    assert session.writes[:6] == [
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     ]
     assert session.writes[-6:] == [
@@ -1289,11 +1292,12 @@ def test_supported_static_carriers_enter_internal_fm_path(
         fm=FMConfig(1_000, deviation),
     )
 
-    assert result.commands[:5] == (
+    assert result.commands[:6] == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     )
     assert result.commands[-5:] == (
@@ -1409,15 +1413,17 @@ def test_partial_fm_configuration_fails_before_visa_io(fm):
 
 
 @pytest.mark.parametrize(
-    ("am", "fm", "pm"),
+    ("am", "fm", "pm", "fsk"),
     [
-        (AMConfig(100, 50), FMConfig(100, 100), None),
-        (AMConfig(100, 50), None, PMConfig(10, 90)),
-        (None, FMConfig(100, 100), PMConfig(10, 90)),
-        (AMConfig(100, 50), FMConfig(100, 100), PMConfig(10, 90)),
+        (AMConfig(100, 50), FMConfig(100, 100), None, None),
+        (AMConfig(100, 50), None, PMConfig(10, 90), None),
+        (None, FMConfig(100, 100), PMConfig(10, 90), None),
+        (AMConfig(100, 50), None, None, FSKConfig(500, 100)),
+        (None, FMConfig(100, 100), None, FSKConfig(500, 100)),
+        (None, None, PMConfig(10, 90), FSKConfig(500, 100)),
     ],
 )
-def test_modulations_are_rejected_together_before_visa_io(am, fm, pm):
+def test_modulations_are_rejected_together_before_visa_io(am, fm, pm, fsk):
     manager = FakeManager()
     factory = RecordingFactory(manager)
 
@@ -1429,6 +1435,7 @@ def test_modulations_are_rejected_together_before_visa_io(am, fm, pm):
             am=am,
             fm=fm,
             pm=pm,
+            fsk=fsk,
             resource_manager_factory=factory,
         )
 
@@ -1482,11 +1489,12 @@ def test_dry_run_sine_internal_pm_returns_canonical_ordered_plan():
         pm=PMConfig(1_000, 90),
     )
 
-    assert result.commands[:5] == (
+    assert result.commands[:6] == (
         "OUTPut1 OFF",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
     )
     assert result.commands[-5:] == (
@@ -1592,6 +1600,86 @@ def test_invalid_pm_configuration_fails_closed_before_visa_io(pm):
     assert manager.session.writes == []
 
 
+def test_dry_run_sine_internal_fsk_returns_canonical_ordered_plan():
+    result = dry_run_sine(
+        "keysight-33521b",
+        1_000_000,
+        0.1,
+        fsk=FSKConfig(500_000, 80_000),
+    )
+
+    assert result.commands[:6] == (
+        "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
+        "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
+        "SOURce1:FREQuency:MODE CW",
+    )
+    assert result.commands[-4:] == (
+        "SOURce1:FSKey:SOURce INTernal",
+        "SOURce1:FSKey:FREQuency 500000",
+        "SOURce1:FSKey:INTernal:RATE 80000",
+        "SOURce1:FSKey:STATe ON",
+    )
+    assert result.fsk == FSKConfig(500_000.0, 80_000.0)
+    assert result.output_state == "off"
+    assert "OUTPut1 ON" not in result.commands
+
+
+@pytest.mark.parametrize("rate", [0.000124, 1_000_001])
+def test_invalid_fsk_rate_fails_before_visa_io(rate):
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="FSK rate"):
+        configure_sine(
+            USB_RESOURCE,
+            1_000_000,
+            0.1,
+            fsk=FSKConfig(500_000, rate),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
+def test_ramp_fsk_hop_uses_existing_200khz_function_limit():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="200000 Hz"):
+        configure_ramp(
+            USB_RESOURCE,
+            100_000,
+            0.1,
+            fsk=FSKConfig(200_001, 1_000),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
+def test_square_fsk_validates_duty_cycle_at_maximum_selected_frequency():
+    manager = FakeManager()
+    factory = RecordingFactory(manager)
+
+    with pytest.raises(WaveformParameterError, match="Square duty cycle"):
+        configure_square(
+            USB_RESOURCE,
+            10_000_000,
+            0.1,
+            duty_cycle_percent=25,
+            fsk=FSKConfig(19_000_000, 1_000),
+            resource_manager_factory=factory,
+        )
+
+    assert factory.calls == []
+    assert manager.session.writes == []
+
+
 def test_configure_sine_validation_policy_accepts_matching_33512b():
     session = FakeSession(
         response="Keysight Technologies,33512B,MY00000000,1.00"
@@ -1685,6 +1773,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
         "am",
         "fm",
         "pm",
+        "fsk",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -1697,6 +1786,7 @@ def test_dry_run_sine_returns_validated_hardware_free_command_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -1762,6 +1852,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -1826,6 +1917,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
                 "SOURce1:PM:STATe OFF",
+                "SOURce1:FSKey:STATe OFF",
                 "OUTPut1:LOAD INF",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion SQUare",
@@ -1853,6 +1945,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
                 "SOURce1:PM:STATe OFF",
+                "SOURce1:FSKey:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FREQuency MINimum",
@@ -1881,6 +1974,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
                 "SOURce1:AM:STATe OFF",
                 "SOURce1:FM:STATe OFF",
                 "SOURce1:PM:STATe OFF",
+                "SOURce1:FSKey:STATe OFF",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FREQuency MINimum",
@@ -2394,6 +2488,7 @@ def test_configure_square_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2438,6 +2533,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
         "am",
         "fm",
         "pm",
+        "fsk",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2451,6 +2547,7 @@ def test_dry_run_square_returns_validated_hardware_free_command_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2522,6 +2619,7 @@ def test_configure_ramp_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2567,6 +2665,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
         "am",
         "fm",
         "pm",
+        "fsk",
     )
     assert result.model == "33521B"
     assert result.canonical_model_id == "keysight-33521b"
@@ -2580,6 +2679,7 @@ def test_dry_run_ramp_returns_validated_hardware_free_command_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2617,6 +2717,7 @@ def test_triangle_configuration_and_dry_run_use_safe_direct_function_plan(
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2734,6 +2835,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -2755,6 +2857,7 @@ def test_configure_pulse_identifies_then_writes_safe_channel_one_sequence():
         ("write", "SOURce1:AM:STATe OFF"),
         ("write", "SOURce1:FM:STATe OFF"),
         ("write", "SOURce1:PM:STATe OFF"),
+        ("write", "SOURce1:FSKey:STATe OFF"),
         ("write", "SOURce1:FREQuency:MODE CW"),
         ("write", "OUTPut1:LOAD 50"),
         ("write", "SOURce1:VOLTage:UNIT VPP"),
@@ -2837,6 +2940,7 @@ def test_configure_pulse_supports_independent_edges_and_hardware_free_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -3020,6 +3124,7 @@ def test_dry_run_pulse_returns_validated_hardware_free_command_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
@@ -3149,6 +3254,7 @@ def test_configure_dc_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -3189,6 +3295,7 @@ def test_dry_run_dc_returns_validated_hardware_free_command_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:FUNCtion DC",
         "SOURce1:VOLTage:OFFSet 1.5",
@@ -3241,6 +3348,7 @@ def test_configure_noise_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -3289,6 +3397,7 @@ def test_dry_run_noise_returns_validated_hardware_free_command_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -3342,6 +3451,7 @@ def test_configure_prbs_identifies_then_writes_safe_channel_one_sequence():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",
@@ -3400,6 +3510,7 @@ def test_dry_run_prbs_returns_validated_hardware_free_command_preview():
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
         "OUTPut1:LOAD 50",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",

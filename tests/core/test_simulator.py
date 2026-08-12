@@ -7,6 +7,7 @@ import pytest
 from wavegen_tool_core import (
     AMConfig,
     FMConfig,
+    FSKConfig,
     PMConfig,
     SIMULATED_33521B_IDN,
     SIMULATED_33521B_RESOURCE,
@@ -668,7 +669,66 @@ def test_two_channel_simulator_pm_state_writes_and_queries() -> None:
     manager.close()
 
 
-def test_two_channel_simulator_sweep_clears_pm_only_on_selected_channel() -> None:
+def test_two_channel_simulator_fsk_state_queries_isolation_and_static_recovery() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1_000_000,
+        0.1,
+        channel=1,
+        fsk=FSKConfig(500_000, 80_000),
+        resource_manager_factory=factory,
+    )
+    result = configure_sine(
+        factory.resource_name,
+        2_000_000,
+        0.2,
+        channel=2,
+        fsk=FSKConfig(750_000, 40_000),
+        resource_manager_factory=factory,
+    )
+
+    assert result.fsk == FSKConfig(750_000.0, 40_000.0)
+    assert state.ch1.fsk_enabled is True
+    assert state.ch2.fsk_enabled is True
+    assert state.ch2.am_enabled is False
+    assert state.ch2.fm_enabled is False
+    assert state.ch2.pm_enabled is False
+    assert state.ch2.fsk_source == "internal"
+    assert state.ch2.fsk_hop_frequency_hz == 750_000.0
+    assert state.ch2.fsk_rate_hz == 40_000.0
+    assert state.ch2.output_enabled is False
+
+    manager = SimulatedResourceManager(state)
+    session = manager.open_resource(factory.resource_name)
+    assert session.query("SOURce2:FSKey:STATe?") == "1"
+    assert session.query("SOURce2:FSKey:SOURce?") == "internal"
+    assert session.query("SOURce2:FSKey:FREQuency?") == "750000"
+    assert session.query("SOURce2:FSKey:INTernal:RATE?") == "40000"
+    session.write("SOURce2:AM:STATe ON")
+    assert state.ch2.am_enabled is True
+    assert state.ch2.fsk_enabled is False
+    assert state.ch1.fsk_enabled is True
+    session.close()
+    manager.close()
+
+    configure_triangle(
+        factory.resource_name,
+        100_000,
+        0.2,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.fsk_enabled is True
+    assert state.ch2.fsk_enabled is False
+    assert state.ch2.active_function == "TRIANGLE"
+    assert state.ch2.output_enabled is False
+
+
+def test_two_channel_simulator_sweep_clears_selected_modulation_only() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     factory = SimulatedResourceManagerFactory(state)
 
@@ -685,7 +745,7 @@ def test_two_channel_simulator_sweep_clears_pm_only_on_selected_channel() -> Non
         80_000,
         0.1,
         channel=2,
-        pm=PMConfig(1_000, 180),
+        fsk=FSKConfig(100_000, 1_000),
         resource_manager_factory=factory,
     )
 
@@ -701,7 +761,7 @@ def test_two_channel_simulator_sweep_clears_pm_only_on_selected_channel() -> Non
     )
 
     assert state.ch1.pm_enabled is True
-    assert state.ch2.pm_enabled is False
+    assert state.ch2.fsk_enabled is False
     assert state.ch2.frequency_mode == "SWEep"
     assert state.ch1.output_enabled is False
     assert state.ch2.output_enabled is False

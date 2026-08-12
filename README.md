@@ -4,9 +4,9 @@ Wavegen Tool is a safety-focused Python toolkit for identifying explicitly
 selected waveform generators and performing bounded control through VISA. It
 supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
-Internal Sine amplitude, frequency, and phase modulation for supported static
-carriers, explicit output control, and sine, square, ramp, and triangle
-frequency sweeps for
+Internal Sine amplitude, frequency, and phase modulation and Internal FSK for
+supported static carriers, explicit output control, and sine, square, ramp,
+and triangle frequency sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
 
 ## Current Scope
@@ -25,6 +25,7 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Internal Sine frequency modulation for sine, square, ramp, and triangle
   carriers
 - Internal Sine phase modulation for sine, square, ramp, and triangle carriers
+- Internal frequency-shift keying for sine, square, ramp, and triangle carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
@@ -164,6 +165,36 @@ output off before changing modulation state and leaves it off; only the
 explicit `output --state on` command enables it. Ordinary static waveform and
 sweep configuration explicitly disable PM on the selected channel.
 
+## Configure Internal Frequency-Shift Keying
+
+The four static carrier commands `configure-sine`, `configure-square`,
+`configure-ramp`, and `configure-triangle` accept optional Internal FSK
+settings. The modulation source is fixed to Internal. Provide
+`--fsk-hop-frequency` and `--fsk-rate` together; partial option groups are
+rejected. AM, FM, PM, and FSK are mutually exclusive.
+
+Preview a representative Sine FSK configuration without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000000 `
+  --amplitude-vpp 0.1 `
+  --fsk-hop-frequency 500000 `
+  --fsk-rate 80000
+```
+
+FSK hop frequency must be at least 0.000001 Hz and cannot exceed the selected
+model and carrier function frequency capability. Sine and Square use the
+registered model frequency limit; Ramp and Triangle use 200000 Hz. Internal
+FSK rate must be from 0.000125 Hz through 1000000 Hz. Square duty-cycle
+validation accounts for the higher of the carrier and hop frequencies. FSK
+configuration turns the selected output off before changing modulation state
+and leaves it off; only the explicit `output --state on` command enables it.
+Ordinary static waveform and sweep configuration explicitly disable FSK on
+the selected channel.
+
 ## Requirements and Installation
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the
@@ -182,9 +213,9 @@ The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep commands, and explicit output control. Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep and
-Internal AM/FM/PM state; normal waveform configuration restores CW mode and
-disables AM, FM, and PM only on the selected channel. The 33521B profile rejects
-Channel 2.
+Internal AM/FM/PM/FSK state; normal waveform configuration restores CW mode
+and disables AM, FM, PM, and FSK only on the selected channel. The 33521B
+profile rejects Channel 2.
 Standalone configure commands can select the registered 33510B, 33512B, or
 33521B model; the default remains 33521B. The simulator never creates a real
 VISA ResourceManager, runs
@@ -553,8 +584,8 @@ preview and is not executed. The sine preview includes the explicit
 `UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run does not execute
 SCPI or access hardware. Live waveform configuration continues to require an
 explicit VISA resource, and configuration leaves output off.
-Internal AM, FM, and PM dry-runs use the same model capability, channel, and
-safety validation as the corresponding configuration command.
+Internal AM, FM, PM, and FSK dry-runs use the same model capability, channel,
+and safety validation as the corresponding configuration command.
 
 ## Configure a Selected-Channel Sine Frequency Sweep
 

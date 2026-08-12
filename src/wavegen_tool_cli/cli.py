@@ -11,6 +11,7 @@ from typing import Any, Sequence
 from wavegen_tool_core import (
     AMConfig,
     FMConfig,
+    FSKConfig,
     PMConfig,
     ErrorQueueQueryError,
     IdnQueryError,
@@ -263,6 +264,29 @@ def _pm_config_from_args(args: argparse.Namespace) -> PMConfig | None:
     )
 
 
+def _add_fsk_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--fsk-hop-frequency",
+        default=None,
+        help="Internal FSK hop frequency in Hz.",
+    )
+    parser.add_argument(
+        "--fsk-rate",
+        default=None,
+        help="Internal FSK rate in Hz.",
+    )
+
+
+def _fsk_config_from_args(args: argparse.Namespace) -> FSKConfig | None:
+    values = (args.fsk_hop_frequency, args.fsk_rate)
+    if all(value is None for value in values):
+        return None
+    return FSKConfig(
+        hop_frequency_hz=args.fsk_hop_frequency,
+        rate_hz=args.fsk_rate,
+    )
+
+
 def _normalize_max_reads_argument(value: str) -> int:
     try:
         max_reads = int(value)
@@ -440,6 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_am_arguments(sine_parser)
     _add_fm_arguments(sine_parser)
     _add_pm_arguments(sine_parser)
+    _add_fsk_arguments(sine_parser)
     sine_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -828,6 +853,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_am_arguments(square_parser)
     _add_fm_arguments(square_parser)
     _add_pm_arguments(square_parser)
+    _add_fsk_arguments(square_parser)
     square_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -891,6 +917,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_am_arguments(ramp_parser)
     _add_fm_arguments(ramp_parser)
     _add_pm_arguments(ramp_parser)
+    _add_fsk_arguments(ramp_parser)
     ramp_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -954,6 +981,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_am_arguments(triangle_parser)
     _add_fm_arguments(triangle_parser)
     _add_pm_arguments(triangle_parser)
+    _add_fsk_arguments(triangle_parser)
     triangle_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -1696,6 +1724,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1716,6 +1745,7 @@ def _run_sine_dry_run(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2102,6 +2132,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2123,6 +2154,7 @@ def _run_square_dry_run(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2181,6 +2213,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2202,6 +2235,7 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2259,6 +2293,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2279,6 +2314,7 @@ def _run_triangle_dry_run(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             fm=_fm_config_from_args(args),
             pm=_pm_config_from_args(args),
+            fsk=_fsk_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2950,6 +2986,17 @@ def _pm_payload_fields(result: Any) -> dict[str, object]:
     }
 
 
+def _fsk_payload_fields(result: Any) -> dict[str, object]:
+    fsk = getattr(result, "fsk", None)
+    if fsk is None:
+        return {}
+    return {
+        "fsk_enabled": True,
+        "fsk_hop_frequency_hz": fsk.hop_frequency_hz,
+        "fsk_rate_hz": fsk.rate_hz,
+    }
+
+
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     payload = {
         "success": True,
@@ -3049,6 +3096,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     payload.update(_am_payload_fields(result))
     payload.update(_fm_payload_fields(result))
     payload.update(_pm_payload_fields(result))
+    payload.update(_fsk_payload_fields(result))
     return payload
 
 
@@ -3071,6 +3119,7 @@ def _sine_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_am_payload_fields(result),
         **_fm_payload_fields(result),
         **_pm_payload_fields(result),
+        **_fsk_payload_fields(result),
         "error": None,
     }
 
@@ -3291,6 +3340,7 @@ def _square_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_am_payload_fields(result),
         **_fm_payload_fields(result),
         **_pm_payload_fields(result),
+        **_fsk_payload_fields(result),
         "error": None,
     }
 
@@ -3333,6 +3383,7 @@ def _ramp_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_am_payload_fields(result),
         **_fm_payload_fields(result),
         **_pm_payload_fields(result),
+        **_fsk_payload_fields(result),
         "error": None,
     }
 
@@ -3374,6 +3425,7 @@ def _triangle_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_am_payload_fields(result),
         **_fm_payload_fields(result),
         **_pm_payload_fields(result),
+        **_fsk_payload_fields(result),
         "error": None,
     }
 
@@ -3798,6 +3850,16 @@ def _human_pm_lines(result: Any) -> tuple[str, ...]:
     )
 
 
+def _human_fsk_lines(result: Any) -> tuple[str, ...]:
+    fsk = getattr(result, "fsk", None)
+    if fsk is None:
+        return ()
+    return (
+        f"FSK hop frequency (Hz): {fsk.hop_frequency_hz}",
+        f"FSK rate (Hz): {fsk.rate_hz}",
+    )
+
+
 def _human_control_success(action: str, result: Any) -> str:
     channel = getattr(result, "channel", 1)
     if action == "configure-sine":
@@ -3898,6 +3960,7 @@ def _human_control_success(action: str, result: Any) -> str:
     lines.extend(_human_am_lines(result))
     lines.extend(_human_fm_lines(result))
     lines.extend(_human_pm_lines(result))
+    lines.extend(_human_fsk_lines(result))
     return "\n".join(lines)
 
 
@@ -3913,6 +3976,7 @@ def _human_sine_dry_run_success(result: Any) -> str:
             *_human_am_lines(result),
             *_human_fm_lines(result),
             *_human_pm_lines(result),
+            *_human_fsk_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -4010,6 +4074,7 @@ def _human_square_dry_run_success(result: Any) -> str:
             *_human_am_lines(result),
             *_human_fm_lines(result),
             *_human_pm_lines(result),
+            *_human_fsk_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -4029,6 +4094,7 @@ def _human_ramp_dry_run_success(result: Any) -> str:
             *_human_am_lines(result),
             *_human_fm_lines(result),
             *_human_pm_lines(result),
+            *_human_fsk_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -4048,6 +4114,7 @@ def _human_triangle_dry_run_success(result: Any) -> str:
             *_human_am_lines(result),
             *_human_fm_lines(result),
             *_human_pm_lines(result),
+            *_human_fsk_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
