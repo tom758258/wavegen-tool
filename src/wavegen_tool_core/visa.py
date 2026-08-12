@@ -74,6 +74,8 @@ FSK_MIN_RATE_HZ = 0.000125
 FSK_MAX_RATE_HZ = 1_000_000.0
 BPSK_MIN_RATE_HZ = 0.001
 BPSK_MAX_RATE_HZ = 1_000_000.0
+PWM_MAX_DEVIATION_S = 500_000.0
+PULSE_MIN_WIDTH_S = 16e-9
 STATUS_QUERIES = (
     "OUTPut1?",
     "SOURce1:FUNCtion?",
@@ -310,6 +312,14 @@ class BPSKConfig:
 
     phase_shift_deg: object
     rate_hz: object
+
+
+@dataclass(frozen=True)
+class PWMConfig:
+    """Internal sine pulse-width-modulation settings."""
+
+    modulation_frequency_hz: object
+    deviation_s: object
 
 
 @dataclass(frozen=True)
@@ -700,6 +710,7 @@ class PulseConfigurationResult:
     trailing_edge_s: float | None = None
     channel: int = 1
     am: AMConfig | None = None
+    pwm: PWMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -722,6 +733,7 @@ class PulseDryRunResult:
     trailing_edge_s: float | None = None
     channel: int = 1
     am: AMConfig | None = None
+    pwm: PWMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -2509,6 +2521,7 @@ def _prepare_square_sweep(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2623,6 +2636,7 @@ def _prepare_ramp_sweep(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2733,6 +2747,7 @@ def _prepare_triangle_sweep(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2839,6 +2854,7 @@ def _prepare_sine_sweep(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
         start_frequency,
@@ -2907,10 +2923,11 @@ def _validate_modulation_exclusive(
     pm: PMConfig | None,
     fsk: FSKConfig | None,
     bpsk: BPSKConfig | None,
+    pwm: PWMConfig | None = None,
 ) -> None:
-    if sum(config is not None for config in (am, fm, pm, fsk, bpsk)) > 1:
+    if sum(config is not None for config in (am, fm, pm, fsk, bpsk, pwm)) > 1:
         raise WaveformParameterError(
-            "AM, FM, PM, FSK, and BPSK cannot be configured at the same time."
+            "AM, FM, PM, FSK, BPSK, and PWM cannot be configured at the same time."
         )
 
 
@@ -3167,6 +3184,64 @@ def _prepare_bpsk(
     return normalized, commands
 
 
+def _prepare_pwm(
+    carrier_frequency_hz: float,
+    pulse_width_s: float,
+    leading_edge_s: float,
+    trailing_edge_s: float,
+    config: PWMConfig | None,
+    *,
+    capabilities: WavegenCapabilities,
+) -> tuple[PWMConfig | None, tuple[str, ...]]:
+    if config is None:
+        return None, ()
+    if not isinstance(config, PWMConfig):
+        raise WaveformParameterError("PWM configuration must use PWMConfig.")
+
+    modulation_frequency = _normalize_internal_sine_modulation_frequency(
+        config.modulation_frequency_hz,
+        modulation="PWM",
+        capabilities=capabilities,
+    )
+    deviation = _normalize_finite_number(
+        config.deviation_s,
+        "width deviation",
+        waveform="PWM",
+    )
+    if not 0 <= deviation <= PWM_MAX_DEVIATION_S:
+        raise WaveformParameterError(
+            "PWM width deviation must be between 0 and 500000 seconds."
+        )
+
+    period = 1 / carrier_frequency_hz
+    edge_allowance = 0.8 * leading_edge_s + 0.8 * trailing_edge_s
+    maximum_deviation = min(
+        pulse_width_s - PULSE_MIN_WIDTH_S,
+        period - pulse_width_s - PULSE_MIN_WIDTH_S,
+        pulse_width_s - edge_allowance,
+        period - pulse_width_s - edge_allowance,
+    )
+    if maximum_deviation <= 0 or deviation >= maximum_deviation:
+        raise WaveformParameterError(
+            "PWM width deviation must be strictly less than the available "
+            "pulse width, period, and edge-time margin."
+        )
+
+    normalized = PWMConfig(
+        modulation_frequency_hz=modulation_frequency,
+        deviation_s=deviation,
+    )
+    commands = (
+        "SOURce1:PWM:SOURce INTernal",
+        "SOURce1:PWM:INTernal:FUNCtion SINusoid",
+        "SOURce1:PWM:INTernal:FREQuency "
+        f"{_format_scpi_number(modulation_frequency)}",
+        f"SOURce1:PWM:DEViation {_format_scpi_number(deviation)}",
+        "SOURce1:PWM:STATe ON",
+    )
+    return normalized, commands
+
+
 def _prepare_sine(
     frequency_hz: object,
     amplitude_vpp: object,
@@ -3200,6 +3275,7 @@ def _prepare_sine(
             "SOURce1:PM:STATe OFF",
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
+            "SOURce1:PWM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3549,6 +3625,7 @@ def _prepare_square(
             "SOURce1:PM:STATe OFF",
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
+            "SOURce1:PWM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -3833,6 +3910,7 @@ def _prepare_ramp(
             "SOURce1:PM:STATe OFF",
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
+            "SOURce1:PWM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -4093,6 +4171,7 @@ def _prepare_triangle(
             "SOURce1:PM:STATe OFF",
             "SOURce1:FSKey:STATe OFF",
             "SOURce1:BPSK:STATe OFF",
+            "SOURce1:PWM:STATe OFF",
             "SOURce1:FREQuency:MODE CW",
         )
         if include_cw_mode
@@ -4129,6 +4208,7 @@ def configure_pulse(
     *,
     channel: int = 1,
     am: AMConfig | None = None,
+    pwm: PWMConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -4138,6 +4218,7 @@ def configure_pulse(
     def prepare_configuration(
         capabilities: WavegenCapabilities,
     ) -> tuple[object, ...]:
+        _validate_modulation_exclusive(am, None, None, None, None, pwm)
         prepared = _prepare_pulse(
             frequency_hz,
             amplitude_vpp,
@@ -4155,7 +4236,21 @@ def configure_pulse(
             am,
             capabilities=capabilities,
         )
-        return (*prepared, normalized_am, am_commands)
+        normalized_pwm, pwm_commands = _prepare_pwm(
+            prepared[0],
+            prepared[3],
+            prepared[5],
+            prepared[6],
+            pwm,
+            capabilities=capabilities,
+        )
+        return (
+            *prepared,
+            normalized_am,
+            am_commands,
+            normalized_pwm,
+            pwm_commands,
+        )
 
     prepare_configuration(
         _preflight_capabilities_for_configuration(resource_manager_factory)
@@ -4185,9 +4280,12 @@ def configure_pulse(
             commands,
             normalized_am,
             am_commands,
+            normalized_pwm,
+            pwm_commands,
         ) = prepare_configuration(capabilities)
         commands = _channelize_commands(commands, selected_channel)
         am_commands = _channelize_commands(am_commands, selected_channel)
+        pwm_commands = _channelize_commands(pwm_commands, selected_channel)
         source_prefix = f"SOURce{selected_channel}"
         output_prefix = f"OUTPut{selected_channel}"
 
@@ -4201,7 +4299,7 @@ def configure_pulse(
                 ) from exc
 
         write_pulse_command(commands[0], None)
-        for command in commands[1:15]:
+        for command in commands[1:16]:
             write_pulse_command(command, "off")
 
         if edge_time is not None:
@@ -4217,7 +4315,7 @@ def configure_pulse(
                 "BOTH",
                 context,
             )
-            remaining_commands = commands[15:]
+            remaining_commands = commands[16:]
         else:
             leading_maximum = _query_pulse_verification(
                 session,
@@ -4231,7 +4329,7 @@ def configure_pulse(
                 "leading",
                 context,
             )
-            write_pulse_command(commands[15], "off")
+            write_pulse_command(commands[16], "off")
 
             trailing_maximum = _query_pulse_verification(
                 session,
@@ -4245,7 +4343,7 @@ def configure_pulse(
                 "trailing",
                 context,
             )
-            remaining_commands = commands[16:]
+            remaining_commands = commands[17:]
 
         for command in remaining_commands:
             write_pulse_command(command, "off")
@@ -4371,6 +4469,8 @@ def configure_pulse(
         )
         for command in am_commands:
             write_pulse_command(command, "off")
+        for command in pwm_commands:
+            write_pulse_command(command, "off")
         return (
             amplitude,
             offset,
@@ -4382,6 +4482,7 @@ def configure_pulse(
             readback_trailing,
             readback_phase,
             normalized_am,
+            normalized_pwm,
         )
 
     context, readback = _run_on_supported_instrument(
@@ -4404,6 +4505,7 @@ def configure_pulse(
         readback_trailing,
         readback_phase,
         normalized_am,
+        normalized_pwm,
     ) = readback
     shared_edge = readback_leading if edge_time is not None else None
     return PulseConfigurationResult(
@@ -4422,6 +4524,7 @@ def configure_pulse(
         trailing_edge_s=readback_trailing,
         channel=channel,
         am=normalized_am,
+        pwm=normalized_pwm,
     )
 
 
@@ -4439,6 +4542,7 @@ def dry_run_pulse(
     *,
     channel: int = 1,
     am: AMConfig | None = None,
+    pwm: PWMConfig | None = None,
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
 
@@ -4446,6 +4550,7 @@ def dry_run_pulse(
     selected_channel = _validate_channel(
         channel, capabilities, model_info.canonical_model
     )
+    _validate_modulation_exclusive(am, None, None, None, None, pwm)
     (
         frequency,
         amplitude,
@@ -4474,6 +4579,14 @@ def dry_run_pulse(
         am,
         capabilities=capabilities,
     )
+    normalized_pwm, pwm_commands = _prepare_pwm(
+        frequency,
+        pulse_width,
+        leading_edge,
+        trailing_edge,
+        pwm,
+        capabilities=capabilities,
+    )
     return PulseDryRunResult(
         model=model_info.canonical_model,
         canonical_model_id=model_info.model_id,
@@ -4486,9 +4599,12 @@ def dry_run_pulse(
         phase_deg=phase,
         leading_edge_s=leading_edge,
         trailing_edge_s=trailing_edge,
-        commands=_channelize_commands((*commands, *am_commands), selected_channel),
+        commands=_channelize_commands(
+            (*commands, *am_commands, *pwm_commands), selected_channel
+        ),
         channel=selected_channel,
         am=normalized_am,
+        pwm=normalized_pwm,
     )
 
 
@@ -4550,8 +4666,8 @@ def _prepare_pulse(
 
     period = 1 / frequency
     edge_margin = 0.625 * (leading_edge + trailing_edge)
-    minimum_width = max(16e-9, edge_margin)
-    maximum_width = period - max(16e-9, edge_margin)
+    minimum_width = max(PULSE_MIN_WIDTH_S, edge_margin)
+    maximum_width = period - max(PULSE_MIN_WIDTH_S, edge_margin)
     invalid_width_window = (
         minimum_width > maximum_width
         and not math.isclose(
@@ -4606,6 +4722,7 @@ def _prepare_pulse(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
@@ -4717,6 +4834,7 @@ def _prepare_dc(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:FUNCtion DC",
         f"SOURce1:VOLTage:OFFSet {_format_scpi_number(voltage)}",
@@ -4852,6 +4970,7 @@ def _prepare_noise(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion NOISe",
@@ -5032,6 +5151,7 @@ def _prepare_prbs(
         "SOURce1:PM:STATe OFF",
         "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
         f"OUTPut1:LOAD {load_command}",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion PRBS",

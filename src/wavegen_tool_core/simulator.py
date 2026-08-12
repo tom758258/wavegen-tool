@@ -71,6 +71,11 @@ class SimulatedChannelState:
     bpsk_source: str = "internal"
     bpsk_phase_shift_deg: float = 180.0
     bpsk_rate_hz: float = 10.0
+    pwm_enabled: bool = False
+    pwm_source: str = "internal"
+    pwm_internal_function: str = "sine"
+    pwm_internal_frequency_hz: float = 10.0
+    pwm_deviation_s: float = 1e-6
 
 
 class Simulated33521BState:
@@ -509,6 +514,7 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
+            ch_state.pwm_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FM:STATe ON":
             ch_state.fm_enabled = True
@@ -516,6 +522,7 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
+            ch_state.pwm_enabled = False
             return
         if command == f"SOURce{prefix_ch}:PM:STATe ON":
             ch_state.pm_enabled = True
@@ -523,6 +530,7 @@ class SimulatedResource:
             ch_state.fm_enabled = False
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
+            ch_state.pwm_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FSKey:STATe ON":
             ch_state.fsk_enabled = True
@@ -530,6 +538,7 @@ class SimulatedResource:
             ch_state.fm_enabled = False
             ch_state.pm_enabled = False
             ch_state.bpsk_enabled = False
+            ch_state.pwm_enabled = False
             return
         if command == f"SOURce{prefix_ch}:BPSK:STATe ON":
             ch_state.bpsk_enabled = True
@@ -537,6 +546,15 @@ class SimulatedResource:
             ch_state.fm_enabled = False
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
+            ch_state.pwm_enabled = False
+            return
+        if command == f"SOURce{prefix_ch}:PWM:STATe ON":
+            ch_state.pwm_enabled = True
+            ch_state.am_enabled = False
+            ch_state.fm_enabled = False
+            ch_state.pm_enabled = False
+            ch_state.fsk_enabled = False
+            ch_state.bpsk_enabled = False
             return
 
         exact_updates = {
@@ -587,6 +605,15 @@ class SimulatedResource:
                 "bpsk_source",
                 "internal",
             ),
+            f"SOURce{prefix_ch}:PWM:STATe OFF": ("pwm_enabled", False),
+            f"SOURce{prefix_ch}:PWM:SOURce INTernal": (
+                "pwm_source",
+                "internal",
+            ),
+            f"SOURce{prefix_ch}:PWM:INTernal:FUNCtion SINusoid": (
+                "pwm_internal_function",
+                "sine",
+            ),
             f"SOURce{prefix_ch}:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
             f"SOURce{prefix_ch}:SWEep:SPACing LOGarithmic": (
                 "sweep_spacing",
@@ -629,6 +656,11 @@ class SimulatedResource:
             (f"SOURce{prefix_ch}:FSKey:INTernal:RATE ", "fsk_rate_hz"),
             (f"SOURce{prefix_ch}:BPSK:PHASe ", "bpsk_phase_shift_deg"),
             (f"SOURce{prefix_ch}:BPSK:INTernal:RATE ", "bpsk_rate_hz"),
+            (
+                f"SOURce{prefix_ch}:PWM:INTernal:FREQuency ",
+                "pwm_internal_frequency_hz",
+            ),
+            (f"SOURce{prefix_ch}:PWM:DEViation ", "pwm_deviation_s"),
             (f"SOURce{prefix_ch}:FREQuency ", "frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STARt ", "sweep_start_frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STOP ", "sweep_stop_frequency_hz"),
@@ -788,6 +820,15 @@ class SimulatedResource:
             ),
             f"SOURce{prefix_ch}:BPSK:INTernal:RATE?": _format_number(
                 ch_state.bpsk_rate_hz
+            ),
+            f"SOURce{prefix_ch}:PWM:STATe?": "1" if ch_state.pwm_enabled else "0",
+            f"SOURce{prefix_ch}:PWM:SOURce?": ch_state.pwm_source,
+            f"SOURce{prefix_ch}:PWM:INTernal:FUNCtion?": ch_state.pwm_internal_function,
+            f"SOURce{prefix_ch}:PWM:INTernal:FREQuency?": _format_number(
+                ch_state.pwm_internal_frequency_hz
+            ),
+            f"SOURce{prefix_ch}:PWM:DEViation?": _format_number(
+                ch_state.pwm_deviation_s
             ),
         }
         try:

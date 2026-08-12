@@ -14,6 +14,7 @@ from wavegen_tool_core import (
     FMConfig,
     FSKConfig,
     PMConfig,
+    PWMConfig,
     ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
@@ -308,6 +309,29 @@ def _bpsk_config_from_args(args: argparse.Namespace) -> BPSKConfig | None:
     return BPSKConfig(
         phase_shift_deg=args.bpsk_phase_shift_deg,
         rate_hz=args.bpsk_rate,
+    )
+
+
+def _add_pwm_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--pwm-frequency",
+        default=None,
+        help="Internal sine PWM modulation frequency in Hz.",
+    )
+    parser.add_argument(
+        "--pwm-deviation-s",
+        default=None,
+        help="PWM pulse-width deviation in seconds.",
+    )
+
+
+def _pwm_config_from_args(args: argparse.Namespace) -> PWMConfig | None:
+    values = (args.pwm_frequency, args.pwm_deviation_s)
+    if all(value is None for value in values):
+        return None
+    return PWMConfig(
+        modulation_frequency_hz=args.pwm_frequency,
+        deviation_s=args.pwm_deviation_s,
     )
 
 
@@ -1071,6 +1095,7 @@ def build_parser() -> argparse.ArgumentParser:
         amplitude_help="Pulse amplitude in Vpp.",
     )
     _add_am_arguments(pulse_parser)
+    _add_pwm_arguments(pulse_parser)
     pulse_parser.add_argument(
         "--phase-deg",
         default=0.0,
@@ -2410,6 +2435,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             args.trailing_edge_s,
             channel=args.channel,
             am=_am_config_from_args(args),
+            pwm=_pwm_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2432,6 +2458,7 @@ def _run_pulse_dry_run(args: argparse.Namespace) -> int:
             args.trailing_edge_s,
             channel=args.channel,
             am=_am_config_from_args(args),
+            pwm=_pwm_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -3044,6 +3071,17 @@ def _bpsk_payload_fields(result: Any) -> dict[str, object]:
     }
 
 
+def _pwm_payload_fields(result: Any) -> dict[str, object]:
+    pwm = getattr(result, "pwm", None)
+    if pwm is None:
+        return {}
+    return {
+        "pwm_enabled": True,
+        "pwm_frequency_hz": pwm.modulation_frequency_hz,
+        "pwm_deviation_s": pwm.deviation_s,
+    }
+
+
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     payload = {
         "success": True,
@@ -3145,6 +3183,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     payload.update(_pm_payload_fields(result))
     payload.update(_fsk_payload_fields(result))
     payload.update(_bpsk_payload_fields(result))
+    payload.update(_pwm_payload_fields(result))
     return payload
 
 
@@ -3522,6 +3561,7 @@ def _pulse_dry_run_success_payload(result: Any) -> dict[str, object]:
         "output_state": result.output_state,
         **_am_payload_fields(result),
         **_fm_payload_fields(result),
+        **_pwm_payload_fields(result),
         "error": None,
     }
 
@@ -3922,6 +3962,16 @@ def _human_bpsk_lines(result: Any) -> tuple[str, ...]:
     )
 
 
+def _human_pwm_lines(result: Any) -> tuple[str, ...]:
+    pwm = getattr(result, "pwm", None)
+    if pwm is None:
+        return ()
+    return (
+        f"PWM modulation frequency (Hz): {pwm.modulation_frequency_hz}",
+        f"PWM width deviation (seconds): {pwm.deviation_s}",
+    )
+
+
 def _human_control_success(action: str, result: Any) -> str:
     channel = getattr(result, "channel", 1)
     if action == "configure-sine":
@@ -4024,6 +4074,7 @@ def _human_control_success(action: str, result: Any) -> str:
     lines.extend(_human_pm_lines(result))
     lines.extend(_human_fsk_lines(result))
     lines.extend(_human_bpsk_lines(result))
+    lines.extend(_human_pwm_lines(result))
     return "\n".join(lines)
 
 
@@ -4209,6 +4260,7 @@ def _human_pulse_dry_run_success(result: Any) -> str:
             *edge_lines,
             *_human_am_lines(result),
             *_human_fm_lines(result),
+            *_human_pwm_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,

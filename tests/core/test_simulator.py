@@ -10,6 +10,7 @@ from wavegen_tool_core import (
     FMConfig,
     FSKConfig,
     PMConfig,
+    PWMConfig,
     SIMULATED_33521B_IDN,
     SIMULATED_33521B_RESOURCE,
     Simulated33521BState,
@@ -791,6 +792,53 @@ def test_two_channel_simulator_bpsk_queries_isolation_and_static_recovery() -> N
     assert state.ch2.active_function == "TRIANGLE"
     assert state.ch2.output_enabled is False
 
+
+def test_two_channel_simulator_pwm_queries_and_selected_channel_recovery() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    state.ch1.pwm_enabled = True
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_pulse(
+        factory.resource_name,
+        1000,
+        1,
+        0.0001,
+        edge_time_s=50e-9,
+        channel=2,
+        pwm=PWMConfig(5, 0.00002),
+        resource_manager_factory=factory,
+    )
+
+    assert result.pwm == PWMConfig(5.0, 0.00002)
+    assert state.ch1.pwm_enabled is True
+    assert state.ch2.pwm_enabled is True
+    assert state.ch2.pwm_source == "internal"
+    assert state.ch2.pwm_internal_function == "sine"
+    assert state.ch2.pwm_internal_frequency_hz == 5.0
+    assert state.ch2.pwm_deviation_s == 0.00002
+    assert state.ch2.output_enabled is False
+
+    manager = SimulatedResourceManager(state)
+    session = manager.open_resource(factory.resource_name)
+    assert session.query("SOURce2:PWM:STATe?") == "1"
+    assert session.query("SOURce2:PWM:SOURce?") == "internal"
+    assert session.query("SOURce2:PWM:INTernal:FUNCtion?") == "sine"
+    assert session.query("SOURce2:PWM:INTernal:FREQuency?") == "5"
+    assert session.query("SOURce2:PWM:DEViation?") == "2e-05"
+    session.close()
+    manager.close()
+
+    configure_triangle(
+        factory.resource_name,
+        100_000,
+        0.2,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.pwm_enabled is True
+    assert state.ch2.pwm_enabled is False
+    assert state.ch2.active_function == "TRIANGLE"
 
 def test_two_channel_simulator_sweep_clears_selected_modulation_only() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")

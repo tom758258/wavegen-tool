@@ -5,7 +5,8 @@ selected waveform generators and performing bounded control through VISA. It
 supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
 Internal Sine amplitude, frequency, and phase modulation, Internal FSK, and
-Internal BPSK for supported static carriers, explicit output control, and sine,
+Internal BPSK for supported static carriers, Internal PWM for pulse carriers,
+explicit output control, and sine,
 square, ramp, and triangle frequency sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
 
@@ -27,6 +28,7 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Internal Sine phase modulation for sine, square, ramp, and triangle carriers
 - Internal frequency-shift keying for sine, square, ramp, and triangle carriers
 - Internal binary phase-shift keying for sine, square, ramp, and triangle carriers
+- Internal sine pulse-width modulation for pulse carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
@@ -222,6 +224,35 @@ output off before changing modulation state and leaves it off; only the
 explicit `output --state on` command enables it. Ordinary static waveform and
 sweep configuration explicitly disable BPSK on the selected channel.
 
+## Configure Internal Pulse-Width Modulation
+
+`configure-pulse` accepts optional Internal PWM settings. The modulation source
+is fixed to Internal and the internal modulating waveform is fixed to Sine.
+Provide `--pwm-frequency` and `--pwm-deviation-s` together; partial option
+groups are rejected. AM and PWM cannot be configured at the same time.
+
+Preview a representative Pulse PWM configuration without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-pulse `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000 `
+  --pulse-width-s 0.0001 `
+  --amplitude-vpp 1 `
+  --edge-time-s 0.00000005 `
+  --pwm-frequency 5 `
+  --pwm-deviation-s 0.00002
+```
+
+Internal PWM frequency must be at least 0.000001 Hz and cannot exceed the
+selected model profile's Sine frequency capability. Width deviation is in
+seconds, may be zero, and must remain strictly within the validated pulse
+width, period, and edge-time margins. PWM configuration turns the selected
+output off before changing modulation state and leaves it off; only the
+explicit `output --state on` command enables it. Ordinary static waveform and
+sweep configuration explicitly disable PWM on the selected channel.
+
 ## Requirements and Installation
 
 Python 3.10 or newer and [uv](https://docs.astral.sh/uv/) are required for the
@@ -240,8 +271,9 @@ The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep commands, and explicit output control. Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep and
-Internal AM/FM/PM/FSK/BPSK state; normal waveform configuration restores CW
-mode and disables AM, FM, PM, FSK, and BPSK only on the selected channel. The 33521B
+Internal AM/FM/PM/FSK/BPSK/PWM state; normal waveform configuration restores CW
+mode and disables AM, FM, PM, FSK, BPSK, and PWM only on the selected channel. The
+33521B
 profile rejects Channel 2.
 Standalone configure commands can select the registered 33510B, 33512B, or
 33521B model; the default remains 33521B. The simulator never creates a real
@@ -611,7 +643,7 @@ preview and is not executed. The sine preview includes the explicit
 `UNIT:ANGLe DEGree` and `SOURce1:PHASe 45` commands. Dry-run does not execute
 SCPI or access hardware. Live waveform configuration continues to require an
 explicit VISA resource, and configuration leaves output off.
-Internal AM, FM, PM, FSK, and BPSK dry-runs use the same model capability,
+Internal AM, FM, PM, FSK, BPSK, and PWM dry-runs use the same model capability,
 channel, and safety validation as the corresponding configuration command.
 
 ## Configure a Selected-Channel Sine Frequency Sweep
