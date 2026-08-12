@@ -45,6 +45,7 @@ from wavegen_tool_core.simulator import (
 from wavegen_tool_core.transport import classify_transport, detect_resource_transport
 from wavegen_tool_core.visa import (
     AMConfig,
+    BPSKConfig,
     FMConfig,
     FSKConfig,
     PMConfig,
@@ -118,6 +119,7 @@ from wavegen_tool_core.visa import (
 
 __all__ = [
     "AMConfig",
+    "BPSKConfig",
     "FMConfig",
     "FSKConfig",
     "PMConfig",

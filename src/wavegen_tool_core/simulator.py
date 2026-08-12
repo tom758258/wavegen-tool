@@ -67,6 +67,10 @@ class SimulatedChannelState:
     fsk_source: str = "internal"
     fsk_hop_frequency_hz: float = 100.0
     fsk_rate_hz: float = 10.0
+    bpsk_enabled: bool = False
+    bpsk_source: str = "internal"
+    bpsk_phase_shift_deg: float = 180.0
+    bpsk_rate_hz: float = 10.0
 
 
 class Simulated33521BState:
@@ -504,24 +508,35 @@ class SimulatedResource:
             ch_state.fm_enabled = False
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
+            ch_state.bpsk_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FM:STATe ON":
             ch_state.fm_enabled = True
             ch_state.am_enabled = False
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
+            ch_state.bpsk_enabled = False
             return
         if command == f"SOURce{prefix_ch}:PM:STATe ON":
             ch_state.pm_enabled = True
             ch_state.am_enabled = False
             ch_state.fm_enabled = False
             ch_state.fsk_enabled = False
+            ch_state.bpsk_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FSKey:STATe ON":
             ch_state.fsk_enabled = True
             ch_state.am_enabled = False
             ch_state.fm_enabled = False
             ch_state.pm_enabled = False
+            ch_state.bpsk_enabled = False
+            return
+        if command == f"SOURce{prefix_ch}:BPSK:STATe ON":
+            ch_state.bpsk_enabled = True
+            ch_state.am_enabled = False
+            ch_state.fm_enabled = False
+            ch_state.pm_enabled = False
+            ch_state.fsk_enabled = False
             return
 
         exact_updates = {
@@ -567,6 +582,11 @@ class SimulatedResource:
                 "fsk_source",
                 "internal",
             ),
+            f"SOURce{prefix_ch}:BPSK:STATe OFF": ("bpsk_enabled", False),
+            f"SOURce{prefix_ch}:BPSK:SOURce INTernal": (
+                "bpsk_source",
+                "internal",
+            ),
             f"SOURce{prefix_ch}:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
             f"SOURce{prefix_ch}:SWEep:SPACing LOGarithmic": (
                 "sweep_spacing",
@@ -607,6 +627,8 @@ class SimulatedResource:
             (f"SOURce{prefix_ch}:PM:DEViation ", "pm_deviation_deg"),
             (f"SOURce{prefix_ch}:FSKey:FREQuency ", "fsk_hop_frequency_hz"),
             (f"SOURce{prefix_ch}:FSKey:INTernal:RATE ", "fsk_rate_hz"),
+            (f"SOURce{prefix_ch}:BPSK:PHASe ", "bpsk_phase_shift_deg"),
+            (f"SOURce{prefix_ch}:BPSK:INTernal:RATE ", "bpsk_rate_hz"),
             (f"SOURce{prefix_ch}:FREQuency ", "frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STARt ", "sweep_start_frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STOP ", "sweep_stop_frequency_hz"),
@@ -758,6 +780,14 @@ class SimulatedResource:
             ),
             f"SOURce{prefix_ch}:FSKey:INTernal:RATE?": _format_number(
                 ch_state.fsk_rate_hz
+            ),
+            f"SOURce{prefix_ch}:BPSK:STATe?": "1" if ch_state.bpsk_enabled else "0",
+            f"SOURce{prefix_ch}:BPSK:SOURce?": ch_state.bpsk_source,
+            f"SOURce{prefix_ch}:BPSK:PHASe?": _format_number(
+                ch_state.bpsk_phase_shift_deg
+            ),
+            f"SOURce{prefix_ch}:BPSK:INTernal:RATE?": _format_number(
+                ch_state.bpsk_rate_hz
             ),
         }
         try:

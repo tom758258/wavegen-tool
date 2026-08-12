@@ -6,6 +6,7 @@ import pytest
 
 from wavegen_tool_core import (
     AMConfig,
+    BPSKConfig,
     FMConfig,
     FSKConfig,
     PMConfig,
@@ -728,6 +729,69 @@ def test_two_channel_simulator_fsk_state_queries_isolation_and_static_recovery()
     assert state.ch2.output_enabled is False
 
 
+def test_two_channel_simulator_bpsk_queries_isolation_and_static_recovery() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1_000_000,
+        0.1,
+        channel=1,
+        bpsk=BPSKConfig(180, 1_000),
+        resource_manager_factory=factory,
+    )
+    result = configure_sine(
+        factory.resource_name,
+        2_000_000,
+        0.2,
+        channel=2,
+        bpsk=BPSKConfig(90, 40_000),
+        resource_manager_factory=factory,
+    )
+
+    assert result.bpsk == BPSKConfig(90.0, 40_000.0)
+    assert state.ch1.bpsk_enabled is True
+    assert state.ch2.bpsk_enabled is True
+    assert state.ch2.am_enabled is False
+    assert state.ch2.fm_enabled is False
+    assert state.ch2.pm_enabled is False
+    assert state.ch2.fsk_enabled is False
+    assert state.ch2.bpsk_source == "internal"
+    assert state.ch2.bpsk_phase_shift_deg == 90.0
+    assert state.ch2.bpsk_rate_hz == 40_000.0
+    assert state.ch2.output_enabled is False
+
+    manager = SimulatedResourceManager(state)
+    session = manager.open_resource(factory.resource_name)
+    assert session.query("SOURce2:BPSK:STATe?") == "1"
+    assert session.query("SOURce2:BPSK:SOURce?") == "internal"
+    assert session.query("SOURce2:BPSK:PHASe?") == "90"
+    assert session.query("SOURce2:BPSK:INTernal:RATE?") == "40000"
+    session.write("SOURce2:FSKey:STATe ON")
+    assert state.ch2.fsk_enabled is True
+    assert state.ch2.bpsk_enabled is False
+    assert state.ch1.bpsk_enabled is True
+    session.write("SOURce2:BPSK:STATe ON")
+    assert state.ch2.bpsk_enabled is True
+    assert state.ch2.fsk_enabled is False
+    session.close()
+    manager.close()
+
+    configure_triangle(
+        factory.resource_name,
+        100_000,
+        0.2,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.bpsk_enabled is True
+    assert state.ch2.bpsk_enabled is False
+    assert state.ch2.active_function == "TRIANGLE"
+    assert state.ch2.output_enabled is False
+
+
 def test_two_channel_simulator_sweep_clears_selected_modulation_only() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     factory = SimulatedResourceManagerFactory(state)
@@ -745,7 +809,7 @@ def test_two_channel_simulator_sweep_clears_selected_modulation_only() -> None:
         80_000,
         0.1,
         channel=2,
-        fsk=FSKConfig(100_000, 1_000),
+        bpsk=BPSKConfig(180, 1_000),
         resource_manager_factory=factory,
     )
 
@@ -761,7 +825,7 @@ def test_two_channel_simulator_sweep_clears_selected_modulation_only() -> None:
     )
 
     assert state.ch1.pm_enabled is True
-    assert state.ch2.fsk_enabled is False
+    assert state.ch2.bpsk_enabled is False
     assert state.ch2.frequency_mode == "SWEep"
     assert state.ch1.output_enabled is False
     assert state.ch2.output_enabled is False
