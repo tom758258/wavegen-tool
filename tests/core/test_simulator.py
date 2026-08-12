@@ -69,6 +69,17 @@ def test_simulator_records_counted_burst_state_and_queries() -> None:
     assert session.query("SOURce1:BURSt:PHASe?") == "0"
 
 
+def test_simulator_burst_enable_resets_ordinary_phase() -> None:
+    state = Simulated33521BState()
+    state.ch1.phase_deg = 90.0
+    session = SimulatedResource(state)
+
+    session.write("SOURce1:BURSt:STATe ON")
+
+    assert state.ch1.burst_enabled is True
+    assert state.ch1.phase_deg == 0.0
+
+
 def test_two_channel_simulator_cleans_only_selected_channel_burst() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     state.ch1.burst_enabled = True

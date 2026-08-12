@@ -3838,6 +3838,43 @@ def test_invalid_counted_burst_fails_before_visa_io() -> None:
         (dry_run_ramp, ("keysight-33521b", 1000, 0.1)),
         (dry_run_triangle, ("keysight-33521b", 1000, 0.1)),
         (dry_run_pulse, ("keysight-33521b", 1000, 0.1, 0.0001)),
+    ],
+)
+def test_counted_burst_rejects_nonzero_waveform_phase(runner, arguments) -> None:
+    with pytest.raises(WaveformParameterError):
+        runner(
+            *arguments,
+            phase_deg=90,
+            burst=CountedBurstConfig(2, 0.01),
+        )
+
+
+def test_nonzero_counted_burst_phase_fails_before_visa_io() -> None:
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError):
+        configure_sine(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            phase_deg=90,
+            burst=CountedBurstConfig(2, 0.01),
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == []
+    assert session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("runner", "arguments"),
+    [
+        (dry_run_sine, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_square, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_ramp, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_triangle, ("keysight-33521b", 1000, 0.1)),
+        (dry_run_pulse, ("keysight-33521b", 1000, 0.1, 0.0001)),
         (dry_run_prbs, ("keysight-33521b", 1000, 0.1)),
     ],
 )

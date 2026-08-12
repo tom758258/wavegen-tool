@@ -569,6 +569,7 @@ class SimulatedResource:
             return
         if command == f"SOURce{prefix_ch}:BURSt:STATe ON":
             ch_state.burst_enabled = True
+            ch_state.phase_deg = 0.0
             ch_state.am_enabled = False
             ch_state.fm_enabled = False
             ch_state.pm_enabled = False

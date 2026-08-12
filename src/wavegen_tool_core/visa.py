@@ -1557,7 +1557,15 @@ def configure_sine(
         )
         normalized_bpsk, bpsk_commands = _prepare_bpsk("sine", bpsk)
         normalized_burst, burst_commands = _prepare_counted_burst(
-            "sine", prepared[0], burst, am, fm, pm, fsk, bpsk
+            "sine",
+            prepared[0],
+            burst,
+            am,
+            fm,
+            pm,
+            fsk,
+            bpsk,
+            ordinary_phase_deg=prepared[4],
         )
         return (
             *prepared[:-1],
@@ -1676,7 +1684,15 @@ def dry_run_sine(
     )
     normalized_bpsk, bpsk_commands = _prepare_bpsk("sine", bpsk)
     normalized_burst, burst_commands = _prepare_counted_burst(
-        "sine", frequency, burst, am, fm, pm, fsk, bpsk
+        "sine",
+        frequency,
+        burst,
+        am,
+        fm,
+        pm,
+        fsk,
+        bpsk,
+        ordinary_phase_deg=phase,
     )
     return SineDryRunResult(
         model=model_info.canonical_model,
@@ -2983,6 +2999,7 @@ def _prepare_counted_burst(
     carrier_rate_hz: float,
     config: CountedBurstConfig | None,
     *modulations: object,
+    ordinary_phase_deg: float | None = None,
 ) -> tuple[CountedBurstConfig | None, tuple[str, ...]]:
     if config is None:
         return None, ()
@@ -2993,6 +3010,10 @@ def _prepare_counted_burst(
     if any(modulation is not None for modulation in modulations):
         raise WaveformParameterError(
             "Counted Burst cannot be configured with AM, FM, PM, FSK, BPSK, or PWM."
+        )
+    if ordinary_phase_deg is not None and ordinary_phase_deg != 0.0:
+        raise WaveformParameterError(
+            "Waveform phase must be 0 degrees when Counted Burst is enabled."
         )
     if isinstance(config.count, bool) or not isinstance(config.count, int):
         raise WaveformParameterError(
@@ -3486,7 +3507,15 @@ def configure_square(
             capabilities=capabilities,
         )
         normalized_burst, burst_commands = _prepare_counted_burst(
-            "square", prepared[0], burst, am, fm, pm, fsk, bpsk
+            "square",
+            prepared[0],
+            burst,
+            am,
+            fm,
+            pm,
+            fsk,
+            bpsk,
+            ordinary_phase_deg=prepared[5],
         )
         return (
             *prepared[:-1],
@@ -3642,7 +3671,15 @@ def dry_run_square(
         capabilities=capabilities,
     )
     normalized_burst, burst_commands = _prepare_counted_burst(
-        "square", frequency, burst, am, fm, pm, fsk, bpsk
+        "square",
+        frequency,
+        burst,
+        am,
+        fm,
+        pm,
+        fsk,
+        bpsk,
+        ordinary_phase_deg=phase,
     )
     return SquareDryRunResult(
         model=model_info.canonical_model,
@@ -3840,7 +3877,15 @@ def configure_ramp(
         )
         normalized_bpsk, bpsk_commands = _prepare_bpsk("ramp", bpsk)
         normalized_burst, burst_commands = _prepare_counted_burst(
-            "ramp", prepared[0], burst, am, fm, pm, fsk, bpsk
+            "ramp",
+            prepared[0],
+            burst,
+            am,
+            fm,
+            pm,
+            fsk,
+            bpsk,
+            ordinary_phase_deg=prepared[5],
         )
         return (
             *prepared[:-1],
@@ -3969,7 +4014,15 @@ def dry_run_ramp(
     )
     normalized_bpsk, bpsk_commands = _prepare_bpsk("ramp", bpsk)
     normalized_burst, burst_commands = _prepare_counted_burst(
-        "ramp", frequency, burst, am, fm, pm, fsk, bpsk
+        "ramp",
+        frequency,
+        burst,
+        am,
+        fm,
+        pm,
+        fsk,
+        bpsk,
+        ordinary_phase_deg=phase,
     )
     return RampDryRunResult(
         model=model_info.canonical_model,
@@ -4139,7 +4192,15 @@ def configure_triangle(
         )
         normalized_bpsk, bpsk_commands = _prepare_bpsk("triangle", bpsk)
         normalized_burst, burst_commands = _prepare_counted_burst(
-            "triangle", prepared[0], burst, am, fm, pm, fsk, bpsk
+            "triangle",
+            prepared[0],
+            burst,
+            am,
+            fm,
+            pm,
+            fsk,
+            bpsk,
+            ordinary_phase_deg=prepared[4],
         )
         return (
             *prepared[:-1],
@@ -4256,7 +4317,15 @@ def dry_run_triangle(
     )
     normalized_bpsk, bpsk_commands = _prepare_bpsk("triangle", bpsk)
     normalized_burst, burst_commands = _prepare_counted_burst(
-        "triangle", frequency, burst, am, fm, pm, fsk, bpsk
+        "triangle",
+        frequency,
+        burst,
+        am,
+        fm,
+        pm,
+        fsk,
+        bpsk,
+        ordinary_phase_deg=phase,
     )
     return TriangleDryRunResult(
         model=model_info.canonical_model,
@@ -4401,7 +4470,12 @@ def configure_pulse(
             capabilities=capabilities,
         )
         normalized_burst, burst_commands = _prepare_counted_burst(
-            "pulse", prepared[0], burst, am, pwm
+            "pulse",
+            prepared[0],
+            burst,
+            am,
+            pwm,
+            ordinary_phase_deg=prepared[8],
         )
         return (
             *prepared,
@@ -4758,7 +4832,12 @@ def dry_run_pulse(
         capabilities=capabilities,
     )
     normalized_burst, burst_commands = _prepare_counted_burst(
-        "pulse", frequency, burst, am, pwm
+        "pulse",
+        frequency,
+        burst,
+        am,
+        pwm,
+        ordinary_phase_deg=phase,
     )
     return PulseDryRunResult(
         model=model_info.canonical_model,

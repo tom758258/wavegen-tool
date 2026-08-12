@@ -263,7 +263,7 @@ The six static carrier commands `configure-sine`, `configure-square`,
 `--burst-count` and `--burst-period-s` together. The mode is fixed to
 Triggered, the trigger source is fixed to Immediate, and Burst phase is fixed
 to 0 degrees. Count is a waveform-cycle count except for PRBS, where it is a
-bit count.
+bit count. When Counted Burst is enabled, `--phase-deg` must remain 0.
 
 Preview a representative sine Burst without VISA I/O:
 
