@@ -27,6 +27,8 @@ class SimulatedChannelState:
     active_function: str = "SIN"
     frequency_hz: float = 1000.0
     frequency_mode: str = "CW"
+    list_frequencies_hz: tuple[float, ...] = ()
+    list_dwell_s: float = 1.0
     sweep_start_frequency_hz: float = 1000.0
     sweep_stop_frequency_hz: float = 10000.0
     sweep_spacing: str = "linear"
@@ -611,6 +613,7 @@ class SimulatedResource:
             f"TRIGger{prefix_ch}:SOURce TIMer": ("trigger_source", "timer"),
             f"SOURce{prefix_ch}:FREQuency:MODE CW": ("frequency_mode", "CW"),
             f"SOURce{prefix_ch}:FREQuency:MODE SWEep": ("frequency_mode", "SWEep"),
+            f"SOURce{prefix_ch}:FREQuency:MODE LIST": ("frequency_mode", "LIST"),
             f"SOURce{prefix_ch}:AM:STATe OFF": ("am_enabled", False),
             f"SOURce{prefix_ch}:AM:DSSC OFF": ("am_type", "normal"),
             f"SOURce{prefix_ch}:AM:DSSC ON": ("am_type", "dssc"),
@@ -670,6 +673,16 @@ class SimulatedResource:
             setattr(ch_state, update[0], update[1])
             return
 
+        list_frequency_prefix = f"SOURce{prefix_ch}:LIST:FREQuency "
+        if command.startswith(list_frequency_prefix):
+            values = command[len(list_frequency_prefix) :].split(",")
+            if not values or any(not value for value in values):
+                raise ValueError("Malformed simulated frequency list.")
+            ch_state.list_frequencies_hz = tuple(
+                _parse_finite_number(value) for value in values
+            )
+            return
+
         edge_prefixes = (
             (
                 f"SOURce{prefix_ch}:FUNCtion:PULSe:TRANsition:LEADing ",
@@ -711,6 +724,7 @@ class SimulatedResource:
             (f"SOURce{prefix_ch}:SWEep:TIME ", "sweep_time_s"),
             (f"SOURce{prefix_ch}:SWEep:HTIMe ", "sweep_hold_time_s"),
             (f"SOURce{prefix_ch}:SWEep:RTIMe ", "sweep_return_time_s"),
+            (f"SOURce{prefix_ch}:LIST:DWELl ", "list_dwell_s"),
             (f"TRIGger{prefix_ch}:TIMer ", "trigger_timer_s"),
             (f"SOURce{prefix_ch}:FUNCtion:SQUare:DCYCle ", "square_duty_cycle_percent"),
             (f"SOURce{prefix_ch}:FUNCtion:RAMP:SYMMetry ", "ramp_symmetry_percent"),

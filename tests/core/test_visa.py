@@ -45,22 +45,28 @@ from wavegen_tool_core.visa import (
     configure_ramp,
     configure_ramp_sweep,
     configure_sine,
+    configure_sine_list_sweep,
     configure_sine_sweep,
     configure_square,
     configure_square_sweep,
     configure_triangle,
+    configure_triangle_list_sweep,
     configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
+    dry_run_ramp_list_sweep,
     dry_run_ramp_sweep,
     dry_run_sine,
+    dry_run_sine_list_sweep,
     dry_run_sine_sweep,
     dry_run_square,
+    dry_run_square_list_sweep,
     dry_run_square_sweep,
     dry_run_triangle,
+    dry_run_triangle_list_sweep,
     dry_run_triangle_sweep,
     identify_instrument,
     list_resources,
@@ -2406,6 +2412,148 @@ def test_two_channel_sweep_guard_fails_closed_before_writes(channel):
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
     ]
+    assert session.writes == []
+
+
+def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
+    session = FakeSession()
+    manager = FakeManager(session)
+    result = configure_sine_list_sweep(
+        USB_RESOURCE,
+        [7000, 1000, 7000],
+        0.005,
+        0.2,
+        0.1,
+        "high-z",
+        phase_deg=90,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+    expected_commands = (
+        "OUTPut1 OFF",
+        "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
+        "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
+        "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
+        "OUTPut1:LOAD INF",
+        "SOURce1:VOLTage:UNIT VPP",
+        "SOURce1:FUNCtion SIN",
+        "SOURce1:FREQuency 7000",
+        "SOURce1:VOLTage 0.2",
+        "SOURce1:VOLTage:OFFSet 0.1",
+        "UNIT:ANGLe DEGree",
+        "SOURce1:PHASe 90",
+        "SOURce1:LIST:FREQuency 7000,1000,7000",
+        "SOURce1:LIST:DWELl 0.005",
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:FREQuency:MODE LIST",
+    )
+    preview = dry_run_sine_list_sweep(
+        "keysight-33521b",
+        (7000, 1000, 7000),
+        0.005,
+        0.2,
+        0.1,
+        "high-z",
+        90,
+    )
+
+    assert session.writes == list(expected_commands)
+    assert preview.commands == expected_commands
+    assert result.frequencies_hz == (7000.0, 1000.0, 7000.0)
+    assert preview.frequencies_hz == result.frequencies_hz
+    assert result.dwell_s == preview.dwell_s == 0.005
+    assert result.output_state == preview.output_state == "off"
+    assert "OUTPut1 ON" not in expected_commands
+    assert expected_commands[-2] == "TRIGger1:SOURce IMMediate"
+    assert expected_commands[-1] == "SOURce1:FREQuency:MODE LIST"
+
+
+@pytest.mark.parametrize("point_count", [1, 128])
+def test_sine_list_sweep_accepts_boundary_point_counts(point_count) -> None:
+    frequencies = [1000] * point_count
+    result = dry_run_sine_list_sweep("keysight-33521b", frequencies, 1, 0.1)
+    assert result.frequencies_hz == tuple([1000.0] * point_count)
+
+
+@pytest.mark.parametrize("frequencies", [[], [1000] * 129, "1000,2000"])
+def test_sine_list_sweep_rejects_invalid_frequency_collections(frequencies) -> None:
+    with pytest.raises(WaveformParameterError):
+        dry_run_sine_list_sweep("keysight-33521b", frequencies, 1, 0.1)
+
+
+@pytest.mark.parametrize("dwell", [0.0000009, 1000.000001])
+def test_sine_list_sweep_rejects_out_of_range_dwell(dwell) -> None:
+    with pytest.raises(WaveformParameterError, match="dwell"):
+        dry_run_sine_list_sweep("keysight-33521b", [1000], dwell, 0.1)
+
+
+@pytest.mark.parametrize(
+    "dry_run",
+    [dry_run_ramp_list_sweep, dry_run_triangle_list_sweep],
+)
+def test_ramp_and_triangle_list_sweep_reject_above_200_khz(dry_run) -> None:
+    with pytest.raises(WaveformParameterError, match="200000 Hz"):
+        dry_run("keysight-33521b", [1000, 200001], 1, 0.1)
+
+
+@pytest.mark.parametrize(
+    "dry_run",
+    [dry_run_sine_list_sweep, dry_run_square_list_sweep],
+)
+def test_sine_and_square_list_sweep_respect_model_frequency_limit(dry_run) -> None:
+    with pytest.raises(WaveformParameterError, match="20000000 Hz"):
+        dry_run("keysight-33512b", [1000, 20000001], 1, 0.1)
+
+
+def test_square_list_sweep_validates_duty_at_maximum_frequency() -> None:
+    with pytest.raises(WaveformParameterError, match="30000000 Hz"):
+        dry_run_square_list_sweep(
+            "keysight-33521b",
+            [1000, 30000000],
+            1,
+            0.1,
+            duty_cycle_percent=25,
+        )
+
+
+def test_list_sweep_channel_two_plan_and_single_channel_rejection() -> None:
+    preview = dry_run_square_list_sweep(
+        "keysight-33512b", [1000, 3000], 0.005, 0.1, channel=2
+    )
+
+    assert preview.commands[-4:] == (
+        "SOURce2:LIST:FREQuency 1000,3000",
+        "SOURce2:LIST:DWELl 0.005",
+        "TRIGger2:SOURce IMMediate",
+        "SOURce2:FREQuency:MODE LIST",
+    )
+    assert all("SOURce1" not in command for command in preview.commands)
+    with pytest.raises(WaveformParameterError, match="Channel 2"):
+        dry_run_sine_list_sweep(
+            "keysight-33521b", [1000], 1, 0.1, channel=2
+        )
+
+
+def test_two_channel_list_sweep_guard_fails_before_writes() -> None:
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={"SOURce2:TRACk?": "ON"},
+    )
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformVerificationError, match="tracking is active"):
+        configure_triangle_list_sweep(
+            USB_RESOURCE,
+            [1000, 3000],
+            0.005,
+            0.1,
+            channel=2,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
     assert session.writes == []
 
 

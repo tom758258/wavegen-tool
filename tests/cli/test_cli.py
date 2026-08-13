@@ -3061,6 +3061,102 @@ def test_frequency_sweep_dry_run_cli_json_matrix(
     assert captured.err == ""
 
 
+@pytest.mark.parametrize(
+    ("command", "extra", "carrier_command", "specific_field", "specific_value"),
+    [
+        (
+            "configure-sine-list-sweep",
+            [],
+            "SOURce1:FUNCtion SIN",
+            None,
+            None,
+        ),
+        (
+            "configure-square-list-sweep",
+            ["--duty-cycle-percent", "25"],
+            "SOURce1:FUNCtion SQUare",
+            "duty_cycle_percent",
+            25.0,
+        ),
+        (
+            "configure-ramp-list-sweep",
+            ["--symmetry-percent", "40"],
+            "SOURce1:FUNCtion RAMP",
+            "symmetry_percent",
+            40.0,
+        ),
+        (
+            "configure-triangle-list-sweep",
+            [],
+            "SOURce1:FUNCtion TRIangle",
+            None,
+            None,
+        ),
+    ],
+)
+def test_frequency_list_sweep_cli_dry_run_commands(
+    capsys,
+    command,
+    extra,
+    carrier_command,
+    specific_field,
+    specific_value,
+) -> None:
+    exit_code = main(
+        [
+            command,
+            "--dry-run",
+            "--frequencies-hz",
+            "7000, 1000, 7000",
+            "--dwell-s",
+            "0.005",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+            *extra,
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["action"] == command
+    assert payload["frequencies_hz"] == [7000.0, 1000.0, 7000.0]
+    assert payload["dwell_s"] == 0.005
+    assert payload["output_state"] == "off"
+    assert carrier_command in payload["commands"]
+    assert payload["commands"][-2:] == [
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:FREQuency:MODE LIST",
+    ]
+    if specific_field is not None:
+        assert payload[specific_field] == specific_value
+
+
+@pytest.mark.parametrize("frequencies", ["", "1000,,3000", "1000,nope"])
+def test_frequency_list_sweep_cli_rejects_malformed_comma_list(
+    capsys,
+    frequencies,
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "configure-sine-list-sweep",
+                "--dry-run",
+                "--frequencies-hz",
+                frequencies,
+                "--dwell-s",
+                "0.005",
+                "--amplitude-vpp",
+                "0.1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert "non-empty comma-separated list of numbers" in captured.err
+    assert captured.out == ""
+
+
 def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None:
     exit_code = main(
         [

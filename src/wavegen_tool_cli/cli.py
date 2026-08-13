@@ -38,24 +38,32 @@ from wavegen_tool_core import (
     configure_prbs,
     configure_pulse,
     configure_ramp,
+    configure_ramp_list_sweep,
     configure_ramp_sweep,
     configure_sine,
+    configure_sine_list_sweep,
     configure_sine_sweep,
     configure_square,
+    configure_square_list_sweep,
     configure_square_sweep,
     configure_triangle,
+    configure_triangle_list_sweep,
     configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
+    dry_run_ramp_list_sweep,
     dry_run_ramp_sweep,
     dry_run_sine,
+    dry_run_sine_list_sweep,
     dry_run_sine_sweep,
     dry_run_square,
+    dry_run_square_list_sweep,
     dry_run_square_sweep,
     dry_run_triangle,
+    dry_run_triangle_list_sweep,
     dry_run_triangle_sweep,
     identify_instrument,
     list_resources,
@@ -123,6 +131,14 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (ErrorQueueQueryError, ExitCode.ERROR_QUEUE_QUERY_ERROR),
 )
 _REGISTERED_MODEL_IDS = registered_model_ids()
+_LIST_SWEEP_ACTIONS = frozenset(
+    {
+        "configure-sine-list-sweep",
+        "configure-square-list-sweep",
+        "configure-ramp-list-sweep",
+        "configure-triangle-list-sweep",
+    }
+)
 
 
 def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
@@ -410,6 +426,20 @@ def _normalize_max_reads_argument(value: str) -> int:
     return max_reads
 
 
+def _parse_frequencies_argument(value: str) -> tuple[float, ...]:
+    tokens = value.split(",")
+    if not tokens or any(not token.strip() for token in tokens):
+        raise argparse.ArgumentTypeError(
+            "frequencies must be a non-empty comma-separated list of numbers."
+        )
+    try:
+        return tuple(float(token.strip()) for token in tokens)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "frequencies must be a non-empty comma-separated list of numbers."
+        ) from exc
+
+
 def _normalize_control_port(value: str) -> int:
     try:
         control_port = int(value)
@@ -458,6 +488,69 @@ def _add_lifecycle_options(parser: argparse.ArgumentParser) -> None:
         type=_normalize_positive_milliseconds,
         default=1000,
         help="Single HTTP request timeout in milliseconds (default: 1000).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+
+def _add_list_sweep_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    waveform: str,
+) -> None:
+    _add_simulate_argument(parser)
+    _add_channel_argument(parser)
+    _add_validation_support_policy_argument(parser)
+    parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    parser.add_argument(
+        "--frequencies-hz",
+        required=True,
+        type=_parse_frequencies_argument,
+        help="Comma-separated frequency list in Hz (1-128 points).",
+    )
+    parser.add_argument(
+        "--dwell-s",
+        required=True,
+        help="Shared List Sweep dwell in seconds (range: 0.000001-1000).",
+    )
+    _add_voltage_input_arguments(
+        parser,
+        amplitude_help=f"{waveform} List Sweep amplitude in Vpp.",
+    )
+    parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    parser.add_argument(
+        "--model",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     parser.add_argument(
         "--json",
@@ -940,6 +1033,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    sine_list_sweep_parser = subparsers.add_parser(
+        "configure-sine-list-sweep",
+        help="Configure a validated selected-channel sine frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(sine_list_sweep_parser, waveform="Sine")
+
+    square_list_sweep_parser = subparsers.add_parser(
+        "configure-square-list-sweep",
+        help="Configure a validated selected-channel square frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(square_list_sweep_parser, waveform="Square")
+    square_list_sweep_parser.add_argument(
+        "--duty-cycle-percent",
+        default="50",
+        help="Square duty cycle percentage (default: 50).",
+    )
+
+    ramp_list_sweep_parser = subparsers.add_parser(
+        "configure-ramp-list-sweep",
+        help="Configure a validated selected-channel ramp frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(ramp_list_sweep_parser, waveform="Ramp")
+    ramp_list_sweep_parser.add_argument(
+        "--symmetry-percent",
+        default="100",
+        help="Ramp symmetry percentage (default: 100).",
+    )
+
+    triangle_list_sweep_parser = subparsers.add_parser(
+        "configure-triangle-list-sweep",
+        help="Configure a validated selected-channel triangle frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(triangle_list_sweep_parser, waveform="Triangle")
+
     square_parser = subparsers.add_parser(
         "configure-square",
         help="Configure a validated selected-channel square waveform with output off.",
@@ -1394,6 +1521,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set selected-channel output on or off.",
@@ -1573,6 +1701,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-square-sweep",
         "configure-ramp-sweep",
         "configure-triangle-sweep",
+        "configure-sine-list-sweep",
+        "configure-square-list-sweep",
+        "configure-ramp-list-sweep",
+        "configure-triangle-list-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -1665,6 +1797,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_ramp_sweep(args)
     if args.command == "configure-triangle-sweep":
         return _run_configure_triangle_sweep(args)
+    if args.command == "configure-sine-list-sweep":
+        return _run_configure_sine_list_sweep(args)
+    if args.command == "configure-square-list-sweep":
+        return _run_configure_square_list_sweep(args)
+    if args.command == "configure-ramp-list-sweep":
+        return _run_configure_ramp_list_sweep(args)
+    if args.command == "configure-triangle-list-sweep":
+        return _run_configure_triangle_list_sweep(args)
     if args.command == "configure-square":
         return _run_configure_square(args)
     if args.command == "configure-ramp":
@@ -2286,6 +2426,204 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
         )
     else:
         print(_human_triangle_sweep_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_configure_sine_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Sine",
+            lambda amplitude, offset: dry_run_sine_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Sine",
+        lambda amplitude, offset: configure_sine_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_configure_square_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Square",
+            lambda amplitude, offset: dry_run_square_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                args.duty_cycle_percent,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Square",
+        lambda amplitude, offset: configure_square_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            args.duty_cycle_percent,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_configure_ramp_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Ramp",
+            lambda amplitude, offset: dry_run_ramp_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                args.symmetry_percent,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Ramp",
+        lambda amplitude, offset: configure_ramp_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            args.symmetry_percent,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_configure_triangle_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Triangle",
+            lambda amplitude, offset: dry_run_triangle_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Triangle",
+        lambda amplitude, offset: configure_triangle_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_list_sweep_dry_run(
+    args: argparse.Namespace,
+    waveform: str,
+    operation: Any,
+) -> int:
+    try:
+        result = operation(*_resolve_cli_voltage_inputs(args, waveform))
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _list_sweep_dry_run_error_payload(args.command, exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _list_sweep_dry_run_internal_error_payload(args.command),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _list_sweep_dry_run_success_payload(args.command, result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_list_sweep_dry_run_success(result, waveform.casefold()))
     return int(ExitCode.SUCCESS)
 
 
@@ -3271,8 +3609,21 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "configure-noise",
         "configure-prbs",
         "output",
-    }:
+    } | _LIST_SWEEP_ACTIONS:
         payload["channel"] = getattr(result, "channel", 1)
+    if action in _LIST_SWEEP_ACTIONS:
+        payload.update(
+            frequencies_hz=list(result.frequencies_hz),
+            dwell_s=result.dwell_s,
+            amplitude_vpp=result.amplitude_vpp,
+            offset_v=result.offset_v,
+            phase_deg=result.phase_deg,
+            load=result.load,
+        )
+        if action == "configure-square-list-sweep":
+            payload["duty_cycle_percent"] = result.duty_cycle_percent
+        elif action == "configure-ramp-list-sweep":
+            payload["symmetry_percent"] = result.symmetry_percent
     if action in {
         "configure-sine-sweep",
         "configure-square-sweep",
@@ -3574,6 +3925,56 @@ def _triangle_sweep_dry_run_internal_error_payload() -> dict[str, object]:
     return {
         "success": False,
         "action": "configure-triangle-sweep",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _list_sweep_dry_run_success_payload(
+    action: str,
+    result: Any,
+) -> dict[str, object]:
+    payload = {
+        "success": True,
+        "action": action,
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "channel": result.channel,
+        "frequencies_hz": list(result.frequencies_hz),
+        "dwell_s": result.dwell_s,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+    if action == "configure-square-list-sweep":
+        payload["duty_cycle_percent"] = result.duty_cycle_percent
+    elif action == "configure-ramp-list-sweep":
+        payload["symmetry_percent"] = result.symmetry_percent
+    return payload
+
+
+def _list_sweep_dry_run_error_payload(
+    action: str,
+    error: WavegenError,
+) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": action,
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _list_sweep_dry_run_internal_error_payload(action: str) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": action,
         "mode": "dry-run",
         "error": "internal_error: unexpected internal failure",
     }
@@ -3902,7 +4303,7 @@ def _control_error_payload(
         "configure-noise",
         "configure-prbs",
         "output",
-    }:
+    } | _LIST_SWEEP_ACTIONS:
         payload["channel"] = channel
     return payload
 
@@ -4177,6 +4578,11 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = f"Channel {channel} ramp frequency sweep configured with output off."
     elif action == "configure-triangle-sweep":
         heading = f"Channel {channel} triangle frequency sweep configured with output off."
+    elif action in _LIST_SWEEP_ACTIONS:
+        waveform = action.removeprefix("configure-").removesuffix("-list-sweep")
+        heading = (
+            f"Channel {channel} {waveform} frequency List Sweep configured with output off."
+        )
     elif action == "configure-square":
         heading = f"Channel {channel} square waveform configured with output off."
     elif action == "configure-ramp":
@@ -4212,8 +4618,23 @@ def _human_control_success(action: str, result: Any) -> str:
         "configure-ramp",
         "configure-triangle",
         "configure-pulse",
-    }:
+    } | _LIST_SWEEP_ACTIONS:
         lines.append(f"Phase (degrees): {result.phase_deg}")
+    if action in _LIST_SWEEP_ACTIONS:
+        lines.extend(
+            (
+                "Frequencies (Hz): "
+                + ",".join(str(value) for value in result.frequencies_hz),
+                f"Dwell (seconds): {result.dwell_s}",
+                f"Amplitude (Vpp): {result.amplitude_vpp}",
+                f"Offset (V): {result.offset_v}",
+                f"Load: {result.load}",
+            )
+        )
+        if action == "configure-square-list-sweep":
+            lines.append(f"Duty cycle (percent): {result.duty_cycle_percent}")
+        elif action == "configure-ramp-list-sweep":
+            lines.append(f"Symmetry (percent): {result.symmetry_percent}")
     if action == "configure-sine-sweep":
         lines.extend(
             (
@@ -4382,6 +4803,35 @@ def _human_ramp_sweep_dry_run_success(result: Any) -> str:
 
 def _human_triangle_sweep_dry_run_success(result: Any) -> str:
     return _human_frequency_sweep_dry_run_success(result, "triangle")
+
+
+def _human_list_sweep_dry_run_success(result: Any, waveform: str) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    lines = [
+        f"Channel {result.channel} {waveform} frequency List Sweep dry-run completed; "
+        "no VISA I/O was performed.",
+        f"Target model: {result.model}",
+        f"Canonical model ID: {result.canonical_model_id}",
+        "Executed: no",
+        "Frequencies (Hz): " + ",".join(str(value) for value in result.frequencies_hz),
+        f"Dwell (seconds): {result.dwell_s}",
+        f"Amplitude (Vpp): {result.amplitude_vpp}",
+        f"Offset (V): {result.offset_v}",
+        f"Phase (degrees): {result.phase_deg}",
+        f"Load: {result.load}",
+    ]
+    if hasattr(result, "duty_cycle_percent"):
+        lines.append(f"Duty cycle (percent): {result.duty_cycle_percent}")
+    elif hasattr(result, "symmetry_percent"):
+        lines.append(f"Symmetry (percent): {result.symmetry_percent}")
+    lines.extend(
+        (
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+    return "\n".join(lines)
 
 
 def _human_square_dry_run_success(result: Any) -> str:
