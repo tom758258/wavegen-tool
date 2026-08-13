@@ -69,6 +69,7 @@ from wavegen_tool_core.visa import (
     query_status,
     read_error_queue,
     resolve_voltage_inputs,
+    send_bus_trigger,
     set_output,
 )
 
@@ -2021,6 +2022,91 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
     assert preview.channel == 1
 
 
+def test_sine_sweep_bus_and_timer_dry_run_plans() -> None:
+    bus = dry_run_sine_sweep(
+        "keysight-33521b",
+        1000,
+        10000,
+        "linear",
+        1,
+        0.1,
+        trigger_source="BUS",
+    )
+    timer = dry_run_sine_sweep(
+        "keysight-33521b",
+        1000,
+        10000,
+        "linear",
+        1,
+        0.1,
+        hold_time_s=1,
+        return_time_s=1,
+        trigger_source="timer",
+        trigger_timer_s=3,
+    )
+
+    assert bus.trigger_source == "bus"
+    assert bus.trigger_timer_s is None
+    assert bus.commands[-2:] == (
+        "TRIGger1:SOURce BUS",
+        "SOURce1:FREQuency:MODE SWEep",
+    )
+    assert timer.trigger_source == "timer"
+    assert timer.trigger_timer_s == 3.0
+    assert timer.commands[-3:] == (
+        "TRIGger1:TIMer 3",
+        "TRIGger1:SOURce TIMer",
+        "SOURce1:FREQuency:MODE SWEep",
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "timer"),
+    [
+        ("timer", None),
+        ("bus", 1),
+        ("immediate", 1),
+        ("timer", 0),
+        ("timer", 8001),
+        ("timer", True),
+        ("timer", float("nan")),
+        ("timer", 2.999999),
+    ],
+)
+def test_sine_sweep_rejects_invalid_trigger_options(source, timer) -> None:
+    with pytest.raises(WaveformParameterError):
+        dry_run_sine_sweep(
+            "keysight-33521b",
+            1000,
+            10000,
+            "linear",
+            1,
+            0.1,
+            hold_time_s=1,
+            return_time_s=1,
+            trigger_source=source,
+            trigger_timer_s=timer,
+        )
+
+
+def test_channel_two_sweep_timer_commands_are_channelized() -> None:
+    preview = dry_run_square_sweep(
+        "keysight-33512b",
+        1000,
+        10000,
+        "linear",
+        1,
+        0.1,
+        trigger_source="timer",
+        trigger_timer_s=1,
+        channel=2,
+    )
+
+    assert "TRIGger2:TIMer 1" in preview.commands
+    assert "TRIGger2:SOURce TIMer" in preview.commands
+    assert all("TRIGger1" not in command for command in preview.commands)
+
+
 @pytest.mark.parametrize(
     ("waveform", "specific_value", "expected_commands"),
     [
@@ -3811,6 +3897,90 @@ def test_configure_sine_counted_burst_writes_tail_and_returns_canonical_result()
         "SOURce1:BURSt:STATe ON",
     ]
     assert "OUTPut1 ON" not in session.writes
+
+
+def test_counted_burst_bus_and_timer_use_source_specific_tail() -> None:
+    bus = dry_run_sine(
+        "keysight-33521b",
+        1000,
+        0.1,
+        burst=CountedBurstConfig(2, trigger_source="bus"),
+    )
+    timer = dry_run_sine(
+        "keysight-33521b",
+        1000,
+        0.1,
+        burst=CountedBurstConfig(2, trigger_source="timer", trigger_timer_s=0.01),
+    )
+
+    assert bus.burst == CountedBurstConfig(2, trigger_source="bus")
+    assert "SOURce1:BURSt:INTernal:PERiod" not in "\n".join(bus.commands)
+    assert bus.commands[-5:] == (
+        "SOURce1:BURSt:MODE TRIGgered",
+        "SOURce1:BURSt:NCYCles 2",
+        "SOURce1:BURSt:PHASe 0",
+        "TRIGger1:SOURce BUS",
+        "SOURce1:BURSt:STATe ON",
+    )
+    assert timer.burst == CountedBurstConfig(
+        2,
+        trigger_source="timer",
+        trigger_timer_s=0.01,
+    )
+    assert "SOURce1:BURSt:INTernal:PERiod" not in "\n".join(timer.commands)
+    assert timer.commands[-6:] == (
+        "SOURce1:BURSt:MODE TRIGgered",
+        "SOURce1:BURSt:NCYCles 2",
+        "TRIGger1:TIMer 0.01",
+        "SOURce1:BURSt:PHASe 0",
+        "TRIGger1:SOURce TIMer",
+        "SOURce1:BURSt:STATe ON",
+    )
+
+
+def test_counted_burst_timer_reuses_minimum_duration_validation() -> None:
+    with pytest.raises(WaveformParameterError, match="too short"):
+        dry_run_sine(
+            "keysight-33521b",
+            1000,
+            0.1,
+            burst=CountedBurstConfig(
+                2,
+                trigger_source="timer",
+                trigger_timer_s=0.002,
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "burst",
+    [
+        CountedBurstConfig(2, trigger_source="immediate"),
+        CountedBurstConfig(2, 0.01, "bus"),
+        CountedBurstConfig(2, trigger_source="bus", trigger_timer_s=0.01),
+        CountedBurstConfig(2, 0.01, "timer", 0.01),
+        CountedBurstConfig(2, trigger_source="timer"),
+    ],
+)
+def test_counted_burst_rejects_incompatible_trigger_options(burst) -> None:
+    with pytest.raises(WaveformParameterError):
+        dry_run_sine("keysight-33521b", 1000, 0.1, burst=burst)
+
+
+def test_send_bus_trigger_writes_exactly_one_instrument_wide_command() -> None:
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    result = send_bus_trigger(
+        USB_RESOURCE,
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert result.identity.model == "33521B"
+    assert session.queries == [IDN_QUERY]
+    assert session.writes == ["*TRG"]
+    assert not any("OUTPut" in command for command in session.writes)
+    assert not any("WAI" in command or "OPC" in command for command in session.writes)
 
 
 def test_invalid_counted_burst_fails_before_visa_io() -> None:

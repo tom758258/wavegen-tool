@@ -46,6 +46,7 @@ from wavegen_tool_core.transport import classify_transport, detect_resource_tran
 from wavegen_tool_core.visa import (
     AMConfig,
     BPSKConfig,
+    BusTriggerResult,
     CountedBurstConfig,
     FMConfig,
     FSKConfig,
@@ -116,12 +117,14 @@ from wavegen_tool_core.visa import (
     query_status,
     read_error_queue,
     resolve_voltage_inputs,
+    send_bus_trigger,
     set_output,
 )
 
 __all__ = [
     "AMConfig",
     "BPSKConfig",
+    "BusTriggerResult",
     "CountedBurstConfig",
     "FMConfig",
     "FSKConfig",
@@ -227,6 +230,7 @@ __all__ = [
     "read_error_queue",
     "resolve_voltage_inputs",
     "resolve_supported_identity",
+    "send_bus_trigger",
     "set_output",
     "validate_backend_transport",
 ]

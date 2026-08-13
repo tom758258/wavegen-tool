@@ -63,6 +63,7 @@ from wavegen_tool_core import (
     query_status,
     read_error_queue,
     resolve_voltage_inputs,
+    send_bus_trigger,
     set_output,
 )
 from wavegen_tool_core.identity import (
@@ -348,13 +349,43 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Counted Burst period in seconds.",
     )
+    parser.add_argument(
+        "--burst-trigger-source",
+        choices=("immediate", "bus", "timer"),
+        default="immediate",
+        help="Counted Burst trigger source (default: immediate).",
+    )
+    parser.add_argument(
+        "--burst-trigger-timer-s",
+        default=None,
+        help="Counted Burst Timer trigger interval in seconds.",
+    )
 
 
 def _burst_config_from_args(args: argparse.Namespace) -> CountedBurstConfig | None:
-    values = (args.burst_count, args.burst_period_s)
-    if all(value is None for value in values):
+    values = (args.burst_count, args.burst_period_s, args.burst_trigger_timer_s)
+    if all(value is None for value in values) and args.burst_trigger_source == "immediate":
         return None
-    return CountedBurstConfig(count=args.burst_count, period_s=args.burst_period_s)
+    return CountedBurstConfig(
+        count=args.burst_count,
+        period_s=args.burst_period_s,
+        trigger_source=args.burst_trigger_source,
+        trigger_timer_s=args.burst_trigger_timer_s,
+    )
+
+
+def _add_sweep_trigger_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--trigger-source",
+        choices=("immediate", "bus", "timer"),
+        default="immediate",
+        help="Sweep trigger source (default: immediate).",
+    )
+    parser.add_argument(
+        "--trigger-timer-s",
+        default=None,
+        help="Sweep Timer trigger interval in seconds.",
+    )
 
 
 def _normalize_max_reads_argument(value: str) -> int:
@@ -613,6 +644,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(sine_sweep_parser)
     _add_voltage_input_arguments(
         sine_sweep_parser,
         amplitude_help="Sine sweep amplitude in Vpp.",
@@ -693,6 +725,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(square_sweep_parser)
     _add_voltage_input_arguments(
         square_sweep_parser,
         amplitude_help="Square sweep amplitude in Vpp.",
@@ -778,6 +811,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(ramp_sweep_parser)
     _add_voltage_input_arguments(
         ramp_sweep_parser,
         amplitude_help="Ramp sweep amplitude in Vpp.",
@@ -863,6 +897,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(triangle_sweep_parser)
     _add_voltage_input_arguments(
         triangle_sweep_parser,
         amplitude_help="Triangle sweep amplitude in Vpp.",
@@ -1324,6 +1359,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    trigger_parser = subparsers.add_parser(
+        "trigger",
+        help="Send one instrument-wide IEEE-488.2 bus trigger without waiting.",
+    )
+    _add_simulate_argument(trigger_parser)
+    trigger_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    trigger_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    trigger_parser.add_argument(
+        "--model",
+        choices=_REGISTERED_MODEL_IDS,
+        default=None,
+        help="Target model for simulation (default: keysight-33521b).",
+    )
+    trigger_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set selected-channel output on or off.",
@@ -1528,6 +1590,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--resource cannot be used with --simulate")
     if args.simulate and args.backend.strip().casefold() != "system":
         parser.error("--simulate requires the system backend")
+    if (
+        args.command == "trigger"
+        and not args.simulate
+        and args.model is not None
+    ):
+        parser.error("--model requires --simulate")
     if args.command in validation_only_live_commands:
         if args.simulate and (
             args.validation_allow_pending_live_support
@@ -1572,7 +1640,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         parser.error("the following arguments are required: --resource")
     if (
-        args.command in {"identify", "status", "output", "read-errors"}
+        args.command in {"identify", "status", "output", "read-errors", "trigger"}
         and not args.simulate
         and args.resource is None
     ):
@@ -1605,6 +1673,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_prbs(args)
     if args.command == "output":
         return _run_output(args)
+    if args.command == "trigger":
+        return _run_trigger(args)
     if args.command == "status":
         return _run_status(args)
     if args.command == "read-errors":
@@ -1889,6 +1959,8 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -1911,6 +1983,8 @@ def _run_sine_sweep_dry_run(args: argparse.Namespace) -> int:
             args.return_time_s,
             args.load,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -1971,6 +2045,8 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             duty_cycle_percent=args.duty_cycle_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -1994,6 +2070,8 @@ def _run_square_sweep_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             duty_cycle_percent=args.duty_cycle_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2054,6 +2132,8 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             symmetry_percent=args.symmetry_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2077,6 +2157,8 @@ def _run_ramp_sweep_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             symmetry_percent=args.symmetry_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2136,6 +2218,8 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2158,6 +2242,8 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
             args.return_time_s,
             args.load,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2759,6 +2845,22 @@ def _run_output(args: argparse.Namespace) -> int:
     )
 
 
+def _run_trigger(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target(args.model or CANONICAL_MODEL_ID)
+        if args.simulate
+        else (args.resource, None)
+    )
+    return _run_control(
+        args,
+        lambda: send_bus_trigger(
+            resource,
+            args.backend,
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
 def _run_status(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target(args.model or CANONICAL_MODEL_ID)
@@ -3130,6 +3232,8 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
         "burst_enabled": True,
         "burst_count": burst.count,
         "burst_period_s": burst.period_s,
+        "burst_trigger_source": burst.trigger_source,
+        "burst_trigger_timer_s": burst.trigger_timer_s,
     }
 
 
@@ -3141,9 +3245,10 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "transport": result.transport,
         "manufacturer": result.identity.manufacturer,
         "model": result.identity.model,
-        "output_state": result.output_state,
         "error": None,
     }
+    if action != "trigger":
+        payload["output_state"] = result.output_state
     if action in {
         "configure-sine",
         "configure-sine-sweep",
@@ -3174,6 +3279,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             hold_time_s=result.hold_time_s,
             return_time_s=result.return_time_s,
             trigger_source=result.trigger_source,
+            trigger_timer_s=result.trigger_timer_s,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
             phase_deg=result.phase_deg,
@@ -3298,6 +3404,7 @@ def _sine_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -3342,6 +3449,7 @@ def _square_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -3387,6 +3495,7 @@ def _ramp_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -3432,6 +3541,7 @@ def _triangle_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4034,15 +4144,22 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
     burst = getattr(result, "burst", None)
     if burst is None:
         return ()
-    return (
+    lines = [
         f"Burst count: {burst.count}",
-        f"Burst period (seconds): {burst.period_s}",
-    )
+        f"Burst trigger source: {burst.trigger_source}",
+    ]
+    if burst.period_s is not None:
+        lines.append(f"Burst period (seconds): {burst.period_s}")
+    if burst.trigger_timer_s is not None:
+        lines.append(f"Burst trigger timer (seconds): {burst.trigger_timer_s}")
+    return tuple(lines)
 
 
 def _human_control_success(action: str, result: Any) -> str:
     channel = getattr(result, "channel", 1)
-    if action == "configure-sine":
+    if action == "trigger":
+        heading = "One instrument-wide bus trigger was sent without waiting."
+    elif action == "configure-sine":
         heading = f"Channel {channel} sine waveform configured with output off."
     elif action == "configure-sine-sweep":
         heading = f"Channel {channel} sine frequency sweep configured with output off."
@@ -4074,8 +4191,9 @@ def _human_control_success(action: str, result: Any) -> str:
         f"Transport: {result.transport}",
         f"Manufacturer: {result.identity.manufacturer}",
         f"Model: {result.identity.model}",
-        f"Output state: {result.output_state}",
     ]
+    if action != "trigger":
+        lines.append(f"Output state: {result.output_state}")
     if action in {
         "configure-sine",
         "configure-sine-sweep",
@@ -4100,6 +4218,8 @@ def _human_control_success(action: str, result: Any) -> str:
                 f"Trigger source: {result.trigger_source}",
             )
         )
+        if result.trigger_timer_s is not None:
+            lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
     if action in {
         "configure-square-sweep",
         "configure-ramp-sweep",
@@ -4119,6 +4239,8 @@ def _human_control_success(action: str, result: Any) -> str:
                 f"Load: {result.load}",
             )
         )
+        if result.trigger_timer_s is not None:
+            lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
         if action == "configure-square-sweep":
             lines.append(
                 f"Duty cycle (percent): {result.duty_cycle_percent}"
@@ -4184,6 +4306,11 @@ def _human_sine_sweep_dry_run_success(result: Any) -> str:
             f"Hold time (seconds): {result.hold_time_s}",
             f"Return time (seconds): {result.return_time_s}",
             f"Trigger source: {result.trigger_source}",
+            *(
+                (f"Trigger timer (seconds): {result.trigger_timer_s}",)
+                if result.trigger_timer_s is not None
+                else ()
+            ),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -4215,6 +4342,8 @@ def _human_frequency_sweep_dry_run_success(
         f"Phase (degrees): {result.phase_deg}",
         f"Load: {result.load}",
     ]
+    if result.trigger_timer_s is not None:
+        lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
     if specific_line is not None:
         lines.append(specific_line)
     lines.extend(
