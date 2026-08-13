@@ -352,8 +352,11 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--burst-trigger-source",
         choices=("immediate", "bus", "timer"),
-        default="immediate",
-        help="Counted Burst trigger source (default: immediate).",
+        default=None,
+        help=(
+            "Counted Burst trigger source "
+            "(default: immediate when Burst is configured)."
+        ),
     )
     parser.add_argument(
         "--burst-trigger-timer-s",
@@ -363,13 +366,18 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _burst_config_from_args(args: argparse.Namespace) -> CountedBurstConfig | None:
-    values = (args.burst_count, args.burst_period_s, args.burst_trigger_timer_s)
-    if all(value is None for value in values) and args.burst_trigger_source == "immediate":
+    values = (
+        args.burst_count,
+        args.burst_period_s,
+        args.burst_trigger_source,
+        args.burst_trigger_timer_s,
+    )
+    if all(value is None for value in values):
         return None
     return CountedBurstConfig(
         count=args.burst_count,
         period_s=args.burst_period_s,
-        trigger_source=args.burst_trigger_source,
+        trigger_source=args.burst_trigger_source or "immediate",
         trigger_timer_s=args.burst_trigger_timer_s,
     )
 

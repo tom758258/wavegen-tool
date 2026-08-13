@@ -3165,6 +3165,7 @@ def test_counted_burst_trigger_cli_json(capsys, source_args, expected_source, ti
     "burst_args",
     [
         ["--burst-count", "2"],
+        ["--burst-trigger-source", "immediate"],
         [
             "--burst-count",
             "2",
@@ -3176,11 +3177,17 @@ def test_counted_burst_trigger_cli_json(capsys, source_args, expected_source, ti
         ["--burst-count", "2", "--burst-trigger-source", "timer"],
     ],
 )
-def test_counted_burst_cli_rejects_incompatible_options(capsys, burst_args) -> None:
+def test_counted_burst_cli_rejects_incompatible_options(
+    monkeypatch, capsys, burst_args
+) -> None:
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
     exit_code = main(
         [
             "configure-sine",
-            "--dry-run",
+            "--resource",
+            USB_RESOURCE,
             "--frequency-hz",
             "1000",
             "--amplitude-vpp",
@@ -3190,9 +3197,14 @@ def test_counted_burst_cli_rejects_incompatible_options(capsys, burst_args) -> N
         ]
     )
 
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
     assert exit_code == ExitCode.CLI_USAGE
     assert payload["success"] is False
+    assert payload["error"].startswith("waveform_parameter_error:")
+    assert "Traceback" not in captured.err
+    assert manager_calls == []
+    assert manager.opened_resources == []
 
 
 def test_configure_sine_sweep_cli_channel_two_json(capsys):
