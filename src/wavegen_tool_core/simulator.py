@@ -76,6 +76,11 @@ class SimulatedChannelState:
     pwm_internal_function: str = "sine"
     pwm_internal_frequency_hz: float = 10.0
     pwm_deviation_s: float = 1e-6
+    sum_enabled: bool = False
+    sum_source: str = "internal"
+    sum_internal_function: str = "sine"
+    sum_internal_frequency_hz: float = 100.0
+    sum_amplitude_percent: float = 100.0
     burst_enabled: bool = False
     burst_mode: str = "triggered"
     burst_count: int = 1
@@ -520,6 +525,7 @@ class SimulatedResource:
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.sum_enabled = False
             ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FM:STATe ON":
@@ -529,6 +535,7 @@ class SimulatedResource:
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.sum_enabled = False
             ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:PM:STATe ON":
@@ -538,6 +545,7 @@ class SimulatedResource:
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.sum_enabled = False
             ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:FSKey:STATe ON":
@@ -547,6 +555,7 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.sum_enabled = False
             ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:BPSK:STATe ON":
@@ -556,6 +565,7 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.sum_enabled = False
             ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:PWM:STATe ON":
@@ -565,6 +575,17 @@ class SimulatedResource:
             ch_state.pm_enabled = False
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
+            ch_state.sum_enabled = False
+            ch_state.burst_enabled = False
+            return
+        if command == f"SOURce{prefix_ch}:SUM:STATe ON":
+            ch_state.sum_enabled = True
+            ch_state.am_enabled = False
+            ch_state.fm_enabled = False
+            ch_state.pm_enabled = False
+            ch_state.fsk_enabled = False
+            ch_state.bpsk_enabled = False
+            ch_state.pwm_enabled = False
             ch_state.burst_enabled = False
             return
         if command == f"SOURce{prefix_ch}:BURSt:STATe ON":
@@ -576,6 +597,7 @@ class SimulatedResource:
             ch_state.fsk_enabled = False
             ch_state.bpsk_enabled = False
             ch_state.pwm_enabled = False
+            ch_state.sum_enabled = False
             return
 
         exact_updates = {
@@ -627,6 +649,7 @@ class SimulatedResource:
                 "internal",
             ),
             f"SOURce{prefix_ch}:PWM:STATe OFF": ("pwm_enabled", False),
+            f"SOURce{prefix_ch}:SUM:STATe OFF": ("sum_enabled", False),
             f"SOURce{prefix_ch}:BURSt:STATe OFF": ("burst_enabled", False),
             f"SOURce{prefix_ch}:BURSt:MODE TRIGgered": (
                 "burst_mode",
@@ -638,6 +661,14 @@ class SimulatedResource:
             ),
             f"SOURce{prefix_ch}:PWM:INTernal:FUNCtion SINusoid": (
                 "pwm_internal_function",
+                "sine",
+            ),
+            f"SOURce{prefix_ch}:SUM:SOURce INTernal": (
+                "sum_source",
+                "internal",
+            ),
+            f"SOURce{prefix_ch}:SUM:INTernal:FUNCtion SINusoid": (
+                "sum_internal_function",
                 "sine",
             ),
             f"SOURce{prefix_ch}:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
@@ -687,6 +718,11 @@ class SimulatedResource:
                 "pwm_internal_frequency_hz",
             ),
             (f"SOURce{prefix_ch}:PWM:DEViation ", "pwm_deviation_s"),
+            (
+                f"SOURce{prefix_ch}:SUM:INTernal:FREQuency ",
+                "sum_internal_frequency_hz",
+            ),
+            (f"SOURce{prefix_ch}:SUM:AMPLitude ", "sum_amplitude_percent"),
             (f"SOURce{prefix_ch}:FREQuency ", "frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STARt ", "sweep_start_frequency_hz"),
             (f"SOURce{prefix_ch}:FREQuency:STOP ", "sweep_stop_frequency_hz"),
@@ -872,6 +908,15 @@ class SimulatedResource:
             ),
             f"SOURce{prefix_ch}:PWM:DEViation?": _format_number(
                 ch_state.pwm_deviation_s
+            ),
+            f"SOURce{prefix_ch}:SUM:STATe?": "1" if ch_state.sum_enabled else "0",
+            f"SOURce{prefix_ch}:SUM:SOURce?": ch_state.sum_source,
+            f"SOURce{prefix_ch}:SUM:INTernal:FUNCtion?": ch_state.sum_internal_function,
+            f"SOURce{prefix_ch}:SUM:INTernal:FREQuency?": _format_number(
+                ch_state.sum_internal_frequency_hz
+            ),
+            f"SOURce{prefix_ch}:SUM:AMPLitude?": _format_number(
+                ch_state.sum_amplitude_percent
             ),
             f"SOURce{prefix_ch}:BURSt:STATe?": "1" if ch_state.burst_enabled else "0",
             f"SOURce{prefix_ch}:BURSt:MODE?": ch_state.burst_mode,

@@ -40,6 +40,108 @@ def test_configure_sine_counted_burst_dry_run_json(capsys) -> None:
     assert "OUTPut1 ON" not in payload["commands"]
 
 
+def test_configure_sine_internal_sum_dry_run_json(capsys) -> None:
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--sum-frequency",
+            "1234",
+            "--sum-amplitude-percent",
+            "20",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["sum_enabled"] is True
+    assert payload["sum_frequency_hz"] == 1234.0
+    assert payload["sum_amplitude_percent"] == 20.0
+    assert payload["commands"][-5:] == [
+        "SOURce1:SUM:SOURce INTernal",
+        "SOURce1:SUM:INTernal:FUNCtion SINusoid",
+        "SOURce1:SUM:INTernal:FREQuency 1234",
+        "SOURce1:SUM:AMPLitude 20",
+        "SOURce1:SUM:STATe ON",
+    ]
+    assert payload["output_state"] == "off"
+    assert "OUTPut1 ON" not in payload["commands"]
+
+
+@pytest.mark.parametrize(
+    "sum_arguments",
+    [
+        ["--sum-frequency", "1000"],
+        ["--sum-amplitude-percent", "20"],
+    ],
+)
+def test_incomplete_sum_cli_group_fails_closed_without_visa(
+    monkeypatch, capsys, sum_arguments
+) -> None:
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            *sum_arguments,
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["success"] is False
+    assert payload["error"].startswith("waveform_parameter_error:")
+
+
+def test_sum_headroom_uses_resolved_cli_high_low_voltage_before_visa(
+    monkeypatch, capsys
+) -> None:
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--model",
+            "keysight-33521b",
+            "--frequency-hz",
+            "1000",
+            "--high-level-v",
+            "5",
+            "--low-level-v=-3",
+            "--sum-frequency",
+            "1000",
+            "--sum-amplitude-percent",
+            "20",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert manager_calls == []
+    assert manager.opened_resources == []
+    assert payload["success"] is False
+    assert "peak limit" in payload["error"]
+
+
 class FakeSession:
     def __init__(self, response=VALID_IDN, *, query_error=None, close_error=None):
         self.response = response
@@ -594,8 +696,9 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
                 "SOURce1:FSKey:STATe OFF",
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
-        "SOURce1:BURSt:STATe OFF",
-        "SOURce1:FREQuency:MODE CW",
+      "SOURce1:BURSt:STATe OFF",
+      "SOURce1:SUM:STATe OFF",
+      "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
                 "SOURce1:FUNCtion SIN",
@@ -661,6 +764,7 @@ def test_configure_sine_dry_run_cli_forwards_registered_model(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -713,7 +817,7 @@ def test_configure_sine_internal_am_dry_run_emits_ordered_json_without_visa(
     assert payload["am_depth_percent"] == 50.0
     assert payload["am_type"] == "normal"
     assert payload["output_state"] == "off"
-    assert payload["commands"][:9] == [
+    assert payload["commands"][:10] == [
         "OUTPut2 OFF",
         "SOURce2:AM:STATe OFF",
         "SOURce2:FM:STATe OFF",
@@ -722,6 +826,7 @@ def test_configure_sine_internal_am_dry_run_emits_ordered_json_without_visa(
         "SOURce2:BPSK:STATe OFF",
         "SOURce2:PWM:STATe OFF",
         "SOURce2:BURSt:STATe OFF",
+        "SOURce2:SUM:STATe OFF",
         "SOURce2:FREQuency:MODE CW",
     ]
     assert payload["commands"][-6:] == [
@@ -807,7 +912,7 @@ def test_configure_sine_internal_fm_dry_run_emits_ordered_json_without_visa(
     assert payload["fm_frequency_hz"] == 1000.0
     assert payload["fm_deviation_hz"] == 100000.0
     assert payload["output_state"] == "off"
-    assert payload["commands"][:9] == [
+    assert payload["commands"][:10] == [
         "OUTPut2 OFF",
         "SOURce2:AM:STATe OFF",
         "SOURce2:FM:STATe OFF",
@@ -816,6 +921,7 @@ def test_configure_sine_internal_fm_dry_run_emits_ordered_json_without_visa(
         "SOURce2:BPSK:STATe OFF",
         "SOURce2:PWM:STATe OFF",
         "SOURce2:BURSt:STATe OFF",
+        "SOURce2:SUM:STATe OFF",
         "SOURce2:FREQuency:MODE CW",
     ]
     assert payload["commands"][-5:] == [
@@ -889,7 +995,7 @@ def test_configure_sine_internal_pm_dry_run_emits_ordered_json_without_visa(
     assert payload["pm_frequency_hz"] == 1000.0
     assert payload["pm_deviation_deg"] == 90.0
     assert payload["output_state"] == "off"
-    assert payload["commands"][:9] == [
+    assert payload["commands"][:10] == [
         "OUTPut2 OFF",
         "SOURce2:AM:STATe OFF",
         "SOURce2:FM:STATe OFF",
@@ -898,6 +1004,7 @@ def test_configure_sine_internal_pm_dry_run_emits_ordered_json_without_visa(
         "SOURce2:BPSK:STATe OFF",
         "SOURce2:PWM:STATe OFF",
         "SOURce2:BURSt:STATe OFF",
+        "SOURce2:SUM:STATe OFF",
         "SOURce2:FREQuency:MODE CW",
     ]
     assert payload["commands"][-5:] == [
@@ -969,7 +1076,7 @@ def test_configure_sine_internal_fsk_dry_run_emits_channelized_output_without_vi
     assert payload["fsk_hop_frequency_hz"] == 500000.0
     assert payload["fsk_rate_hz"] == 80000.0
     assert payload["output_state"] == "off"
-    assert payload["commands"][:9] == [
+    assert payload["commands"][:10] == [
         "OUTPut2 OFF",
         "SOURce2:AM:STATe OFF",
         "SOURce2:FM:STATe OFF",
@@ -978,6 +1085,7 @@ def test_configure_sine_internal_fsk_dry_run_emits_channelized_output_without_vi
         "SOURce2:BPSK:STATe OFF",
         "SOURce2:PWM:STATe OFF",
         "SOURce2:BURSt:STATe OFF",
+        "SOURce2:SUM:STATe OFF",
         "SOURce2:FREQuency:MODE CW",
     ]
     assert payload["commands"][-4:] == [
@@ -1065,7 +1173,7 @@ def test_configure_sine_internal_bpsk_dry_run_emits_channelized_output_without_v
     assert payload["bpsk_phase_shift_deg"] == 180.0
     assert payload["bpsk_rate_hz"] == 1000.0
     assert payload["output_state"] == "off"
-    assert payload["commands"][:9] == [
+    assert payload["commands"][:10] == [
         "OUTPut2 OFF",
         "SOURce2:AM:STATe OFF",
         "SOURce2:FM:STATe OFF",
@@ -1074,6 +1182,7 @@ def test_configure_sine_internal_bpsk_dry_run_emits_channelized_output_without_v
         "SOURce2:BPSK:STATe OFF",
         "SOURce2:PWM:STATe OFF",
         "SOURce2:BURSt:STATe OFF",
+        "SOURce2:SUM:STATe OFF",
         "SOURce2:FREQuency:MODE CW",
     ]
     assert payload["commands"][-4:] == [
@@ -1272,6 +1381,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -1340,6 +1450,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1472,6 +1583,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -1543,6 +1655,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1637,6 +1750,7 @@ def test_configure_triangle_dry_run_cli_emits_hardware_free_json(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD INF",
             "SOURce1:VOLTage:UNIT VPP",
@@ -1954,6 +2068,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
                 "OUTPut1:LOAD 50",
                 "SOURce1:VOLTage:UNIT VPP",
@@ -2041,6 +2156,7 @@ def test_configure_pulse_dry_run_cli_emits_hardware_free_json(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "SOURce1:FREQuency:MODE CW",
             "OUTPut1:LOAD 50",
             "SOURce1:VOLTage:UNIT VPP",

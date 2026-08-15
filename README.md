@@ -109,6 +109,31 @@ output off; only the explicit `output --state on` command enables it. A later
 ordinary static waveform configuration explicitly disables AM on the selected
 channel before configuring the non-modulated waveform.
 
+## Configure Internal Sum Modulation
+
+The five static carrier commands `configure-sine`, `configure-square`,
+`configure-ramp`, `configure-triangle`, and `configure-pulse` accept optional
+Internal Sine Sum settings. The Sum source is fixed to Internal and the
+summing waveform is fixed to Sine. Provide `--sum-frequency` and
+`--sum-amplitude-percent` together; Sum is mutually exclusive with AM, FM, PM,
+FSK, BPSK, PWM, and Counted Burst.
+
+Preview a representative sine Sum configuration without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run `
+  --model keysight-33512b `
+  --frequency-hz 1000000 `
+  --amplitude-vpp 0.1 `
+  --sum-frequency 1000 `
+  --sum-amplitude-percent 20
+```
+
+Sum frequency follows the selected model's Sine frequency capability and Sum
+amplitude is from 0% through 100% relative to the carrier amplitude.
+Configuration keeps output off; only the explicit output command enables it.
+
 ## Configure Internal Frequency Modulation
 
 The four static carrier commands `configure-sine`, `configure-square`,

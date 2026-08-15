@@ -16,6 +16,7 @@ from wavegen_tool_core import (
     FSKConfig,
     PMConfig,
     PWMConfig,
+    SumConfig,
     ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
@@ -357,6 +358,29 @@ def _burst_config_from_args(args: argparse.Namespace) -> CountedBurstConfig | No
     return CountedBurstConfig(count=args.burst_count, period_s=args.burst_period_s)
 
 
+def _add_sum_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--sum-frequency",
+        default=None,
+        help="Internal sine Sum frequency in Hz.",
+    )
+    parser.add_argument(
+        "--sum-amplitude-percent",
+        default=None,
+        help="Internal sine Sum amplitude relative to carrier amplitude (percent).",
+    )
+
+
+def _sum_config_from_args(args: argparse.Namespace) -> SumConfig | None:
+    values = (args.sum_frequency, args.sum_amplitude_percent)
+    if all(value is None for value in values):
+        return None
+    return SumConfig(
+        modulation_frequency_hz=args.sum_frequency,
+        amplitude_percent=args.sum_amplitude_percent,
+    )
+
+
 def _normalize_max_reads_argument(value: str) -> int:
     try:
         max_reads = int(value)
@@ -536,6 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pm_arguments(sine_parser)
     _add_fsk_arguments(sine_parser)
     _add_bpsk_arguments(sine_parser)
+    _add_sum_arguments(sine_parser)
     _add_burst_arguments(sine_parser)
     sine_parser.add_argument(
         "--phase-deg",
@@ -927,6 +952,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pm_arguments(square_parser)
     _add_fsk_arguments(square_parser)
     _add_bpsk_arguments(square_parser)
+    _add_sum_arguments(square_parser)
     _add_burst_arguments(square_parser)
     square_parser.add_argument(
         "--phase-deg",
@@ -993,6 +1019,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pm_arguments(ramp_parser)
     _add_fsk_arguments(ramp_parser)
     _add_bpsk_arguments(ramp_parser)
+    _add_sum_arguments(ramp_parser)
     _add_burst_arguments(ramp_parser)
     ramp_parser.add_argument(
         "--phase-deg",
@@ -1059,6 +1086,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_pm_arguments(triangle_parser)
     _add_fsk_arguments(triangle_parser)
     _add_bpsk_arguments(triangle_parser)
+    _add_sum_arguments(triangle_parser)
     _add_burst_arguments(triangle_parser)
     triangle_parser.add_argument(
         "--phase-deg",
@@ -1122,6 +1150,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_am_arguments(pulse_parser)
     _add_pwm_arguments(pulse_parser)
+    _add_sum_arguments(pulse_parser)
     _add_burst_arguments(pulse_parser)
     pulse_parser.add_argument(
         "--phase-deg",
@@ -1808,6 +1837,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -1831,6 +1861,7 @@ def _run_sine_dry_run(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2220,6 +2251,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2244,6 +2276,7 @@ def _run_square_dry_run(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2305,6 +2338,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2329,6 +2363,7 @@ def _run_ramp_dry_run(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2389,6 +2424,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2412,6 +2448,7 @@ def _run_triangle_dry_run(args: argparse.Namespace) -> int:
             fsk=_fsk_config_from_args(args),
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -2473,6 +2510,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             pwm=_pwm_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2497,6 +2535,7 @@ def _run_pulse_dry_run(args: argparse.Namespace) -> int:
             am=_am_config_from_args(args),
             pwm=_pwm_config_from_args(args),
             burst=_burst_config_from_args(args),
+            sum=_sum_config_from_args(args),
         )
     except WavegenError as exc:
         if args.json_output:
@@ -3122,6 +3161,17 @@ def _pwm_payload_fields(result: Any) -> dict[str, object]:
     }
 
 
+def _sum_payload_fields(result: Any) -> dict[str, object]:
+    sum_config = getattr(result, "sum", None)
+    if sum_config is None:
+        return {}
+    return {
+        "sum_enabled": True,
+        "sum_frequency_hz": sum_config.modulation_frequency_hz,
+        "sum_amplitude_percent": sum_config.amplitude_percent,
+    }
+
+
 def _burst_payload_fields(result: Any) -> dict[str, object]:
     burst = getattr(result, "burst", None)
     if burst is None:
@@ -3235,6 +3285,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
     payload.update(_fsk_payload_fields(result))
     payload.update(_bpsk_payload_fields(result))
     payload.update(_pwm_payload_fields(result))
+    payload.update(_sum_payload_fields(result))
     payload.update(_burst_payload_fields(result))
     return payload
 
@@ -3260,6 +3311,7 @@ def _sine_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_pm_payload_fields(result),
         **_fsk_payload_fields(result),
         **_bpsk_payload_fields(result),
+        **_sum_payload_fields(result),
         **_burst_payload_fields(result),
         "error": None,
     }
@@ -3483,6 +3535,7 @@ def _square_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_pm_payload_fields(result),
         **_fsk_payload_fields(result),
         **_bpsk_payload_fields(result),
+        **_sum_payload_fields(result),
         **_burst_payload_fields(result),
         "error": None,
     }
@@ -3528,6 +3581,7 @@ def _ramp_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_pm_payload_fields(result),
         **_fsk_payload_fields(result),
         **_bpsk_payload_fields(result),
+        **_sum_payload_fields(result),
         **_burst_payload_fields(result),
         "error": None,
     }
@@ -3572,6 +3626,7 @@ def _triangle_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_pm_payload_fields(result),
         **_fsk_payload_fields(result),
         **_bpsk_payload_fields(result),
+        **_sum_payload_fields(result),
         **_burst_payload_fields(result),
         "error": None,
     }
@@ -3618,6 +3673,7 @@ def _pulse_dry_run_success_payload(result: Any) -> dict[str, object]:
         **_am_payload_fields(result),
         **_fm_payload_fields(result),
         **_pwm_payload_fields(result),
+        **_sum_payload_fields(result),
         **_burst_payload_fields(result),
         "error": None,
     }
@@ -4030,6 +4086,16 @@ def _human_pwm_lines(result: Any) -> tuple[str, ...]:
     )
 
 
+def _human_sum_lines(result: Any) -> tuple[str, ...]:
+    sum_config = getattr(result, "sum", None)
+    if sum_config is None:
+        return ()
+    return (
+        f"Sum modulation frequency (Hz): {sum_config.modulation_frequency_hz}",
+        f"Sum amplitude (percent): {sum_config.amplitude_percent}",
+    )
+
+
 def _human_burst_lines(result: Any) -> tuple[str, ...]:
     burst = getattr(result, "burst", None)
     if burst is None:
@@ -4143,6 +4209,7 @@ def _human_control_success(action: str, result: Any) -> str:
     lines.extend(_human_fsk_lines(result))
     lines.extend(_human_bpsk_lines(result))
     lines.extend(_human_pwm_lines(result))
+    lines.extend(_human_sum_lines(result))
     lines.extend(_human_burst_lines(result))
     return "\n".join(lines)
 
@@ -4161,6 +4228,7 @@ def _human_sine_dry_run_success(result: Any) -> str:
             *_human_pm_lines(result),
             *_human_fsk_lines(result),
             *_human_bpsk_lines(result),
+            *_human_sum_lines(result),
             *_human_burst_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
@@ -4261,6 +4329,7 @@ def _human_square_dry_run_success(result: Any) -> str:
             *_human_pm_lines(result),
             *_human_fsk_lines(result),
             *_human_bpsk_lines(result),
+            *_human_sum_lines(result),
             *_human_burst_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
@@ -4283,6 +4352,7 @@ def _human_ramp_dry_run_success(result: Any) -> str:
             *_human_pm_lines(result),
             *_human_fsk_lines(result),
             *_human_bpsk_lines(result),
+            *_human_sum_lines(result),
             *_human_burst_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
@@ -4305,6 +4375,7 @@ def _human_triangle_dry_run_success(result: Any) -> str:
             *_human_pm_lines(result),
             *_human_fsk_lines(result),
             *_human_bpsk_lines(result),
+            *_human_sum_lines(result),
             *_human_burst_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
@@ -4334,6 +4405,7 @@ def _human_pulse_dry_run_success(result: Any) -> str:
             *_human_am_lines(result),
             *_human_fm_lines(result),
             *_human_pwm_lines(result),
+            *_human_sum_lines(result),
             *_human_burst_lines(result),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",

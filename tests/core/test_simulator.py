@@ -17,6 +17,7 @@ from wavegen_tool_core import (
     Simulated33521BState,
     SimulatedResource,
     SimulatedResourceManager,
+    SumConfig,
     configure_dc,
     configure_noise,
     configure_prbs,
@@ -96,6 +97,45 @@ def test_two_channel_simulator_cleans_only_selected_channel_burst() -> None:
 
     assert state.ch1.burst_enabled is True
     assert state.ch2.burst_enabled is False
+
+
+def test_two_channel_simulator_sum_isolated_and_static_recovery() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1_000,
+        0.1,
+        channel=1,
+        sum=SumConfig(250, 20),
+        resource_manager_factory=factory,
+    )
+
+    configure_square(
+        factory.resource_name,
+        2_000,
+        0.1,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.sum_enabled is True
+    assert state.ch1.sum_source == "internal"
+    assert state.ch1.sum_internal_function == "sine"
+    assert state.ch1.sum_internal_frequency_hz == 250.0
+    assert state.ch1.sum_amplitude_percent == 20.0
+    assert state.ch2.sum_enabled is False
+
+    manager = SimulatedResourceManager(state)
+    session = manager.open_resource(factory.resource_name)
+    assert session.query("SOURce1:SUM:STATe?") == "1"
+    assert session.query("SOURce1:SUM:SOURce?") == "internal"
+    assert session.query("SOURce1:SUM:INTernal:FUNCtion?") == "sine"
+    assert session.query("SOURce1:SUM:INTernal:FREQuency?") == "250"
+    assert session.query("SOURce1:SUM:AMPLitude?") == "20"
+    session.close()
+    manager.close()
 
 
 def test_simulator_exposes_one_deterministic_recognized_resource() -> None:
