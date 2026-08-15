@@ -25,14 +25,17 @@ from wavegen_tool_core import (
     configure_ramp,
     configure_ramp_sweep,
     configure_sine,
+    configure_sine_list_sweep,
     configure_sine_sweep,
     configure_square,
+    configure_square_list_sweep,
     configure_square_sweep,
     configure_triangle,
     configure_triangle_sweep,
     identify_instrument,
     list_resources,
     query_status,
+    send_bus_trigger,
     set_output,
 )
 from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
@@ -68,6 +71,66 @@ def test_simulator_records_counted_burst_state_and_queries() -> None:
     assert session.query("SOURce1:BURSt:NCYCles?") == "2"
     assert session.query("SOURce1:BURSt:INTernal:PERiod?") == "0.01"
     assert session.query("SOURce1:BURSt:PHASe?") == "0"
+
+
+def test_two_channel_simulator_trigger_state_is_isolated() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine_sweep(
+        factory.resource_name,
+        1000,
+        10000,
+        "linear",
+        1,
+        0.1,
+        trigger_source="timer",
+        trigger_timer_s=3,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.trigger_source == "immediate"
+    assert state.ch1.trigger_timer_s == 1.0
+    assert state.ch2.trigger_source == "timer"
+    assert state.ch2.trigger_timer_s == 3.0
+    session = SimulatedResource(state)
+    assert session.query("TRIGger1:SOURce?") == "immediate"
+    assert session.query("TRIGger2:SOURce?") == "timer"
+    assert session.query("TRIGger2:TIMer?") == "3"
+
+
+def test_channel_two_counted_burst_trigger_does_not_pollute_channel_one() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1000,
+        0.1,
+        burst=CountedBurstConfig(2, trigger_source="bus"),
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.burst_enabled is False
+    assert state.ch1.trigger_source == "immediate"
+    assert state.ch2.burst_enabled is True
+    assert state.ch2.trigger_source == "bus"
+
+
+def test_simulator_accepts_one_instrument_wide_bus_trigger() -> None:
+    state = Simulated33521BState(model_id="keysight-33510b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = send_bus_trigger(
+        factory.resource_name,
+        resource_manager_factory=factory,
+    )
+
+    assert result.identity.model == "33510B"
+    session = SimulatedResource(state)
+    assert session.write("*TRG") == 4
 
 
 def test_simulator_burst_enable_resets_ordinary_phase() -> None:
@@ -642,6 +705,61 @@ def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
     assert state.ch2.active_function == "SQUARE"
     assert state.ch2.frequency_mode == "CW"
     assert state.ch2.frequency_hz == 3000.0
+
+
+def test_simulator_stores_frequency_list_mode_and_dwell() -> None:
+    state = Simulated33521BState()
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_sine_list_sweep(
+        factory.resource_name,
+        [7000, 1000, 7000],
+        0.005,
+        0.1,
+        resource_manager_factory=factory,
+    )
+
+    assert result.frequencies_hz == (7000.0, 1000.0, 7000.0)
+    assert state.ch1.frequency_mode == "LIST"
+    assert state.ch1.list_frequencies_hz == (7000.0, 1000.0, 7000.0)
+    assert state.ch1.list_dwell_s == 0.005
+    assert state.ch1.trigger_source == "immediate"
+    assert state.ch1.output_enabled is False
+
+
+def test_two_channel_simulator_list_isolation_and_static_cw_recovery() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    state.ch1.list_frequencies_hz = (99.0,)
+    state.ch1.list_dwell_s = 9.0
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_square_list_sweep(
+        factory.resource_name,
+        [1000, 3000],
+        0.005,
+        0.1,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.frequency_mode == "CW"
+    assert state.ch1.list_frequencies_hz == (99.0,)
+    assert state.ch1.list_dwell_s == 9.0
+    assert state.ch2.frequency_mode == "LIST"
+    assert state.ch2.list_frequencies_hz == (1000.0, 3000.0)
+    assert state.ch2.list_dwell_s == 0.005
+
+    configure_square(
+        factory.resource_name,
+        2000,
+        0.1,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.frequency_mode == "CW"
+    assert state.ch1.list_frequencies_hz == (99.0,)
+    assert state.ch2.frequency_mode == "CW"
 
 
 def test_two_channel_simulator_am_state_is_isolated_and_static_config_recovers() -> None:

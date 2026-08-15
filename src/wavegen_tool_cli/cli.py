@@ -39,24 +39,32 @@ from wavegen_tool_core import (
     configure_prbs,
     configure_pulse,
     configure_ramp,
+    configure_ramp_list_sweep,
     configure_ramp_sweep,
     configure_sine,
+    configure_sine_list_sweep,
     configure_sine_sweep,
     configure_square,
+    configure_square_list_sweep,
     configure_square_sweep,
     configure_triangle,
+    configure_triangle_list_sweep,
     configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
+    dry_run_ramp_list_sweep,
     dry_run_ramp_sweep,
     dry_run_sine,
+    dry_run_sine_list_sweep,
     dry_run_sine_sweep,
     dry_run_square,
+    dry_run_square_list_sweep,
     dry_run_square_sweep,
     dry_run_triangle,
+    dry_run_triangle_list_sweep,
     dry_run_triangle_sweep,
     identify_instrument,
     list_resources,
@@ -64,6 +72,7 @@ from wavegen_tool_core import (
     query_status,
     read_error_queue,
     resolve_voltage_inputs,
+    send_bus_trigger,
     set_output,
 )
 from wavegen_tool_core.identity import (
@@ -123,6 +132,14 @@ _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
     (ErrorQueueQueryError, ExitCode.ERROR_QUEUE_QUERY_ERROR),
 )
 _REGISTERED_MODEL_IDS = registered_model_ids()
+_LIST_SWEEP_ACTIONS = frozenset(
+    {
+        "configure-sine-list-sweep",
+        "configure-square-list-sweep",
+        "configure-ramp-list-sweep",
+        "configure-triangle-list-sweep",
+    }
+)
 
 
 def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
@@ -349,13 +366,51 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Counted Burst period in seconds.",
     )
+    parser.add_argument(
+        "--burst-trigger-source",
+        choices=("immediate", "bus", "timer"),
+        default=None,
+        help=(
+            "Counted Burst trigger source "
+            "(default: immediate when Burst is configured)."
+        ),
+    )
+    parser.add_argument(
+        "--burst-trigger-timer-s",
+        default=None,
+        help="Counted Burst Timer trigger interval in seconds.",
+    )
 
 
 def _burst_config_from_args(args: argparse.Namespace) -> CountedBurstConfig | None:
-    values = (args.burst_count, args.burst_period_s)
+    values = (
+        args.burst_count,
+        args.burst_period_s,
+        args.burst_trigger_source,
+        args.burst_trigger_timer_s,
+    )
     if all(value is None for value in values):
         return None
-    return CountedBurstConfig(count=args.burst_count, period_s=args.burst_period_s)
+    return CountedBurstConfig(
+        count=args.burst_count,
+        period_s=args.burst_period_s,
+        trigger_source=args.burst_trigger_source or "immediate",
+        trigger_timer_s=args.burst_trigger_timer_s,
+    )
+
+
+def _add_sweep_trigger_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--trigger-source",
+        choices=("immediate", "bus", "timer"),
+        default="immediate",
+        help="Sweep trigger source (default: immediate).",
+    )
+    parser.add_argument(
+        "--trigger-timer-s",
+        default=None,
+        help="Sweep Timer trigger interval in seconds.",
+    )
 
 
 def _add_sum_arguments(parser: argparse.ArgumentParser) -> None:
@@ -393,6 +448,20 @@ def _normalize_max_reads_argument(value: str) -> int:
             "max_reads must be an integer between 1 and 100."
         )
     return max_reads
+
+
+def _parse_frequencies_argument(value: str) -> tuple[float, ...]:
+    tokens = value.split(",")
+    if not tokens or any(not token.strip() for token in tokens):
+        raise argparse.ArgumentTypeError(
+            "frequencies must be a non-empty comma-separated list of numbers."
+        )
+    try:
+        return tuple(float(token.strip()) for token in tokens)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "frequencies must be a non-empty comma-separated list of numbers."
+        ) from exc
 
 
 def _normalize_control_port(value: str) -> int:
@@ -443,6 +512,69 @@ def _add_lifecycle_options(parser: argparse.ArgumentParser) -> None:
         type=_normalize_positive_milliseconds,
         default=1000,
         help="Single HTTP request timeout in milliseconds (default: 1000).",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+
+def _add_list_sweep_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    waveform: str,
+) -> None:
+    _add_simulate_argument(parser)
+    _add_channel_argument(parser)
+    _add_validation_support_policy_argument(parser)
+    parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    parser.add_argument(
+        "--frequencies-hz",
+        required=True,
+        type=_parse_frequencies_argument,
+        help="Comma-separated frequency list in Hz (1-128 points).",
+    )
+    parser.add_argument(
+        "--dwell-s",
+        required=True,
+        help="Shared List Sweep dwell in seconds (range: 0.000001-1000).",
+    )
+    _add_voltage_input_arguments(
+        parser,
+        amplitude_help=f"{waveform} List Sweep amplitude in Vpp.",
+    )
+    parser.add_argument(
+        "--phase-deg",
+        default=0.0,
+        type=float,
+        help="Phase offset in degrees (default: 0; range: -360 to 360).",
+    )
+    parser.add_argument(
+        "--load",
+        choices=("50", "high-z"),
+        default="50",
+        help="Output load (default: 50).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    parser.add_argument(
+        "--model",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
     )
     parser.add_argument(
         "--json",
@@ -638,6 +770,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(sine_sweep_parser)
     _add_voltage_input_arguments(
         sine_sweep_parser,
         amplitude_help="Sine sweep amplitude in Vpp.",
@@ -718,6 +851,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(square_sweep_parser)
     _add_voltage_input_arguments(
         square_sweep_parser,
         amplitude_help="Square sweep amplitude in Vpp.",
@@ -803,6 +937,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(ramp_sweep_parser)
     _add_voltage_input_arguments(
         ramp_sweep_parser,
         amplitude_help="Ramp sweep amplitude in Vpp.",
@@ -888,6 +1023,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help="Time to return to the start frequency in seconds (default: 0).",
     )
+    _add_sweep_trigger_arguments(triangle_sweep_parser)
     _add_voltage_input_arguments(
         triangle_sweep_parser,
         amplitude_help="Triangle sweep amplitude in Vpp.",
@@ -921,6 +1057,40 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit exactly one JSON object.",
     )
+
+    sine_list_sweep_parser = subparsers.add_parser(
+        "configure-sine-list-sweep",
+        help="Configure a validated selected-channel sine frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(sine_list_sweep_parser, waveform="Sine")
+
+    square_list_sweep_parser = subparsers.add_parser(
+        "configure-square-list-sweep",
+        help="Configure a validated selected-channel square frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(square_list_sweep_parser, waveform="Square")
+    square_list_sweep_parser.add_argument(
+        "--duty-cycle-percent",
+        default="50",
+        help="Square duty cycle percentage (default: 50).",
+    )
+
+    ramp_list_sweep_parser = subparsers.add_parser(
+        "configure-ramp-list-sweep",
+        help="Configure a validated selected-channel ramp frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(ramp_list_sweep_parser, waveform="Ramp")
+    ramp_list_sweep_parser.add_argument(
+        "--symmetry-percent",
+        default="100",
+        help="Ramp symmetry percentage (default: 100).",
+    )
+
+    triangle_list_sweep_parser = subparsers.add_parser(
+        "configure-triangle-list-sweep",
+        help="Configure a validated selected-channel triangle frequency List Sweep.",
+    )
+    _add_list_sweep_arguments(triangle_list_sweep_parser, waveform="Triangle")
 
     square_parser = subparsers.add_parser(
         "configure-square",
@@ -1353,6 +1523,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    trigger_parser = subparsers.add_parser(
+        "trigger",
+        help="Send one instrument-wide IEEE-488.2 bus trigger without waiting.",
+    )
+    _add_simulate_argument(trigger_parser)
+    trigger_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    trigger_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    trigger_parser.add_argument(
+        "--model",
+        choices=_REGISTERED_MODEL_IDS,
+        default=None,
+        help="Target model for simulation (default: keysight-33521b).",
+    )
+    trigger_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
+
     output_parser = subparsers.add_parser(
         "output",
         help="Explicitly set selected-channel output on or off.",
@@ -1532,6 +1730,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-square-sweep",
         "configure-ramp-sweep",
         "configure-triangle-sweep",
+        "configure-sine-list-sweep",
+        "configure-square-list-sweep",
+        "configure-ramp-list-sweep",
+        "configure-triangle-list-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -1557,6 +1759,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--resource cannot be used with --simulate")
     if args.simulate and args.backend.strip().casefold() != "system":
         parser.error("--simulate requires the system backend")
+    if (
+        args.command == "trigger"
+        and not args.simulate
+        and args.model is not None
+    ):
+        parser.error("--model requires --simulate")
     if args.command in validation_only_live_commands:
         if args.simulate and (
             args.validation_allow_pending_live_support
@@ -1601,7 +1809,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         parser.error("the following arguments are required: --resource")
     if (
-        args.command in {"identify", "status", "output", "read-errors"}
+        args.command in {"identify", "status", "output", "read-errors", "trigger"}
         and not args.simulate
         and args.resource is None
     ):
@@ -1618,6 +1826,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_ramp_sweep(args)
     if args.command == "configure-triangle-sweep":
         return _run_configure_triangle_sweep(args)
+    if args.command == "configure-sine-list-sweep":
+        return _run_configure_sine_list_sweep(args)
+    if args.command == "configure-square-list-sweep":
+        return _run_configure_square_list_sweep(args)
+    if args.command == "configure-ramp-list-sweep":
+        return _run_configure_ramp_list_sweep(args)
+    if args.command == "configure-triangle-list-sweep":
+        return _run_configure_triangle_list_sweep(args)
     if args.command == "configure-square":
         return _run_configure_square(args)
     if args.command == "configure-ramp":
@@ -1634,6 +1850,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_prbs(args)
     if args.command == "output":
         return _run_output(args)
+    if args.command == "trigger":
+        return _run_trigger(args)
     if args.command == "status":
         return _run_status(args)
     if args.command == "read-errors":
@@ -1920,6 +2138,8 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -1942,6 +2162,8 @@ def _run_sine_sweep_dry_run(args: argparse.Namespace) -> int:
             args.return_time_s,
             args.load,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2002,6 +2224,8 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             duty_cycle_percent=args.duty_cycle_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2025,6 +2249,8 @@ def _run_square_sweep_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             duty_cycle_percent=args.duty_cycle_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2085,6 +2311,8 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             args.backend,
             args.phase_deg,
             symmetry_percent=args.symmetry_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2108,6 +2336,8 @@ def _run_ramp_sweep_dry_run(args: argparse.Namespace) -> int:
             args.load,
             args.phase_deg,
             symmetry_percent=args.symmetry_percent,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2167,6 +2397,8 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             args.load,
             args.backend,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2189,6 +2421,8 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
             args.return_time_s,
             args.load,
             args.phase_deg,
+            trigger_source=args.trigger_source,
+            trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2223,6 +2457,204 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
         )
     else:
         print(_human_triangle_sweep_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
+def _run_configure_sine_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Sine",
+            lambda amplitude, offset: dry_run_sine_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Sine",
+        lambda amplitude, offset: configure_sine_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_configure_square_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Square",
+            lambda amplitude, offset: dry_run_square_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                args.duty_cycle_percent,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Square",
+        lambda amplitude, offset: configure_square_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            args.duty_cycle_percent,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_configure_ramp_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Ramp",
+            lambda amplitude, offset: dry_run_ramp_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                args.symmetry_percent,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Ramp",
+        lambda amplitude, offset: configure_ramp_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            args.symmetry_percent,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_configure_triangle_list_sweep(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_list_sweep_dry_run(
+            args,
+            "Triangle",
+            lambda amplitude, offset: dry_run_triangle_list_sweep(
+                args.model,
+                args.frequencies_hz,
+                args.dwell_s,
+                amplitude,
+                offset,
+                args.load,
+                args.phase_deg,
+                channel=args.channel,
+            ),
+        )
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    return _run_control_with_voltage(
+        args,
+        "Triangle",
+        lambda amplitude, offset: configure_triangle_list_sweep(
+            resource,
+            args.frequencies_hz,
+            args.dwell_s,
+            amplitude,
+            offset,
+            args.load,
+            args.backend,
+            args.phase_deg,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_list_sweep_dry_run(
+    args: argparse.Namespace,
+    waveform: str,
+    operation: Any,
+) -> int:
+    try:
+        result = operation(*_resolve_cli_voltage_inputs(args, waveform))
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _list_sweep_dry_run_error_payload(args.command, exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _list_sweep_dry_run_internal_error_payload(args.command),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _list_sweep_dry_run_success_payload(args.command, result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_list_sweep_dry_run_success(result, waveform.casefold()))
     return int(ExitCode.SUCCESS)
 
 
@@ -2798,6 +3230,22 @@ def _run_output(args: argparse.Namespace) -> int:
     )
 
 
+def _run_trigger(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target(args.model or CANONICAL_MODEL_ID)
+        if args.simulate
+        else (args.resource, None)
+    )
+    return _run_control(
+        args,
+        lambda: send_bus_trigger(
+            resource,
+            args.backend,
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
 def _run_status(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target(args.model or CANONICAL_MODEL_ID)
@@ -3180,6 +3628,8 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
         "burst_enabled": True,
         "burst_count": burst.count,
         "burst_period_s": burst.period_s,
+        "burst_trigger_source": burst.trigger_source,
+        "burst_trigger_timer_s": burst.trigger_timer_s,
     }
 
 
@@ -3191,9 +3641,10 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "transport": result.transport,
         "manufacturer": result.identity.manufacturer,
         "model": result.identity.model,
-        "output_state": result.output_state,
         "error": None,
     }
+    if action != "trigger":
+        payload["output_state"] = result.output_state
     if action in {
         "configure-sine",
         "configure-sine-sweep",
@@ -3208,8 +3659,21 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "configure-noise",
         "configure-prbs",
         "output",
-    }:
+    } | _LIST_SWEEP_ACTIONS:
         payload["channel"] = getattr(result, "channel", 1)
+    if action in _LIST_SWEEP_ACTIONS:
+        payload.update(
+            frequencies_hz=list(result.frequencies_hz),
+            dwell_s=result.dwell_s,
+            amplitude_vpp=result.amplitude_vpp,
+            offset_v=result.offset_v,
+            phase_deg=result.phase_deg,
+            load=result.load,
+        )
+        if action == "configure-square-list-sweep":
+            payload["duty_cycle_percent"] = result.duty_cycle_percent
+        elif action == "configure-ramp-list-sweep":
+            payload["symmetry_percent"] = result.symmetry_percent
     if action in {
         "configure-sine-sweep",
         "configure-square-sweep",
@@ -3224,6 +3688,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             hold_time_s=result.hold_time_s,
             return_time_s=result.return_time_s,
             trigger_source=result.trigger_source,
+            trigger_timer_s=result.trigger_timer_s,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
             phase_deg=result.phase_deg,
@@ -3350,6 +3815,7 @@ def _sine_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -3394,6 +3860,7 @@ def _square_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -3439,6 +3906,7 @@ def _ramp_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -3484,6 +3952,7 @@ def _triangle_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "hold_time_s": result.hold_time_s,
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
+        "trigger_timer_s": result.trigger_timer_s,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -3508,6 +3977,56 @@ def _triangle_sweep_dry_run_internal_error_payload() -> dict[str, object]:
     return {
         "success": False,
         "action": "configure-triangle-sweep",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
+def _list_sweep_dry_run_success_payload(
+    action: str,
+    result: Any,
+) -> dict[str, object]:
+    payload = {
+        "success": True,
+        "action": action,
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "channel": result.channel,
+        "frequencies_hz": list(result.frequencies_hz),
+        "dwell_s": result.dwell_s,
+        "amplitude_vpp": result.amplitude_vpp,
+        "offset_v": result.offset_v,
+        "phase_deg": result.phase_deg,
+        "load": result.load,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+    if action == "configure-square-list-sweep":
+        payload["duty_cycle_percent"] = result.duty_cycle_percent
+    elif action == "configure-ramp-list-sweep":
+        payload["symmetry_percent"] = result.symmetry_percent
+    return payload
+
+
+def _list_sweep_dry_run_error_payload(
+    action: str,
+    error: WavegenError,
+) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": action,
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _list_sweep_dry_run_internal_error_payload(action: str) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": action,
         "mode": "dry-run",
         "error": "internal_error: unexpected internal failure",
     }
@@ -3840,7 +4359,7 @@ def _control_error_payload(
         "configure-noise",
         "configure-prbs",
         "output",
-    }:
+    } | _LIST_SWEEP_ACTIONS:
         payload["channel"] = channel
     return payload
 
@@ -4100,15 +4619,22 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
     burst = getattr(result, "burst", None)
     if burst is None:
         return ()
-    return (
+    lines = [
         f"Burst count: {burst.count}",
-        f"Burst period (seconds): {burst.period_s}",
-    )
+        f"Burst trigger source: {burst.trigger_source}",
+    ]
+    if burst.period_s is not None:
+        lines.append(f"Burst period (seconds): {burst.period_s}")
+    if burst.trigger_timer_s is not None:
+        lines.append(f"Burst trigger timer (seconds): {burst.trigger_timer_s}")
+    return tuple(lines)
 
 
 def _human_control_success(action: str, result: Any) -> str:
     channel = getattr(result, "channel", 1)
-    if action == "configure-sine":
+    if action == "trigger":
+        heading = "One instrument-wide bus trigger was sent without waiting."
+    elif action == "configure-sine":
         heading = f"Channel {channel} sine waveform configured with output off."
     elif action == "configure-sine-sweep":
         heading = f"Channel {channel} sine frequency sweep configured with output off."
@@ -4118,6 +4644,11 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = f"Channel {channel} ramp frequency sweep configured with output off."
     elif action == "configure-triangle-sweep":
         heading = f"Channel {channel} triangle frequency sweep configured with output off."
+    elif action in _LIST_SWEEP_ACTIONS:
+        waveform = action.removeprefix("configure-").removesuffix("-list-sweep")
+        heading = (
+            f"Channel {channel} {waveform} frequency List Sweep configured with output off."
+        )
     elif action == "configure-square":
         heading = f"Channel {channel} square waveform configured with output off."
     elif action == "configure-ramp":
@@ -4140,8 +4671,9 @@ def _human_control_success(action: str, result: Any) -> str:
         f"Transport: {result.transport}",
         f"Manufacturer: {result.identity.manufacturer}",
         f"Model: {result.identity.model}",
-        f"Output state: {result.output_state}",
     ]
+    if action != "trigger":
+        lines.append(f"Output state: {result.output_state}")
     if action in {
         "configure-sine",
         "configure-sine-sweep",
@@ -4152,8 +4684,23 @@ def _human_control_success(action: str, result: Any) -> str:
         "configure-ramp",
         "configure-triangle",
         "configure-pulse",
-    }:
+    } | _LIST_SWEEP_ACTIONS:
         lines.append(f"Phase (degrees): {result.phase_deg}")
+    if action in _LIST_SWEEP_ACTIONS:
+        lines.extend(
+            (
+                "Frequencies (Hz): "
+                + ",".join(str(value) for value in result.frequencies_hz),
+                f"Dwell (seconds): {result.dwell_s}",
+                f"Amplitude (Vpp): {result.amplitude_vpp}",
+                f"Offset (V): {result.offset_v}",
+                f"Load: {result.load}",
+            )
+        )
+        if action == "configure-square-list-sweep":
+            lines.append(f"Duty cycle (percent): {result.duty_cycle_percent}")
+        elif action == "configure-ramp-list-sweep":
+            lines.append(f"Symmetry (percent): {result.symmetry_percent}")
     if action == "configure-sine-sweep":
         lines.extend(
             (
@@ -4166,6 +4713,8 @@ def _human_control_success(action: str, result: Any) -> str:
                 f"Trigger source: {result.trigger_source}",
             )
         )
+        if result.trigger_timer_s is not None:
+            lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
     if action in {
         "configure-square-sweep",
         "configure-ramp-sweep",
@@ -4185,6 +4734,8 @@ def _human_control_success(action: str, result: Any) -> str:
                 f"Load: {result.load}",
             )
         )
+        if result.trigger_timer_s is not None:
+            lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
         if action == "configure-square-sweep":
             lines.append(
                 f"Duty cycle (percent): {result.duty_cycle_percent}"
@@ -4252,6 +4803,11 @@ def _human_sine_sweep_dry_run_success(result: Any) -> str:
             f"Hold time (seconds): {result.hold_time_s}",
             f"Return time (seconds): {result.return_time_s}",
             f"Trigger source: {result.trigger_source}",
+            *(
+                (f"Trigger timer (seconds): {result.trigger_timer_s}",)
+                if result.trigger_timer_s is not None
+                else ()
+            ),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -4283,6 +4839,8 @@ def _human_frequency_sweep_dry_run_success(
         f"Phase (degrees): {result.phase_deg}",
         f"Load: {result.load}",
     ]
+    if result.trigger_timer_s is not None:
+        lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
     if specific_line is not None:
         lines.append(specific_line)
     lines.extend(
@@ -4313,6 +4871,35 @@ def _human_ramp_sweep_dry_run_success(result: Any) -> str:
 
 def _human_triangle_sweep_dry_run_success(result: Any) -> str:
     return _human_frequency_sweep_dry_run_success(result, "triangle")
+
+
+def _human_list_sweep_dry_run_success(result: Any, waveform: str) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    lines = [
+        f"Channel {result.channel} {waveform} frequency List Sweep dry-run completed; "
+        "no VISA I/O was performed.",
+        f"Target model: {result.model}",
+        f"Canonical model ID: {result.canonical_model_id}",
+        "Executed: no",
+        "Frequencies (Hz): " + ",".join(str(value) for value in result.frequencies_hz),
+        f"Dwell (seconds): {result.dwell_s}",
+        f"Amplitude (Vpp): {result.amplitude_vpp}",
+        f"Offset (V): {result.offset_v}",
+        f"Phase (degrees): {result.phase_deg}",
+        f"Load: {result.load}",
+    ]
+    if hasattr(result, "duty_cycle_percent"):
+        lines.append(f"Duty cycle (percent): {result.duty_cycle_percent}")
+    elif hasattr(result, "symmetry_percent"):
+        lines.append(f"Symmetry (percent): {result.symmetry_percent}")
+    lines.extend(
+        (
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+    return "\n".join(lines)
 
 
 def _human_square_dry_run_success(result: Any) -> str:

@@ -6,9 +6,9 @@ supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
 Internal Sine amplitude, frequency, and phase modulation, Internal FSK, and
 Internal BPSK for supported static carriers, Internal PWM for pulse carriers,
-Immediate-triggered Counted Burst for supported static carriers,
-explicit output control, and sine,
-square, ramp, and triangle frequency sweeps for
+Immediate-, Bus-, and Timer-triggered Counted Burst for supported static carriers,
+explicit output control, and sine, square, ramp, and triangle linear/logarithmic
+frequency sweeps and Immediate-triggered frequency List Sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
 
 ## Current Scope
@@ -32,7 +32,10 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Internal sine pulse-width modulation for pulse carriers
 - Counted Burst for sine, square, ramp, triangle, pulse, and PRBS carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
-  frequency sweep configuration with Immediate trigger
+  frequency sweep configuration with Immediate, Bus, or Timer trigger
+- Selected-channel sine, square, ramp, and triangle frequency List Sweep
+  configuration with a shared dwell and Immediate trigger
+- One-shot instrument-wide IEEE-488.2 Bus Trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
 - Basic DC voltage, noise, and PRBS configuration
 - Explicit selected-channel output on/off control
@@ -65,8 +68,8 @@ does not reset the instrument, change settings, or enable an output.
 The Direct CLI commands `status`, `output`, `configure-sine`,
 `configure-square`, `configure-ramp`, `configure-triangle`, `configure-pulse`,
 `configure-dc`, `configure-noise`, `configure-prbs`, and the sine, square, ramp,
-and triangle sweep commands accept `--channel 1` or `--channel 2`. The default
-is Channel 1. 33512B supports both channels for Product Live, dry-run, and
+and triangle sweep and List Sweep commands accept `--channel 1` or `--channel 2`.
+The default is Channel 1. 33512B supports both channels for Product Live, dry-run, and
 simulator operation. 33510B supports both channels only in dry-run and
 simulator operation. 33521B has one channel, so Channel 2 is rejected by Core
 in live, dry-run, and simulator paths.
@@ -284,11 +287,14 @@ sweep configuration explicitly disable PWM on the selected channel.
 
 The six static carrier commands `configure-sine`, `configure-square`,
 `configure-ramp`, `configure-triangle`, `configure-pulse`, and
-`configure-prbs` accept optional Counted Burst settings. Provide
-`--burst-count` and `--burst-period-s` together. The mode is fixed to
-Triggered, the trigger source is fixed to Immediate, and Burst phase is fixed
-to 0 degrees. Count is a waveform-cycle count except for PRBS, where it is a
-bit count. When Counted Burst is enabled, `--phase-deg` must remain 0.
+`configure-prbs` accept optional Counted Burst settings. The mode is fixed to
+Triggered, Burst phase is fixed to 0 degrees, and the trigger source may be
+Immediate, Bus, or Timer. Immediate uses `--burst-count` with
+`--burst-period-s`; Bus uses `--burst-count --burst-trigger-source bus`; Timer
+uses `--burst-count --burst-trigger-source timer` with
+`--burst-trigger-timer-s`. Count is a waveform-cycle count except for PRBS,
+where it is a bit count. When Counted Burst is enabled, `--phase-deg` must
+remain 0.
 
 Preview a representative sine Burst without VISA I/O:
 
@@ -302,15 +308,18 @@ uv run wavegen-tool configure-sine `
   --burst-period-s 0.01
 ```
 
-Count must be from 1 through 100000000 and period must be from 0.000001
-through 8000 seconds. The carrier frequency or PRBS bit rate must be at least
+Count must be from 1 through 100000000 and an Immediate period must be from
+0.000001 through 8000 seconds. The carrier frequency or PRBS bit rate must be
+at least
 0.002001 Hz; Sine and Square Burst carriers cannot exceed 6000000 Hz. The
 period must be at least `count / carrier-rate + 0.000001` seconds. Counted
 Burst is finite-only and mutually exclusive with AM, FM, PM, FSK, BPSK, and
 PWM. Configuration first disables Burst only on the selected channel, keeps
 the selected output off throughout, and enables Burst only after all carrier
 commands are complete. Ordinary static waveform and sweep configuration also
-disable Burst only on the selected channel. Output-on remains explicit.
+disable Burst only on the selected channel. Output-on remains explicit. Bus
+and Timer Burst do not use `BURSt:INTernal:PERiod`; Timer uses the same range
+and minimum complete-burst duration rule for its trigger interval.
 
 ## Requirements and Installation
 
@@ -326,11 +335,13 @@ reserved WebUI import packages.
 
 ## Stateful Simulator
 
-The simulator supports `list-resources`, `identify`, `status`, `read-errors`,
+The simulator supports `list-resources`, `identify`, `status`, `read-errors`, `trigger`,
 all eight basic waveform configuration commands, the sine, square, ramp, and
-triangle sweep commands, and explicit output control. Two-channel model
-profiles retain independent Channel 1 and Channel 2 state, including sweep and
-Internal AM/FM/PM/FSK/BPSK/PWM and Counted Burst state; normal waveform
+triangle sweep and List Sweep commands, and explicit output control.
+Two-channel model
+profiles retain independent Channel 1 and Channel 2 state, including sweep
+trigger source/timer and Internal AM/FM/PM/FSK/BPSK/PWM and Counted Burst
+state; normal waveform
 configuration restores CW mode and disables AM, FM, PM, FSK, BPSK, PWM, and
 Burst only on the selected channel. The
 33521B
@@ -691,7 +702,7 @@ uv run wavegen-tool configure-sine `
 ```
 
 Dry-run supports sine, square, ramp, triangle, pulse, DC, noise, PRBS, and all
-four frequency sweep configurations. Its exact `--model`
+four linear/logarithmic and four List Sweep configurations. Its exact `--model`
 choices are `keysight-33510b`, `keysight-33512b`, and `keysight-33521b`, with
 `keysight-33521b` as the default. Standalone configure simulation uses the same
 selection. Model selection never overrides Live `*IDN?` detection; non-default
@@ -710,8 +721,10 @@ channel, and safety validation as the corresponding configuration command.
 
 Sine sweeps support linear or logarithmic spacing, separate start and stop
 frequencies, sweep time, hold time, and return time. Select Channel 1 or Channel
-2 with `--channel`; the default is Channel 1. The command uses the Immediate
-trigger source only and leaves the selected output off:
+2 with `--channel`; the default is Channel 1. The trigger source defaults to
+Immediate and may be changed with `--trigger-source bus` or
+`--trigger-source timer --trigger-timer-s SECONDS`. Configuration leaves the
+selected output off:
 
 ```powershell
 uv run wavegen-tool configure-sine-sweep `
@@ -729,18 +742,21 @@ uv run wavegen-tool configure-sine-sweep `
   --load 50
 ```
 
-The dry-run previews the start/stop, spacing, sweep/hold/return time, Immediate
-trigger, and sweep-mode SCPI commands without VISA I/O. Normal sine, square,
+The dry-run previews the start/stop, spacing, sweep/hold/return time, trigger,
+and sweep-mode SCPI commands without VISA I/O. A Timer interval must be from
+0.000001 through 8000 seconds and at least the complete sweep, hold, and return
+time. Normal sine, square,
 ramp, triangle, and pulse configuration explicitly restores CW frequency mode
-on the selected channel after a sweep while leaving that output off.
+on the selected channel after a sweep or List Sweep while leaving that output off.
 
 ## Configure Selected-Channel Square, Ramp, and Triangle Frequency Sweeps
 
 The `configure-square-sweep`, `configure-ramp-sweep`, and
 `configure-triangle-sweep` commands support linear or logarithmic spacing,
 separate start and stop frequencies, sweep time, hold time, and return time.
-They accept `--channel 1` or `--channel 2`, default to Channel 1, use the
-Immediate trigger source only, and leave the selected output off.
+They accept `--channel 1` or `--channel 2`, default to Channel 1, support the
+same Immediate, Bus, and Timer trigger options, and leave the selected output
+off.
 
 Square sweeps accept `--duty-cycle-percent`; its frequency-dependent limit is
 validated at the higher endpoint of the complete sweep. Ramp sweeps accept
@@ -770,6 +786,36 @@ configuration. It does not create a ResourceManager, open a session, query, or
 write. Live use continues to require an explicit VISA resource. These commands
 configure one selected channel; they do not add coupled or synchronized
 dual-channel sweep start.
+
+## Configure a Frequency List Sweep
+
+The Direct CLI supports Frequency List Sweep for Sine, Square, Ramp, and
+Triangle with `configure-sine-list-sweep`, `configure-square-list-sweep`,
+`configure-ramp-list-sweep`, and `configure-triangle-list-sweep`. Provide 1 to
+128 frequencies as one comma-separated `--frequencies-hz` value. Input order is
+preserved and duplicate frequencies are allowed. One shared `--dwell-s` value
+from 0.000001 through 1000 seconds controls how long Immediate trigger remains
+at each frequency.
+
+Preview a Sine List Sweep without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-sine-list-sweep `
+  --dry-run `
+  --model keysight-33521b `
+  --frequencies-hz "1000, 3000, 7000" `
+  --dwell-s 0.005 `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --phase-deg 0 `
+  --load 50
+```
+
+List Sweep uses Immediate trigger only, configures all parameters before
+enabling List mode, and leaves the selected output off. Pulse, PRBS, Arbitrary,
+External, Bus, Timer, and Manual-triggered List Sweep, per-point dwell, list
+files, instrument list load/store, and markers are outside the current scope.
+Worker and WebUI do not expose List Sweep.
 
 ## Configure a Channel 1 Square Wave
 
@@ -1100,6 +1146,19 @@ PRBS dry-run applies the live pattern, bit-rate, and edge-time/bit-period
 validation and previews the same SCPI plan. It performs no VISA I/O; live
 `configure-prbs` still requires an explicit resource.
 
+## Send One Bus Trigger
+
+`wavegen-tool trigger` sends exactly one instrument-wide IEEE-488.2 `*TRG`
+event and returns without waiting for a sweep or Burst to finish. It has no
+`--channel` option: every currently armed channel whose trigger source is Bus
+may respond to the same event. The command does not change output state;
+output-on remains a separate explicit operation.
+
+```powershell
+uv run wavegen-tool trigger `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE"
+```
+
 ## Control the Selected-Channel Output
 
 Output state changes are always explicit. Select Channel 1 or Channel 2 with
@@ -1187,6 +1246,10 @@ uv run wavegen-tool configure-sine-sweep --help
 uv run wavegen-tool configure-square-sweep --help
 uv run wavegen-tool configure-ramp-sweep --help
 uv run wavegen-tool configure-triangle-sweep --help
+uv run wavegen-tool configure-sine-list-sweep --help
+uv run wavegen-tool configure-square-list-sweep --help
+uv run wavegen-tool configure-ramp-list-sweep --help
+uv run wavegen-tool configure-triangle-list-sweep --help
 uv run wavegen-tool configure-square --help
 uv run wavegen-tool configure-ramp --help
 uv run wavegen-tool configure-triangle --help
@@ -1194,5 +1257,6 @@ uv run wavegen-tool configure-pulse --help
 uv run wavegen-tool configure-dc --help
 uv run wavegen-tool configure-noise --help
 uv run wavegen-tool configure-prbs --help
+uv run wavegen-tool trigger --help
 uv run wavegen-tool output --help
 ```

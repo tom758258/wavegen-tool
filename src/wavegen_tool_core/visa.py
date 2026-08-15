@@ -68,6 +68,11 @@ ERROR_QUEUE_MAX_READS_MIN = 1
 ERROR_QUEUE_MAX_READS_MAX = 100
 ERROR_QUEUE_NO_ERROR_CODE = 0
 RAMP_TRIANGLE_MAX_FREQUENCY_HZ = 200_000.0
+FREQUENCY_LIST_MIN_POINTS = 1
+FREQUENCY_LIST_MAX_POINTS = 128
+FREQUENCY_LIST_MIN_FREQUENCY_HZ = 0.000001
+FREQUENCY_LIST_MIN_DWELL_S = 0.000001
+FREQUENCY_LIST_MAX_DWELL_S = 1000.0
 FM_MAX_DEVIATION_HZ = 15_000_000.0
 MODULATION_MIN_FREQUENCY_HZ = 0.000001
 FSK_MIN_RATE_HZ = 0.000125
@@ -85,6 +90,8 @@ BURST_MAX_PERIOD_S = 8000.0
 BURST_MIN_CARRIER_RATE_HZ = 0.002001
 BURST_MAX_SINE_SQUARE_FREQUENCY_HZ = 6_000_000.0
 BURST_PERIOD_MARGIN_S = 1e-6
+TRIGGER_MIN_TIMER_S = 1e-6
+TRIGGER_MAX_TIMER_S = 8000.0
 STATUS_QUERIES = (
     "OUTPut1?",
     "SOURce1:FUNCtion?",
@@ -341,10 +348,12 @@ class SumConfig:
 
 @dataclass(frozen=True)
 class CountedBurstConfig:
-    """Internal immediate-triggered counted-burst settings."""
+    """Triggered counted-burst settings."""
 
     count: object
-    period_s: object
+    period_s: object = None
+    trigger_source: object = "immediate"
+    trigger_timer_s: object = None
 
 
 @dataclass(frozen=True)
@@ -410,6 +419,7 @@ class SineSweepConfigurationResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -431,6 +441,7 @@ class SineSweepDryRunResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -456,6 +467,7 @@ class SquareSweepConfigurationResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -478,6 +490,7 @@ class SquareSweepDryRunResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -504,6 +517,7 @@ class RampSweepConfigurationResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -526,6 +540,7 @@ class RampSweepDryRunResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -552,6 +567,7 @@ class TriangleSweepConfigurationResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -573,6 +589,7 @@ class TriangleSweepDryRunResult:
     hold_time_s: float
     return_time_s: float
     trigger_source: str
+    trigger_timer_s: float | None
     amplitude_vpp: float
     offset_v: float
     phase_deg: float
@@ -889,6 +906,164 @@ class OutputResult:
     identity: InstrumentIdentity
     output_state: str
     channel: int = 1
+
+
+@dataclass(frozen=True)
+class SineListSweepConfigurationResult:
+    """A successful selected-channel sine frequency List Sweep configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    load: str
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class SineListSweepDryRunResult:
+    """A hardware-free preview of a selected-channel sine frequency List Sweep."""
+
+    model: str
+    canonical_model_id: str
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class SquareListSweepConfigurationResult:
+    """A successful selected-channel square frequency List Sweep configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    duty_cycle_percent: float
+    load: str
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class SquareListSweepDryRunResult:
+    """A hardware-free preview of a selected-channel square frequency List Sweep."""
+
+    model: str
+    canonical_model_id: str
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    duty_cycle_percent: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class RampListSweepConfigurationResult:
+    """A successful selected-channel ramp frequency List Sweep configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    symmetry_percent: float
+    load: str
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class RampListSweepDryRunResult:
+    """A hardware-free preview of a selected-channel ramp frequency List Sweep."""
+
+    model: str
+    canonical_model_id: str
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    symmetry_percent: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class TriangleListSweepConfigurationResult:
+    """A successful selected-channel triangle frequency List Sweep configuration."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    load: str
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class TriangleListSweepDryRunResult:
+    """A hardware-free preview of a selected-channel triangle frequency List Sweep."""
+
+    model: str
+    canonical_model_id: str
+    frequencies_hz: tuple[float, ...]
+    dwell_s: float
+    amplitude_vpp: float
+    offset_v: float
+    phase_deg: float
+    load: str
+    commands: tuple[str, ...]
+    executed: bool = False
+    output_state: str = "off"
+    channel: int = 1
+
+
+@dataclass(frozen=True)
+class BusTriggerResult:
+    """A successful one-shot instrument-wide bus trigger."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
 
 
 @dataclass(frozen=True)
@@ -1782,6 +1957,8 @@ def configure_sine_sweep(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -1803,6 +1980,8 @@ def configure_sine_sweep(
             offset_v,
             load,
             phase_deg,
+            trigger_source,
+            trigger_timer_s,
             capabilities=capabilities,
         )
         return prepared[:-1], prepared[-1]
@@ -1828,6 +2007,8 @@ def configure_sine_sweep(
         offset,
         normalized_load,
         phase,
+        normalized_trigger_source,
+        normalized_trigger_timer,
     ) = prepared
     return SineSweepConfigurationResult(
         resource=context.resource,
@@ -1840,7 +2021,8 @@ def configure_sine_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -1862,6 +2044,8 @@ def dry_run_sine_sweep(
     load: object = 50,
     phase_deg: object = 0.0,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
 ) -> SineSweepDryRunResult:
     """Preview a validated selected-channel sine sweep without VISA I/O."""
@@ -1881,6 +2065,8 @@ def dry_run_sine_sweep(
         offset,
         normalized_load,
         phase,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     ) = _prepare_sine_sweep(
         start_frequency_hz,
@@ -1893,6 +2079,8 @@ def dry_run_sine_sweep(
         offset_v,
         load,
         phase_deg,
+        trigger_source,
+        trigger_timer_s,
         capabilities=capabilities,
     )
     return SineSweepDryRunResult(
@@ -1904,7 +2092,8 @@ def dry_run_sine_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -1929,6 +2118,8 @@ def configure_square_sweep(
     phase_deg: object = 0.0,
     duty_cycle_percent: object = 50,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -1951,6 +2142,8 @@ def configure_square_sweep(
             duty_cycle_percent,
             load,
             phase_deg,
+            trigger_source,
+            trigger_timer_s,
             capabilities=capabilities,
         )
         return prepared[:-1], prepared[-1]
@@ -1977,6 +2170,8 @@ def configure_square_sweep(
         normalized_load,
         phase,
         duty_cycle,
+        normalized_trigger_source,
+        normalized_trigger_timer,
     ) = prepared
     return SquareSweepConfigurationResult(
         resource=context.resource,
@@ -1989,7 +2184,8 @@ def configure_square_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2013,6 +2209,8 @@ def dry_run_square_sweep(
     phase_deg: object = 0.0,
     duty_cycle_percent: object = 50,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
 ) -> SquareSweepDryRunResult:
     """Preview a validated selected-channel square sweep without VISA I/O."""
@@ -2033,6 +2231,8 @@ def dry_run_square_sweep(
         normalized_load,
         phase,
         duty_cycle,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     ) = _prepare_square_sweep(
         start_frequency_hz,
@@ -2046,6 +2246,8 @@ def dry_run_square_sweep(
         duty_cycle_percent,
         load,
         phase_deg,
+        trigger_source,
+        trigger_timer_s,
         capabilities=capabilities,
     )
     return SquareSweepDryRunResult(
@@ -2057,7 +2259,8 @@ def dry_run_square_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2083,6 +2286,8 @@ def configure_ramp_sweep(
     phase_deg: object = 0.0,
     symmetry_percent: object = 100,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -2102,6 +2307,8 @@ def configure_ramp_sweep(
         normalized_load,
         phase,
         symmetry,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     ) = _prepare_ramp_sweep(
         start_frequency_hz,
@@ -2115,6 +2322,8 @@ def configure_ramp_sweep(
         symmetry_percent,
         load,
         phase_deg,
+        trigger_source,
+        trigger_timer_s,
     )
     context = _write_to_supported_instrument(
         resource,
@@ -2138,7 +2347,8 @@ def configure_ramp_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2162,6 +2372,8 @@ def dry_run_ramp_sweep(
     phase_deg: object = 0.0,
     symmetry_percent: object = 100,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
 ) -> RampSweepDryRunResult:
     """Preview a validated selected-channel ramp sweep without VISA I/O."""
@@ -2182,6 +2394,8 @@ def dry_run_ramp_sweep(
         normalized_load,
         phase,
         symmetry,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     ) = _prepare_ramp_sweep(
         start_frequency_hz,
@@ -2195,6 +2409,8 @@ def dry_run_ramp_sweep(
         symmetry_percent,
         load,
         phase_deg,
+        trigger_source,
+        trigger_timer_s,
     )
     return RampSweepDryRunResult(
         model=model_info.canonical_model,
@@ -2205,7 +2421,8 @@ def dry_run_ramp_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2230,6 +2447,8 @@ def configure_triangle_sweep(
     backend: str | None = None,
     phase_deg: object = 0.0,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -2248,6 +2467,8 @@ def configure_triangle_sweep(
         offset,
         normalized_load,
         phase,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     ) = _prepare_triangle_sweep(
         start_frequency_hz,
@@ -2260,6 +2481,8 @@ def configure_triangle_sweep(
         offset_v,
         load,
         phase_deg,
+        trigger_source,
+        trigger_timer_s,
     )
     context = _write_to_supported_instrument(
         resource,
@@ -2283,7 +2506,8 @@ def configure_triangle_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2305,6 +2529,8 @@ def dry_run_triangle_sweep(
     load: object = 50,
     phase_deg: object = 0.0,
     *,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     channel: int = 1,
 ) -> TriangleSweepDryRunResult:
     """Preview a validated selected-channel triangle sweep without VISA I/O."""
@@ -2324,6 +2550,8 @@ def dry_run_triangle_sweep(
         offset,
         normalized_load,
         phase,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     ) = _prepare_triangle_sweep(
         start_frequency_hz,
@@ -2336,6 +2564,8 @@ def dry_run_triangle_sweep(
         offset_v,
         load,
         phase_deg,
+        trigger_source,
+        trigger_timer_s,
     )
     return TriangleSweepDryRunResult(
         model=model_info.canonical_model,
@@ -2346,7 +2576,8 @@ def dry_run_triangle_sweep(
         sweep_time_s=sweep_time,
         hold_time_s=hold_time,
         return_time_s=return_time,
-        trigger_source="immediate",
+        trigger_source=normalized_trigger_source,
+        trigger_timer_s=normalized_trigger_timer,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2354,6 +2585,684 @@ def dry_run_triangle_sweep(
         commands=_channelize_commands(commands, selected_channel),
         channel=selected_channel,
     )
+
+
+def configure_sine_list_sweep(
+    resource: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> SineListSweepConfigurationResult:
+    """Validate and configure a selected-channel sine frequency List Sweep."""
+
+    frequency_values = _normalize_frequency_list(
+        frequencies_hz,
+        waveform="Sine List Sweep",
+    )
+
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_sine_list_sweep(
+            frequency_values,
+            dwell_s,
+            amplitude_vpp,
+            offset_v,
+            load,
+            phase_deg,
+            capabilities=capabilities,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    frequencies, dwell, amplitude, offset, normalized_load, phase = prepared
+    return SineListSweepConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        load=normalized_load,
+        channel=channel,
+    )
+
+
+def dry_run_sine_list_sweep(
+    model: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
+) -> SineListSweepDryRunResult:
+    """Preview a validated selected-channel sine frequency List Sweep."""
+
+    model_info, capabilities = _require_hardware_free_model(model, "sine List Sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
+    frequencies, dwell, amplitude, offset, normalized_load, phase, commands = (
+        _prepare_sine_list_sweep(
+            frequencies_hz,
+            dwell_s,
+            amplitude_vpp,
+            offset_v,
+            load,
+            phase_deg,
+            capabilities=capabilities,
+        )
+    )
+    return SineListSweepDryRunResult(
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        load=normalized_load,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
+    )
+
+
+def configure_square_list_sweep(
+    resource: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    phase_deg: object = 0.0,
+    duty_cycle_percent: object = 50,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> SquareListSweepConfigurationResult:
+    """Validate and configure a selected-channel square frequency List Sweep."""
+
+    frequency_values = _normalize_frequency_list(
+        frequencies_hz,
+        waveform="Square List Sweep",
+    )
+
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_square_list_sweep(
+            frequency_values,
+            dwell_s,
+            amplitude_vpp,
+            offset_v,
+            duty_cycle_percent,
+            load,
+            phase_deg,
+            capabilities=capabilities,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    frequencies, dwell, amplitude, offset, duty_cycle, normalized_load, phase = prepared
+    return SquareListSweepConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        duty_cycle_percent=duty_cycle,
+        load=normalized_load,
+        channel=channel,
+    )
+
+
+def dry_run_square_list_sweep(
+    model: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    phase_deg: object = 0.0,
+    duty_cycle_percent: object = 50,
+    *,
+    channel: int = 1,
+) -> SquareListSweepDryRunResult:
+    """Preview a validated selected-channel square frequency List Sweep."""
+
+    model_info, capabilities = _require_hardware_free_model(model, "square List Sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
+    (
+        frequencies,
+        dwell,
+        amplitude,
+        offset,
+        duty_cycle,
+        normalized_load,
+        phase,
+        commands,
+    ) = _prepare_square_list_sweep(
+        frequencies_hz,
+        dwell_s,
+        amplitude_vpp,
+        offset_v,
+        duty_cycle_percent,
+        load,
+        phase_deg,
+        capabilities=capabilities,
+    )
+    return SquareListSweepDryRunResult(
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        duty_cycle_percent=duty_cycle,
+        load=normalized_load,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
+    )
+
+
+def configure_ramp_list_sweep(
+    resource: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    phase_deg: object = 0.0,
+    symmetry_percent: object = 100,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> RampListSweepConfigurationResult:
+    """Validate and configure a selected-channel ramp frequency List Sweep."""
+
+    frequency_values = _normalize_frequency_list(
+        frequencies_hz,
+        waveform="Ramp List Sweep",
+        maximum_frequency_hz=RAMP_TRIANGLE_MAX_FREQUENCY_HZ,
+    )
+
+    def prepare_configuration(
+        _capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_ramp_list_sweep(
+            frequency_values,
+            dwell_s,
+            amplitude_vpp,
+            offset_v,
+            symmetry_percent,
+            load,
+            phase_deg,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    frequencies, dwell, amplitude, offset, symmetry, normalized_load, phase = prepared
+    return RampListSweepConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        symmetry_percent=symmetry,
+        load=normalized_load,
+        channel=channel,
+    )
+
+
+def dry_run_ramp_list_sweep(
+    model: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    phase_deg: object = 0.0,
+    symmetry_percent: object = 100,
+    *,
+    channel: int = 1,
+) -> RampListSweepDryRunResult:
+    """Preview a validated selected-channel ramp frequency List Sweep."""
+
+    model_info, capabilities = _require_hardware_free_model(model, "ramp List Sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
+    (
+        frequencies,
+        dwell,
+        amplitude,
+        offset,
+        symmetry,
+        normalized_load,
+        phase,
+        commands,
+    ) = _prepare_ramp_list_sweep(
+        frequencies_hz,
+        dwell_s,
+        amplitude_vpp,
+        offset_v,
+        symmetry_percent,
+        load,
+        phase_deg,
+    )
+    return RampListSweepDryRunResult(
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        symmetry_percent=symmetry,
+        load=normalized_load,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
+    )
+
+
+def configure_triangle_list_sweep(
+    resource: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    backend: str | None = None,
+    phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> TriangleListSweepConfigurationResult:
+    """Validate and configure a selected-channel triangle frequency List Sweep."""
+
+    frequency_values = _normalize_frequency_list(
+        frequencies_hz,
+        waveform="Triangle List Sweep",
+        maximum_frequency_hz=RAMP_TRIANGLE_MAX_FREQUENCY_HZ,
+    )
+
+    def prepare_configuration(
+        _capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        prepared = _prepare_triangle_list_sweep(
+            frequency_values,
+            dwell_s,
+            amplitude_vpp,
+            offset_v,
+            load,
+            phase_deg,
+        )
+        return prepared[:-1], prepared[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    frequencies, dwell, amplitude, offset, normalized_load, phase = prepared
+    return TriangleListSweepConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        load=normalized_load,
+        channel=channel,
+    )
+
+
+def dry_run_triangle_list_sweep(
+    model: str,
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object = 0,
+    load: object = 50,
+    phase_deg: object = 0.0,
+    *,
+    channel: int = 1,
+) -> TriangleListSweepDryRunResult:
+    """Preview a validated selected-channel triangle frequency List Sweep."""
+
+    model_info, capabilities = _require_hardware_free_model(model, "triangle List Sweep")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
+    frequencies, dwell, amplitude, offset, normalized_load, phase, commands = (
+        _prepare_triangle_list_sweep(
+            frequencies_hz,
+            dwell_s,
+            amplitude_vpp,
+            offset_v,
+            load,
+            phase_deg,
+        )
+    )
+    return TriangleListSweepDryRunResult(
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
+        frequencies_hz=frequencies,
+        dwell_s=dwell,
+        amplitude_vpp=amplitude,
+        offset_v=offset,
+        phase_deg=phase,
+        load=normalized_load,
+        commands=_channelize_commands(commands, selected_channel),
+        channel=selected_channel,
+    )
+
+
+def _normalize_frequency_list(
+    values: object,
+    *,
+    waveform: str,
+    maximum_frequency_hz: float | None = None,
+) -> tuple[float, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Iterable):
+        raise WaveformParameterError(
+            f"{waveform} frequencies must be an iterable of finite numbers."
+        )
+    normalized = tuple(
+        _normalize_finite_number(value, "frequency", waveform=waveform)
+        for value in values
+    )
+    if not FREQUENCY_LIST_MIN_POINTS <= len(normalized) <= FREQUENCY_LIST_MAX_POINTS:
+        raise WaveformParameterError(
+            f"{waveform} must contain between 1 and 128 frequencies."
+        )
+    maximum = maximum_frequency_hz
+    for frequency in normalized:
+        if frequency < FREQUENCY_LIST_MIN_FREQUENCY_HZ or (
+            maximum is not None and frequency > maximum
+        ):
+            maximum_text = (
+                f" and {_format_scpi_number(maximum)} Hz"
+                if maximum is not None
+                else ""
+            )
+            raise WaveformParameterError(
+                f"{waveform} frequencies must be between 0.000001 Hz"
+                f"{maximum_text}."
+            )
+    return normalized
+
+
+def _normalize_list_dwell(value: object, *, waveform: str) -> float:
+    dwell = _normalize_finite_number(value, "dwell", waveform=waveform)
+    if not FREQUENCY_LIST_MIN_DWELL_S <= dwell <= FREQUENCY_LIST_MAX_DWELL_S:
+        raise WaveformParameterError(
+            f"{waveform} dwell must be between 0.000001 s and 1000 s."
+        )
+    return dwell
+
+
+def _build_list_sweep_commands(
+    base_commands: tuple[str, ...],
+    frequencies_hz: tuple[float, ...],
+    dwell_s: float,
+) -> tuple[str, ...]:
+    frequency_list = ",".join(_format_scpi_number(value) for value in frequencies_hz)
+    return (
+        base_commands[0],
+        "SOURce1:AM:STATe OFF",
+        "SOURce1:FM:STATe OFF",
+        "SOURce1:PM:STATe OFF",
+        "SOURce1:FSKey:STATe OFF",
+        "SOURce1:BPSK:STATe OFF",
+        "SOURce1:PWM:STATe OFF",
+        "SOURce1:BURSt:STATe OFF",
+        *base_commands[1:],
+        f"SOURce1:LIST:FREQuency {frequency_list}",
+        f"SOURce1:LIST:DWELl {_format_scpi_number(dwell_s)}",
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:FREQuency:MODE LIST",
+    )
+
+
+def _prepare_sine_list_sweep(
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    load: object,
+    phase_deg: object,
+    *,
+    capabilities: WavegenCapabilities,
+) -> tuple[tuple[float, ...], float, float, float, str, float, tuple[str, ...]]:
+    waveform = "Sine List Sweep"
+    frequencies = _normalize_frequency_list(
+        frequencies_hz,
+        waveform=waveform,
+        maximum_frequency_hz=capabilities.max_sine_square_pulse_noise_frequency_hz,
+    )
+    dwell = _normalize_list_dwell(dwell_s, waveform=waveform)
+    _, amplitude, offset, normalized_load, phase, base_commands = _prepare_sine(
+        frequencies[0],
+        amplitude_vpp,
+        offset_v,
+        load,
+        phase_deg,
+        capabilities=capabilities,
+        include_cw_mode=False,
+    )
+    commands = _build_list_sweep_commands(base_commands, frequencies, dwell)
+    return frequencies, dwell, amplitude, offset, normalized_load, phase, commands
+
+
+def _prepare_square_list_sweep(
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    duty_cycle_percent: object,
+    load: object,
+    phase_deg: object,
+    *,
+    capabilities: WavegenCapabilities,
+) -> tuple[
+    tuple[float, ...],
+    float,
+    float,
+    float,
+    float,
+    str,
+    float,
+    tuple[str, ...],
+]:
+    waveform = "Square List Sweep"
+    frequencies = _normalize_frequency_list(
+        frequencies_hz,
+        waveform=waveform,
+        maximum_frequency_hz=capabilities.max_sine_square_pulse_noise_frequency_hz,
+    )
+    dwell = _normalize_list_dwell(dwell_s, waveform=waveform)
+    (
+        _,
+        amplitude,
+        offset,
+        duty_cycle,
+        normalized_load,
+        phase,
+        base_commands,
+    ) = _prepare_square(
+        frequencies[0],
+        amplitude_vpp,
+        offset_v,
+        duty_cycle_percent,
+        load,
+        phase_deg,
+        capabilities=capabilities,
+        include_cw_mode=False,
+        duty_cycle_validation_frequency_hz=max(frequencies),
+    )
+    commands = _build_list_sweep_commands(base_commands, frequencies, dwell)
+    return (
+        frequencies,
+        dwell,
+        amplitude,
+        offset,
+        duty_cycle,
+        normalized_load,
+        phase,
+        commands,
+    )
+
+
+def _prepare_ramp_list_sweep(
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    symmetry_percent: object,
+    load: object,
+    phase_deg: object,
+) -> tuple[
+    tuple[float, ...],
+    float,
+    float,
+    float,
+    float,
+    str,
+    float,
+    tuple[str, ...],
+]:
+    waveform = "Ramp List Sweep"
+    frequencies = _normalize_frequency_list(
+        frequencies_hz,
+        waveform=waveform,
+        maximum_frequency_hz=RAMP_TRIANGLE_MAX_FREQUENCY_HZ,
+    )
+    dwell = _normalize_list_dwell(dwell_s, waveform=waveform)
+    (
+        _,
+        amplitude,
+        offset,
+        symmetry,
+        normalized_load,
+        phase,
+        base_commands,
+    ) = _prepare_ramp(
+        frequencies[0],
+        amplitude_vpp,
+        offset_v,
+        symmetry_percent,
+        load,
+        phase_deg,
+        include_cw_mode=False,
+    )
+    commands = _build_list_sweep_commands(base_commands, frequencies, dwell)
+    return (
+        frequencies,
+        dwell,
+        amplitude,
+        offset,
+        symmetry,
+        normalized_load,
+        phase,
+        commands,
+    )
+
+
+def _prepare_triangle_list_sweep(
+    frequencies_hz: object,
+    dwell_s: object,
+    amplitude_vpp: object,
+    offset_v: object,
+    load: object,
+    phase_deg: object,
+) -> tuple[tuple[float, ...], float, float, float, str, float, tuple[str, ...]]:
+    waveform = "Triangle List Sweep"
+    frequencies = _normalize_frequency_list(
+        frequencies_hz,
+        waveform=waveform,
+        maximum_frequency_hz=RAMP_TRIANGLE_MAX_FREQUENCY_HZ,
+    )
+    dwell = _normalize_list_dwell(dwell_s, waveform=waveform)
+    _, amplitude, offset, normalized_load, phase, base_commands = _prepare_triangle(
+        frequencies[0],
+        amplitude_vpp,
+        offset_v,
+        load,
+        phase_deg,
+        include_cw_mode=False,
+    )
+    commands = _build_list_sweep_commands(base_commands, frequencies, dwell)
+    return frequencies, dwell, amplitude, offset, normalized_load, phase, commands
 
 
 def _require_capabilities_for_model_id(model_id: str) -> WavegenCapabilities:
@@ -2513,7 +3422,10 @@ def _build_sweep_tail(
     sweep_time: float,
     hold_time: float,
     return_time: float,
+    trigger_source: str,
+    trigger_timer_s: float | None,
 ) -> tuple[str, ...]:
+    trigger_commands = _build_trigger_commands(trigger_source, trigger_timer_s)
     return (
         f"SOURce1:FREQuency:STARt {_format_scpi_number(start_frequency)}",
         f"SOURce1:FREQuency:STOP {_format_scpi_number(stop_frequency)}",
@@ -2521,8 +3433,72 @@ def _build_sweep_tail(
         f"SOURce1:SWEep:TIME {_format_scpi_number(sweep_time)}",
         f"SOURce1:SWEep:HTIMe {_format_scpi_number(hold_time)}",
         f"SOURce1:SWEep:RTIMe {_format_scpi_number(return_time)}",
-        "TRIGger1:SOURce IMMediate",
+        *trigger_commands,
         "SOURce1:FREQuency:MODE SWEep",
+    )
+
+
+def _normalize_trigger_source(value: object, *, waveform: str) -> str:
+    if not isinstance(value, str):
+        raise WaveformParameterError(
+            f"{waveform} trigger source must be immediate, bus, or timer."
+        )
+    normalized = value.strip().casefold()
+    if normalized not in {"immediate", "bus", "timer"}:
+        raise WaveformParameterError(
+            f"{waveform} trigger source must be immediate, bus, or timer."
+        )
+    return normalized
+
+
+def _prepare_trigger(
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
+    *,
+    waveform: str,
+    minimum_timer_s: float | None = None,
+) -> tuple[str, float | None]:
+    source = _normalize_trigger_source(trigger_source, waveform=waveform)
+    if source != "timer":
+        if trigger_timer_s is not None:
+            raise WaveformParameterError(
+                f"{waveform} trigger timer must be omitted for {source} trigger source."
+            )
+        return source, None
+    if trigger_timer_s is None:
+        raise WaveformParameterError(
+            f"{waveform} trigger timer is required for timer trigger source."
+        )
+    timer = _normalize_finite_number(
+        trigger_timer_s,
+        "trigger timer",
+        waveform=waveform,
+    )
+    if not TRIGGER_MIN_TIMER_S <= timer <= TRIGGER_MAX_TIMER_S:
+        raise WaveformParameterError(
+            f"{waveform} trigger timer must be between 0.000001 s and 8000 s."
+        )
+    if minimum_timer_s is not None and timer < minimum_timer_s:
+        raise WaveformParameterError(
+            f"{waveform} trigger timer is too short for the configured operation."
+        )
+    return source, timer
+
+
+def _build_trigger_commands(
+    trigger_source: str,
+    trigger_timer_s: float | None,
+) -> tuple[str, ...]:
+    source_command = {
+        "immediate": "IMMediate",
+        "bus": "BUS",
+        "timer": "TIMer",
+    }[trigger_source]
+    if trigger_timer_s is None:
+        return (f"TRIGger1:SOURce {source_command}",)
+    return (
+        f"TRIGger1:TIMer {_format_scpi_number(trigger_timer_s)}",
+        f"TRIGger1:SOURce {source_command}",
     )
 
 
@@ -2538,6 +3514,8 @@ def _prepare_square_sweep(
     duty_cycle_percent: object,
     load: object,
     phase_deg: object,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     *,
     capabilities: WavegenCapabilities,
 ) -> tuple[
@@ -2552,6 +3530,8 @@ def _prepare_square_sweep(
     str,
     float,
     float,
+    str,
+    float | None,
     tuple[str, ...],
 ]:
     start_frequency = _normalize_finite_number(
@@ -2617,6 +3597,12 @@ def _prepare_square_sweep(
         return_time_s,
         waveform="Square sweep",
     )
+    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
+        trigger_source,
+        trigger_timer_s,
+        waveform="Square sweep",
+        minimum_timer_s=sweep_time + hold_time + return_time,
+    )
     commands = (
         base_commands[0],
         "SOURce1:AM:STATe OFF",
@@ -2635,6 +3621,8 @@ def _prepare_square_sweep(
         sweep_time,
         hold_time,
         return_time,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         ),
     )
     return (
@@ -2649,6 +3637,8 @@ def _prepare_square_sweep(
         normalized_load,
         phase,
         duty_cycle,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     )
 
@@ -2665,6 +3655,8 @@ def _prepare_ramp_sweep(
     symmetry_percent: object,
     load: object,
     phase_deg: object,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
 ) -> tuple[
     float,
     float,
@@ -2677,6 +3669,8 @@ def _prepare_ramp_sweep(
     str,
     float,
     float,
+    str,
+    float | None,
     tuple[str, ...],
 ]:
     start_frequency = _normalize_finite_number(
@@ -2734,6 +3728,12 @@ def _prepare_ramp_sweep(
         return_time_s,
         waveform="Ramp sweep",
     )
+    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
+        trigger_source,
+        trigger_timer_s,
+        waveform="Ramp sweep",
+        minimum_timer_s=sweep_time + hold_time + return_time,
+    )
     commands = (
         base_commands[0],
         "SOURce1:AM:STATe OFF",
@@ -2752,6 +3752,8 @@ def _prepare_ramp_sweep(
         sweep_time,
         hold_time,
         return_time,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         ),
     )
     return (
@@ -2766,6 +3768,8 @@ def _prepare_ramp_sweep(
         normalized_load,
         phase,
         symmetry,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     )
 
@@ -2781,6 +3785,8 @@ def _prepare_triangle_sweep(
     offset_v: object,
     load: object,
     phase_deg: object,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
 ) -> tuple[
     float,
     float,
@@ -2792,6 +3798,8 @@ def _prepare_triangle_sweep(
     float,
     str,
     float,
+    str,
+    float | None,
     tuple[str, ...],
 ]:
     start_frequency = _normalize_finite_number(
@@ -2847,6 +3855,12 @@ def _prepare_triangle_sweep(
         return_time_s,
         waveform="Triangle sweep",
     )
+    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
+        trigger_source,
+        trigger_timer_s,
+        waveform="Triangle sweep",
+        minimum_timer_s=sweep_time + hold_time + return_time,
+    )
     commands = (
         base_commands[0],
         "SOURce1:AM:STATe OFF",
@@ -2865,6 +3879,8 @@ def _prepare_triangle_sweep(
         sweep_time,
         hold_time,
         return_time,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         ),
     )
     return (
@@ -2878,6 +3894,8 @@ def _prepare_triangle_sweep(
         offset,
         normalized_load,
         phase,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     )
 
@@ -2893,6 +3911,8 @@ def _prepare_sine_sweep(
     offset_v: object,
     load: object,
     phase_deg: object,
+    trigger_source: object = "immediate",
+    trigger_timer_s: object = None,
     *,
     capabilities: WavegenCapabilities,
 ) -> tuple[
@@ -2906,6 +3926,8 @@ def _prepare_sine_sweep(
     float,
     str,
     float,
+    str,
+    float | None,
     tuple[str, ...],
 ]:
     (
@@ -2956,6 +3978,12 @@ def _prepare_sine_sweep(
         return_time_s,
         waveform="Sine sweep",
     )
+    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
+        trigger_source,
+        trigger_timer_s,
+        waveform="Sine sweep",
+        minimum_timer_s=sweep_time + hold_time + return_time,
+    )
     commands = (
         base_commands[0],
         "SOURce1:AM:STATe OFF",
@@ -2974,6 +4002,8 @@ def _prepare_sine_sweep(
         sweep_time,
         hold_time,
         return_time,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         ),
     )
     return (
@@ -2987,6 +4017,8 @@ def _prepare_sine_sweep(
         offset,
         normalized_load,
         phase,
+        normalized_trigger_source,
+        normalized_trigger_timer,
         commands,
     )
 
@@ -3075,15 +4107,6 @@ def _prepare_counted_burst(
         raise WaveformParameterError(
             "Burst count must be an integer between 1 and 100000000."
         )
-    period = _normalize_finite_number(
-        config.period_s,
-        "period",
-        waveform="Burst",
-    )
-    if not BURST_MIN_PERIOD_S <= period <= BURST_MAX_PERIOD_S:
-        raise WaveformParameterError(
-            "Burst period must be between 0.000001 s and 8000 s."
-        )
     if carrier_rate_hz < BURST_MIN_CARRIER_RATE_HZ:
         raise WaveformParameterError(
             "Burst carrier frequency or PRBS bit rate must be at least 0.002001 Hz."
@@ -3096,18 +4119,73 @@ def _prepare_counted_burst(
             "Burst Sine and Square carrier frequency must not exceed 6000000 Hz."
         )
     minimum_period = config.count / carrier_rate_hz + BURST_PERIOD_MARGIN_S
-    if period < minimum_period:
-        raise WaveformParameterError(
-            "Burst period must be at least count divided by carrier frequency or "
-            "PRBS bit rate plus 0.000001 s."
+    trigger_source = _normalize_trigger_source(
+        config.trigger_source,
+        waveform="Burst",
+    )
+    period: float | None = None
+    trigger_timer: float | None = None
+    if trigger_source == "immediate":
+        if config.period_s is None:
+            raise WaveformParameterError(
+                "Burst period is required for immediate trigger source."
+            )
+        period = _normalize_finite_number(
+            config.period_s,
+            "period",
+            waveform="Burst",
         )
-    normalized = CountedBurstConfig(count=config.count, period_s=period)
+        if not BURST_MIN_PERIOD_S <= period <= BURST_MAX_PERIOD_S:
+            raise WaveformParameterError(
+                "Burst period must be between 0.000001 s and 8000 s."
+            )
+        if period < minimum_period:
+            raise WaveformParameterError(
+                "Burst period must be at least count divided by carrier frequency or "
+                "PRBS bit rate plus 0.000001 s."
+            )
+        if config.trigger_timer_s is not None:
+            raise WaveformParameterError(
+                "Burst trigger timer must be omitted for immediate trigger source."
+            )
+    elif trigger_source == "bus":
+        if config.period_s is not None or config.trigger_timer_s is not None:
+            raise WaveformParameterError(
+                "Burst period and trigger timer must be omitted for bus trigger source."
+            )
+    else:
+        if config.period_s is not None:
+            raise WaveformParameterError(
+                "Burst period must be omitted for timer trigger source."
+            )
+        _, trigger_timer = _prepare_trigger(
+            trigger_source,
+            config.trigger_timer_s,
+            waveform="Burst",
+            minimum_timer_s=minimum_period,
+        )
+    normalized = CountedBurstConfig(
+        count=config.count,
+        period_s=period,
+        trigger_source=trigger_source,
+        trigger_timer_s=trigger_timer,
+    )
+    period_commands = (
+        (f"SOURce1:BURSt:INTernal:PERiod {_format_scpi_number(period)}",)
+        if period is not None
+        else ()
+    )
     commands = (
         "SOURce1:BURSt:MODE TRIGgered",
         f"SOURce1:BURSt:NCYCles {config.count}",
-        f"SOURce1:BURSt:INTernal:PERiod {_format_scpi_number(period)}",
+        *period_commands,
+        *(
+            (f"TRIGger1:TIMer {_format_scpi_number(trigger_timer)}",)
+            if trigger_timer is not None
+            else ()
+        ),
         "SOURce1:BURSt:PHASe 0",
-        "TRIGger1:SOURce IMMediate",
+        _build_trigger_commands(trigger_source, None)[0],
         "SOURce1:BURSt:STATe ON",
     )
     return normalized, commands
@@ -5709,6 +6787,34 @@ def set_output(
         identity=context.identity,
         output_state=normalized_state,
         channel=channel,
+    )
+
+
+def send_bus_trigger(
+    resource: str,
+    backend: str | None = None,
+    *,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> BusTriggerResult:
+    """Send one instrument-wide IEEE-488.2 bus trigger without waiting."""
+
+    def write_trigger(
+        session: VisaSession,
+        _context: IdentificationResult,
+    ) -> None:
+        session.write("*TRG")
+
+    context, _ = _run_on_supported_instrument(
+        resource,
+        backend,
+        write_trigger,
+        resource_manager_factory=resource_manager_factory,
+    )
+    return BusTriggerResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
     )
 
 

@@ -35,6 +35,8 @@ def test_configure_sine_counted_burst_dry_run_json(capsys) -> None:
     assert payload["burst_enabled"] is True
     assert payload["burst_count"] == 2
     assert payload["burst_period_s"] == 0.01
+    assert payload["burst_trigger_source"] == "immediate"
+    assert payload["burst_trigger_timer_s"] is None
     assert payload["commands"][0] == "OUTPut1 OFF"
     assert payload["commands"][-1] == "SOURce1:BURSt:STATe ON"
     assert "OUTPut1 ON" not in payload["commands"]
@@ -202,6 +204,40 @@ def install_fake_manager(monkeypatch, manager):
 
     monkeypatch.setattr(visa, "create_resource_manager", factory)
     return calls
+
+
+def test_trigger_cli_live_sends_only_one_bus_trigger(monkeypatch, capsys) -> None:
+    manager = FakeManager()
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["trigger", "--resource", USB_RESOURCE, "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["action"] == "trigger"
+    assert "channel" not in payload
+    assert "output_state" not in payload
+    assert manager.session.queries == ["*IDN?"]
+    assert manager.session.writes == ["*TRG"]
+
+
+def test_trigger_cli_simulator_supports_hardware_free_model(capsys) -> None:
+    exit_code = main(
+        ["trigger", "--simulate", "--model", "keysight-33510b", "--json"]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["model"] == "33510B"
+    assert payload["mode"] == "simulate"
+
+
+def test_trigger_cli_has_no_channel_option(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["trigger", "--help"])
+
+    assert error.value.code == ExitCode.SUCCESS
+    assert "--channel" not in capsys.readouterr().out
 
 
 def test_root_help(capsys):
@@ -3139,6 +3175,248 @@ def test_frequency_sweep_dry_run_cli_json_matrix(
     assert "SOURce1:FREQuency:MODE CW" not in payload["commands"]
     assert payload["executed"] is False
     assert captured.err == ""
+
+
+@pytest.mark.parametrize(
+    ("command", "extra", "carrier_command", "specific_field", "specific_value"),
+    [
+        (
+            "configure-sine-list-sweep",
+            [],
+            "SOURce1:FUNCtion SIN",
+            None,
+            None,
+        ),
+        (
+            "configure-square-list-sweep",
+            ["--duty-cycle-percent", "25"],
+            "SOURce1:FUNCtion SQUare",
+            "duty_cycle_percent",
+            25.0,
+        ),
+        (
+            "configure-ramp-list-sweep",
+            ["--symmetry-percent", "40"],
+            "SOURce1:FUNCtion RAMP",
+            "symmetry_percent",
+            40.0,
+        ),
+        (
+            "configure-triangle-list-sweep",
+            [],
+            "SOURce1:FUNCtion TRIangle",
+            None,
+            None,
+        ),
+    ],
+)
+def test_frequency_list_sweep_cli_dry_run_commands(
+    capsys,
+    command,
+    extra,
+    carrier_command,
+    specific_field,
+    specific_value,
+) -> None:
+    exit_code = main(
+        [
+            command,
+            "--dry-run",
+            "--frequencies-hz",
+            "7000, 1000, 7000",
+            "--dwell-s",
+            "0.005",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+            *extra,
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["action"] == command
+    assert payload["frequencies_hz"] == [7000.0, 1000.0, 7000.0]
+    assert payload["dwell_s"] == 0.005
+    assert payload["output_state"] == "off"
+    assert carrier_command in payload["commands"]
+    assert payload["commands"][-2:] == [
+        "TRIGger1:SOURce IMMediate",
+        "SOURce1:FREQuency:MODE LIST",
+    ]
+    if specific_field is not None:
+        assert payload[specific_field] == specific_value
+
+
+@pytest.mark.parametrize("frequencies", ["", "1000,,3000", "1000,nope"])
+def test_frequency_list_sweep_cli_rejects_malformed_comma_list(
+    capsys,
+    frequencies,
+) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "configure-sine-list-sweep",
+                "--dry-run",
+                "--frequencies-hz",
+                frequencies,
+                "--dwell-s",
+                "0.005",
+                "--amplitude-vpp",
+                "0.1",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert "non-empty comma-separated list of numbers" in captured.err
+    assert captured.out == ""
+
+
+def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None:
+    exit_code = main(
+        [
+            "configure-sine-sweep",
+            "--dry-run",
+            "--start-frequency-hz",
+            "1000",
+            "--stop-frequency-hz",
+            "10000",
+            "--spacing",
+            "linear",
+            "--sweep-time-s",
+            "1",
+            "--amplitude-vpp",
+            "0.1",
+            "--trigger-source",
+            "timer",
+            "--trigger-timer-s",
+            "1",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["trigger_source"] == "timer"
+    assert payload["trigger_timer_s"] == 1.0
+    assert payload["commands"][-3:] == [
+        "TRIGger1:TIMer 1",
+        "TRIGger1:SOURce TIMer",
+        "SOURce1:FREQuency:MODE SWEep",
+    ]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--trigger-source", "timer"],
+        ["--trigger-source", "bus", "--trigger-timer-s", "1"],
+    ],
+)
+def test_sweep_cli_rejects_incomplete_trigger_options(capsys, extra) -> None:
+    exit_code = main(
+        [
+            "configure-sine-sweep",
+            "--dry-run",
+            "--start-frequency-hz",
+            "1000",
+            "--stop-frequency-hz",
+            "10000",
+            "--spacing",
+            "linear",
+            "--sweep-time-s",
+            "1",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+            *extra,
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+
+
+@pytest.mark.parametrize(
+    ("source_args", "expected_source", "timer"),
+    [
+        (["--burst-trigger-source", "bus"], "bus", None),
+        (
+            ["--burst-trigger-source", "timer", "--burst-trigger-timer-s", "0.01"],
+            "timer",
+            0.01,
+        ),
+    ],
+)
+def test_counted_burst_trigger_cli_json(capsys, source_args, expected_source, timer) -> None:
+    exit_code = main(
+        [
+            "configure-sine",
+            "--dry-run",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--burst-count",
+            "2",
+            "--json",
+            *source_args,
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["burst_trigger_source"] == expected_source
+    assert payload["burst_trigger_timer_s"] == timer
+    assert not any("BURSt:INTernal:PERiod" in command for command in payload["commands"])
+
+
+@pytest.mark.parametrize(
+    "burst_args",
+    [
+        ["--burst-count", "2"],
+        ["--burst-trigger-source", "immediate"],
+        [
+            "--burst-count",
+            "2",
+            "--burst-period-s",
+            "0.01",
+            "--burst-trigger-source",
+            "bus",
+        ],
+        ["--burst-count", "2", "--burst-trigger-source", "timer"],
+    ],
+)
+def test_counted_burst_cli_rejects_incompatible_options(
+    monkeypatch, capsys, burst_args
+) -> None:
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--resource",
+            USB_RESOURCE,
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+            *burst_args,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+    assert payload["error"].startswith("waveform_parameter_error:")
+    assert "Traceback" not in captured.err
+    assert manager_calls == []
+    assert manager.opened_resources == []
 
 
 def test_configure_sine_sweep_cli_channel_two_json(capsys):
