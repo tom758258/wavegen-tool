@@ -208,6 +208,7 @@ def test_simulator_exposes_one_deterministic_recognized_resource() -> None:
     assert manager.list_resources() == (SIMULATED_33521B_RESOURCE,)
     session = manager.open_resource(SIMULATED_33521B_RESOURCE)
     assert session.query("*IDN?") == SIMULATED_33521B_IDN
+    assert session.query("SOURce1:SUM:AMPLitude?") == "0.1"
     session.close()
     manager.close()
 

@@ -83,7 +83,7 @@ class SimulatedChannelState:
     sum_source: str = "internal"
     sum_internal_function: str = "sine"
     sum_internal_frequency_hz: float = 100.0
-    sum_amplitude_percent: float = 100.0
+    sum_amplitude_percent: float = 0.1
     burst_enabled: bool = False
     burst_mode: str = "triggered"
     burst_count: int = 1

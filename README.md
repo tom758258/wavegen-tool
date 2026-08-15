@@ -6,6 +6,7 @@ supports identification, read-only status, bounded instrument error-queue
 reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
 Internal Sine amplitude, frequency, and phase modulation, Internal FSK, and
 Internal BPSK for supported static carriers, Internal PWM for pulse carriers,
+Internal Sine Sum for supported static carriers,
 Immediate-, Bus-, and Timer-triggered Counted Burst for supported static carriers,
 explicit output control, and sine, square, ramp, and triangle linear/logarithmic
 frequency sweeps and Immediate-triggered frequency List Sweeps for
@@ -30,6 +31,7 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Internal frequency-shift keying for sine, square, ramp, and triangle carriers
 - Internal binary phase-shift keying for sine, square, ramp, and triangle carriers
 - Internal sine pulse-width modulation for pulse carriers
+- Internal Sine Sum for sine, square, ramp, triangle, and pulse carriers
 - Counted Burst for sine, square, ramp, triangle, pulse, and PRBS carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate, Bus, or Timer trigger
@@ -340,10 +342,10 @@ all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep and List Sweep commands, and explicit output control.
 Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep
-trigger source/timer and Internal AM/FM/PM/FSK/BPSK/PWM and Counted Burst
+trigger source/timer and Internal AM/FM/PM/FSK/BPSK/PWM/Sum and Counted Burst
 state; normal waveform
-configuration restores CW mode and disables AM, FM, PM, FSK, BPSK, PWM, and
-Burst only on the selected channel. The
+configuration restores CW mode and disables AM, FM, PM, FSK, BPSK, PWM, Sum,
+and Burst only on the selected channel. The
 33521B
 profile rejects Channel 2.
 Standalone configure commands can select the registered 33510B, 33512B, or
