@@ -318,10 +318,11 @@ uv run wavegen-tool configure-sine `
 ```
 
 Count must be from 1 through 100000000 and an Immediate period must be from
-0.000001 through 8000 seconds. The carrier frequency or PRBS bit rate must be
-at least
-0.002001 Hz; Sine and Square Burst carriers cannot exceed 6000000 Hz. The
-period must be at least `count / carrier-rate + 0.000001` seconds. Counted
+0.000001 through 8000 seconds. Immediate and Timer Counted Burst carrier
+frequency or PRBS bit rate must be at least 0.002001 Hz; Bus and External do
+not use this internal-trigger minimum. Counted Sine and Square carriers cannot
+exceed 6000000 Hz. The period or Timer interval must be at least
+`count / carrier-rate + 0.000001` seconds. Counted
 Burst is finite-only and mutually exclusive with AM, FM, PM, FSK, BPSK, and
 PWM. Configuration first disables Burst only on the selected channel, keeps
 the selected output off throughout, and enables Burst only after all carrier

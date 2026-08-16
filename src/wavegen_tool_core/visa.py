@@ -4120,17 +4120,6 @@ def _prepare_counted_burst(
             raise WaveformParameterError(
                 "Gated Burst polarity must be normal or inverted."
             )
-        if carrier_rate_hz < BURST_MIN_CARRIER_RATE_HZ:
-            raise WaveformParameterError(
-                "Burst carrier frequency or PRBS bit rate must be at least 0.002001 Hz."
-            )
-        if (
-            carrier in {"sine", "square"}
-            and carrier_rate_hz > BURST_MAX_SINE_SQUARE_FREQUENCY_HZ
-        ):
-            raise WaveformParameterError(
-                "Burst Sine and Square carrier frequency must not exceed 6000000 Hz."
-            )
         normalized = GatedBurstConfig(polarity=polarity)
         return normalized, (
             "SOURce1:BURSt:MODE GATed",
@@ -4146,7 +4135,19 @@ def _prepare_counted_burst(
         raise WaveformParameterError(
             "Burst count must be an integer between 1 and 100000000."
         )
-    if carrier_rate_hz < BURST_MIN_CARRIER_RATE_HZ:
+    if not isinstance(config.trigger_source, str):
+        raise WaveformParameterError(
+            "Burst trigger source must be immediate, bus, timer, or external."
+        )
+    trigger_source = config.trigger_source.strip().casefold()
+    if trigger_source not in {"immediate", "bus", "timer", "external"}:
+        raise WaveformParameterError(
+            "Burst trigger source must be immediate, bus, timer, or external."
+        )
+    if (
+        trigger_source in {"immediate", "timer"}
+        and carrier_rate_hz < BURST_MIN_CARRIER_RATE_HZ
+    ):
         raise WaveformParameterError(
             "Burst carrier frequency or PRBS bit rate must be at least 0.002001 Hz."
         )
@@ -4157,16 +4158,11 @@ def _prepare_counted_burst(
         raise WaveformParameterError(
             "Burst Sine and Square carrier frequency must not exceed 6000000 Hz."
         )
-    minimum_period = config.count / carrier_rate_hz + BURST_PERIOD_MARGIN_S
-    if not isinstance(config.trigger_source, str):
-        raise WaveformParameterError(
-            "Burst trigger source must be immediate, bus, timer, or external."
-        )
-    trigger_source = config.trigger_source.strip().casefold()
-    if trigger_source not in {"immediate", "bus", "timer", "external"}:
-        raise WaveformParameterError(
-            "Burst trigger source must be immediate, bus, timer, or external."
-        )
+    minimum_period = (
+        config.count / carrier_rate_hz + BURST_PERIOD_MARGIN_S
+        if trigger_source in {"immediate", "timer"}
+        else None
+    )
     trigger_slope: str | None = None
     if config.trigger_slope is not None:
         if not isinstance(config.trigger_slope, str):

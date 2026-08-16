@@ -4327,6 +4327,52 @@ def test_gated_burst_uses_gate_plan_without_counted_or_trigger_commands() -> Non
     assert "OUTPut1 ON" not in result.commands
 
 
+@pytest.mark.parametrize("frequency", [1e-6, 10_000_000])
+def test_gated_burst_uses_normal_sine_frequency_limits(frequency) -> None:
+    result = dry_run_sine(
+        "keysight-33521b",
+        frequency,
+        0.1,
+        burst=GatedBurstConfig(),
+    )
+
+    assert result.burst == GatedBurstConfig()
+
+
+@pytest.mark.parametrize("source", ["bus", "external"])
+def test_non_internal_counted_burst_accepts_normal_low_frequency(source) -> None:
+    result = dry_run_sine(
+        "keysight-33521b",
+        1e-6,
+        0.1,
+        burst=CountedBurstConfig(2, trigger_source=source),
+    )
+
+    expected_slope = "positive" if source == "external" else None
+    assert result.burst == CountedBurstConfig(
+        2,
+        trigger_source=source,
+        trigger_slope=expected_slope,
+    )
+    assert not any(
+        "SOURce1:BURSt:INTernal:PERiod" in command
+        or "TRIGger1:TIMer" in command
+        for command in result.commands
+    )
+
+
+@pytest.mark.parametrize(
+    "burst",
+    [
+        CountedBurstConfig(1, 8000),
+        CountedBurstConfig(1, trigger_source="timer", trigger_timer_s=800),
+    ],
+)
+def test_internal_counted_burst_rejects_below_minimum_carrier_rate(burst) -> None:
+    with pytest.raises(WaveformParameterError, match="0.002001"):
+        dry_run_sine("keysight-33521b", 0.002, 0.1, burst=burst)
+
+
 def test_counted_burst_timer_reuses_minimum_duration_validation() -> None:
     with pytest.raises(WaveformParameterError, match="too short"):
         dry_run_sine(
