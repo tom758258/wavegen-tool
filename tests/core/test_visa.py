@@ -33,6 +33,7 @@ from wavegen_tool_core.visa import (
     DEFAULT_TIMEOUT_MS,
     FMConfig,
     FSKConfig,
+    GatedBurstConfig,
     PMConfig,
     PWMConfig,
     SumConfig,
@@ -4254,6 +4255,78 @@ def test_counted_burst_bus_and_timer_use_source_specific_tail() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("slope", "expected_slope"),
+    [(None, "positive"), ("negative", "negative")],
+)
+def test_external_counted_burst_uses_external_plan_and_canonical_slope(
+    slope, expected_slope
+) -> None:
+    result = dry_run_sine(
+        "keysight-33521b",
+        1000,
+        0.1,
+        burst=CountedBurstConfig(
+            5,
+            trigger_source="external",
+            trigger_slope=slope,
+        ),
+    )
+
+    assert result.burst == CountedBurstConfig(
+        5,
+        trigger_source="external",
+        trigger_slope=expected_slope,
+    )
+    assert result.commands[-6:] == (
+        "SOURce1:BURSt:MODE TRIGgered",
+        "SOURce1:BURSt:NCYCles 5",
+        "SOURce1:BURSt:PHASe 0",
+        "TRIGger1:SOURce EXTernal",
+        f"TRIGger1:SLOPe {'POSitive' if expected_slope == 'positive' else 'NEGative'}",
+        "SOURce1:BURSt:STATe ON",
+    )
+    assert not any(
+        "SOURce1:BURSt:INTernal:PERiod" in command
+        or "TRIGger1:TIMer" in command
+        for command in result.commands
+    )
+    assert result.output_state == "off"
+    assert "OUTPut1 ON" not in result.commands
+
+
+def test_gated_burst_uses_gate_plan_without_counted_or_trigger_commands() -> None:
+    result = dry_run_sine(
+        "keysight-33521b",
+        1000,
+        0.1,
+        burst=GatedBurstConfig(),
+    )
+
+    assert result.burst == GatedBurstConfig()
+    assert result.commands[-4:] == (
+        "SOURce1:BURSt:MODE GATed",
+        "SOURce1:BURSt:GATE:POLarity NORMal",
+        "SOURce1:BURSt:PHASe 0",
+        "SOURce1:BURSt:STATe ON",
+    )
+    assert not any(
+        any(
+            token in command
+            for token in (
+                "BURSt:NCYCles",
+                "BURSt:INTernal:PERiod",
+                "TRIGger1:SOURce",
+                "TRIGger1:SLOPe",
+                "TRIGger1:TIMer",
+            )
+        )
+        for command in result.commands
+    )
+    assert result.output_state == "off"
+    assert "OUTPut1 ON" not in result.commands
+
+
 def test_counted_burst_timer_reuses_minimum_duration_validation() -> None:
     with pytest.raises(WaveformParameterError, match="too short"):
         dry_run_sine(
@@ -4281,6 +4354,31 @@ def test_counted_burst_timer_reuses_minimum_duration_validation() -> None:
 def test_counted_burst_rejects_incompatible_trigger_options(burst) -> None:
     with pytest.raises(WaveformParameterError):
         dry_run_sine("keysight-33521b", 1000, 0.1, burst=burst)
+
+
+@pytest.mark.parametrize(
+    "burst",
+    [
+        CountedBurstConfig(2, 0.01, "external"),
+        CountedBurstConfig(2, trigger_source="external", trigger_timer_s=0.01),
+        CountedBurstConfig(2, 0.01, trigger_slope="positive"),
+    ],
+)
+def test_external_counted_burst_invalid_options_fail_before_visa_io(burst) -> None:
+    session = FakeSession()
+    manager = FakeManager(session)
+
+    with pytest.raises(WaveformParameterError):
+        configure_sine(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            burst=burst,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    assert session.queries == []
+    assert session.writes == []
 
 
 def test_send_bus_trigger_writes_exactly_one_instrument_wide_command() -> None:

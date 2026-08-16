@@ -12,6 +12,7 @@ from wavegen_tool_core import (
     AMConfig,
     BPSKConfig,
     CountedBurstConfig,
+    GatedBurstConfig,
     FMConfig,
     FSKConfig,
     PMConfig,
@@ -368,7 +369,7 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--burst-trigger-source",
-        choices=("immediate", "bus", "timer"),
+        choices=("immediate", "bus", "timer", "external"),
         default=None,
         help=(
             "Counted Burst trigger source "
@@ -380,14 +381,51 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Counted Burst Timer trigger interval in seconds.",
     )
+    parser.add_argument(
+        "--burst-trigger-slope",
+        choices=("positive", "negative"),
+        default=None,
+        help="External Counted Burst trigger slope (default: positive).",
+    )
+    parser.add_argument(
+        "--gated-burst",
+        action="store_true",
+        help="Enable Gated Burst instead of Counted Burst.",
+    )
+    parser.add_argument(
+        "--gate-polarity",
+        choices=("normal", "inverted"),
+        default=None,
+        help="Gated Burst gate polarity (default: normal).",
+    )
 
 
-def _burst_config_from_args(args: argparse.Namespace) -> CountedBurstConfig | None:
+def _burst_config_from_args(
+    args: argparse.Namespace,
+) -> CountedBurstConfig | GatedBurstConfig | None:
+    counted_values = (
+        args.burst_count,
+        args.burst_period_s,
+        args.burst_trigger_source,
+        args.burst_trigger_timer_s,
+        args.burst_trigger_slope,
+    )
+    if args.gated_burst:
+        if any(value is not None for value in counted_values):
+            raise WaveformParameterError(
+                "Gated Burst cannot be combined with Counted Burst options."
+            )
+        return GatedBurstConfig(polarity=args.gate_polarity or "normal")
+    if args.gate_polarity is not None:
+        raise WaveformParameterError(
+            "Gate polarity requires --gated-burst."
+        )
     values = (
         args.burst_count,
         args.burst_period_s,
         args.burst_trigger_source,
         args.burst_trigger_timer_s,
+        args.burst_trigger_slope,
     )
     if all(value is None for value in values):
         return None
@@ -396,6 +434,7 @@ def _burst_config_from_args(args: argparse.Namespace) -> CountedBurstConfig | No
         period_s=args.burst_period_s,
         trigger_source=args.burst_trigger_source or "immediate",
         trigger_timer_s=args.burst_trigger_timer_s,
+        trigger_slope=args.burst_trigger_slope,
     )
 
 
@@ -3624,12 +3663,20 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
     burst = getattr(result, "burst", None)
     if burst is None:
         return {}
+    if isinstance(burst, GatedBurstConfig):
+        return {
+            "burst_enabled": True,
+            "burst_mode": "gated",
+            "burst_gate_polarity": burst.polarity,
+        }
     return {
         "burst_enabled": True,
+        "burst_mode": "counted",
         "burst_count": burst.count,
         "burst_period_s": burst.period_s,
         "burst_trigger_source": burst.trigger_source,
         "burst_trigger_timer_s": burst.trigger_timer_s,
+        "burst_trigger_slope": burst.trigger_slope,
     }
 
 
@@ -4619,6 +4666,11 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
     burst = getattr(result, "burst", None)
     if burst is None:
         return ()
+    if isinstance(burst, GatedBurstConfig):
+        return (
+            "Burst mode: gated",
+            f"Burst gate polarity: {burst.polarity}",
+        )
     lines = [
         f"Burst count: {burst.count}",
         f"Burst trigger source: {burst.trigger_source}",
@@ -4627,6 +4679,8 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
         lines.append(f"Burst period (seconds): {burst.period_s}")
     if burst.trigger_timer_s is not None:
         lines.append(f"Burst trigger timer (seconds): {burst.trigger_timer_s}")
+    if burst.trigger_slope is not None:
+        lines.append(f"Burst trigger slope: {burst.trigger_slope}")
     return tuple(lines)
 
 

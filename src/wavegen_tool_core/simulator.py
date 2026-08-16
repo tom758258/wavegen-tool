@@ -37,6 +37,7 @@ class SimulatedChannelState:
     sweep_return_time_s: float = 0.0
     trigger_source: str = "immediate"
     trigger_timer_s: float = 1.0
+    burst_trigger_slope: str = "positive"
     phase_deg: float = 0.0
     amplitude_vpp: float = 0.1
     offset_v: float = 0.0
@@ -86,6 +87,7 @@ class SimulatedChannelState:
     sum_amplitude_percent: float = 0.1
     burst_enabled: bool = False
     burst_mode: str = "triggered"
+    burst_gate_polarity: str = "normal"
     burst_count: int = 1
     burst_period_s: float = 1.0
     burst_phase_deg: float = 0.0
@@ -633,6 +635,15 @@ class SimulatedResource:
             f"TRIGger{prefix_ch}:SOURce IMMediate": ("trigger_source", "immediate"),
             f"TRIGger{prefix_ch}:SOURce BUS": ("trigger_source", "bus"),
             f"TRIGger{prefix_ch}:SOURce TIMer": ("trigger_source", "timer"),
+            f"TRIGger{prefix_ch}:SOURce EXTernal": ("trigger_source", "external"),
+            f"TRIGger{prefix_ch}:SLOPe POSitive": (
+                "burst_trigger_slope",
+                "positive",
+            ),
+            f"TRIGger{prefix_ch}:SLOPe NEGative": (
+                "burst_trigger_slope",
+                "negative",
+            ),
             f"SOURce{prefix_ch}:FREQuency:MODE CW": ("frequency_mode", "CW"),
             f"SOURce{prefix_ch}:FREQuency:MODE SWEep": ("frequency_mode", "SWEep"),
             f"SOURce{prefix_ch}:FREQuency:MODE LIST": ("frequency_mode", "LIST"),
@@ -672,6 +683,15 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:BURSt:MODE TRIGgered": (
                 "burst_mode",
                 "triggered",
+            ),
+            f"SOURce{prefix_ch}:BURSt:MODE GATed": ("burst_mode", "gated"),
+            f"SOURce{prefix_ch}:BURSt:GATE:POLarity NORMal": (
+                "burst_gate_polarity",
+                "normal",
+            ),
+            f"SOURce{prefix_ch}:BURSt:GATE:POLarity INVerted": (
+                "burst_gate_polarity",
+                "inverted",
             ),
             f"SOURce{prefix_ch}:PWM:SOURce INTernal": (
                 "pwm_source",
@@ -864,6 +884,7 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:SWEep:HTIMe?": _format_number(ch_state.sweep_hold_time_s),
             f"SOURce{prefix_ch}:SWEep:RTIMe?": _format_number(ch_state.sweep_return_time_s),
             f"TRIGger{prefix_ch}:SOURce?": ch_state.trigger_source,
+            f"TRIGger{prefix_ch}:SLOPe?": ch_state.burst_trigger_slope,
             f"TRIGger{prefix_ch}:TIMer?": _format_number(ch_state.trigger_timer_s),
             f"SOURce{prefix_ch}:PHASe?": _format_number(ch_state.phase_deg),
             f"SOURce{prefix_ch}:FUNCtion:PULSe:TRANsition? MAXimum": "1e-6",
@@ -951,6 +972,7 @@ class SimulatedResource:
             ),
             f"SOURce{prefix_ch}:BURSt:STATe?": "1" if ch_state.burst_enabled else "0",
             f"SOURce{prefix_ch}:BURSt:MODE?": ch_state.burst_mode,
+            f"SOURce{prefix_ch}:BURSt:GATE:POLarity?": ch_state.burst_gate_polarity,
             f"SOURce{prefix_ch}:BURSt:NCYCles?": str(ch_state.burst_count),
             f"SOURce{prefix_ch}:BURSt:INTernal:PERiod?": _format_number(
                 ch_state.burst_period_s

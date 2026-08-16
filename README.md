@@ -7,7 +7,8 @@ reads, basic sine/square/ramp/triangle/pulse/DC/noise/PRBS configuration,
 Internal Sine amplitude, frequency, and phase modulation, Internal FSK, and
 Internal BPSK for supported static carriers, Internal PWM for pulse carriers,
 Internal Sine Sum for supported static carriers,
-Immediate-, Bus-, and Timer-triggered Counted Burst for supported static carriers,
+Immediate-, Bus-, Timer-, and External-triggered Counted Burst plus Gated Burst
+for supported static carriers,
 explicit output control, and sine, square, ramp, and triangle linear/logarithmic
 frequency sweeps and Immediate-triggered frequency List Sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
@@ -33,6 +34,8 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Internal sine pulse-width modulation for pulse carriers
 - Internal Sine Sum for sine, square, ramp, triangle, and pulse carriers
 - Counted Burst for sine, square, ramp, triangle, pulse, and PRBS carriers
+- External-triggered Counted Burst with positive or negative slope
+- Gated Burst with normal or inverted gate polarity for the six static carriers
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate, Bus, or Timer trigger
 - Selected-channel sine, square, ramp, and triangle frequency List Sweep
@@ -291,10 +294,14 @@ The six static carrier commands `configure-sine`, `configure-square`,
 `configure-ramp`, `configure-triangle`, `configure-pulse`, and
 `configure-prbs` accept optional Counted Burst settings. The mode is fixed to
 Triggered, Burst phase is fixed to 0 degrees, and the trigger source may be
-Immediate, Bus, or Timer. Immediate uses `--burst-count` with
+Immediate, Bus, Timer, or External. Immediate uses `--burst-count` with
 `--burst-period-s`; Bus uses `--burst-count --burst-trigger-source bus`; Timer
 uses `--burst-count --burst-trigger-source timer` with
-`--burst-trigger-timer-s`. Count is a waveform-cycle count except for PRBS,
+`--burst-trigger-timer-s`. External uses `--burst-count
+--burst-trigger-source external` and an optional
+`--burst-trigger-slope positive|negative` (default: `positive`). External Burst
+must omit `--burst-period-s` and `--burst-trigger-timer-s`. Count is a
+waveform-cycle count except for PRBS,
 where it is a bit count. When Counted Burst is enabled, `--phase-deg` must
 remain 0.
 
@@ -321,7 +328,21 @@ the selected output off throughout, and enables Burst only after all carrier
 commands are complete. Ordinary static waveform and sweep configuration also
 disable Burst only on the selected channel. Output-on remains explicit. Bus
 and Timer Burst do not use `BURSt:INTernal:PERiod`; Timer uses the same range
-and minimum complete-burst duration rule for its trigger interval.
+and minimum complete-burst duration rule for its trigger interval. External
+Burst does not send an internal period or Timer command. The selected output
+remains off after configuration; use the explicit `output --state on` command
+to enable it.
+
+## Configure Gated Burst
+
+The same six static carrier commands accept Gated Burst with `--gated-burst`.
+Use `--gate-polarity normal|inverted` to select the gate polarity; the default
+is `normal`. Gated Burst is mutually exclusive with all Counted Burst options:
+`--burst-count`, `--burst-period-s`, `--burst-trigger-source`,
+`--burst-trigger-timer-s`, and `--burst-trigger-slope`. Gated Burst keeps the
+existing Burst phase policy of 0 degrees, leaves the selected output off, and
+requires explicit `output --state on`. Gaussian Noise Gated Burst is not
+supported.
 
 ## Requirements and Installation
 
@@ -342,8 +363,8 @@ all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep and List Sweep commands, and explicit output control.
 Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep
-trigger source/timer and Internal AM/FM/PM/FSK/BPSK/PWM/Sum and Counted Burst
-state; normal waveform
+trigger source/timer/slope and Internal AM/FM/PM/FSK/BPSK/PWM/Sum, Counted
+Burst, and Gated Burst state; normal waveform
 configuration restores CW mode and disables AM, FM, PM, FSK, BPSK, PWM, Sum,
 and Burst only on the selected channel. The
 33521B

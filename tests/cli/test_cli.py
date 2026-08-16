@@ -37,8 +37,95 @@ def test_configure_sine_counted_burst_dry_run_json(capsys) -> None:
     assert payload["burst_period_s"] == 0.01
     assert payload["burst_trigger_source"] == "immediate"
     assert payload["burst_trigger_timer_s"] is None
+    assert payload["burst_mode"] == "counted"
     assert payload["commands"][0] == "OUTPut1 OFF"
     assert payload["commands"][-1] == "SOURce1:BURSt:STATe ON"
+    assert "OUTPut1 ON" not in payload["commands"]
+
+
+def test_configure_sine_external_counted_burst_dry_run_json(capsys) -> None:
+    exit_code = main(
+        [
+            "configure-sine",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--burst-count",
+            "5",
+            "--burst-trigger-source",
+            "external",
+            "--dry-run",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["burst_mode"] == "counted"
+    assert payload["burst_count"] == 5
+    assert payload["burst_trigger_source"] == "external"
+    assert payload["burst_trigger_slope"] == "positive"
+    assert payload["burst_period_s"] is None
+    assert payload["burst_trigger_timer_s"] is None
+    assert payload["commands"][-6:] == [
+        "SOURce1:BURSt:MODE TRIGgered",
+        "SOURce1:BURSt:NCYCles 5",
+        "SOURce1:BURSt:PHASe 0",
+        "TRIGger1:SOURce EXTernal",
+        "TRIGger1:SLOPe POSitive",
+        "SOURce1:BURSt:STATe ON",
+    ]
+    assert not any(
+        "BURSt:INTernal:PERiod" in command or "TRIGger1:TIMer" in command
+        for command in payload["commands"]
+    )
+    assert payload["output_state"] == "off"
+    assert "OUTPut1 ON" not in payload["commands"]
+
+
+def test_configure_sine_gated_burst_dry_run_json(capsys) -> None:
+    exit_code = main(
+        [
+            "configure-sine",
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--gated-burst",
+            "--gate-polarity",
+            "inverted",
+            "--dry-run",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["burst_enabled"] is True
+    assert payload["burst_mode"] == "gated"
+    assert payload["burst_gate_polarity"] == "inverted"
+    assert "burst_count" not in payload
+    assert payload["commands"][-4:] == [
+        "SOURce1:BURSt:MODE GATed",
+        "SOURce1:BURSt:GATE:POLarity INVerted",
+        "SOURce1:BURSt:PHASe 0",
+        "SOURce1:BURSt:STATe ON",
+    ]
+    assert not any(
+        any(
+            token in command
+            for token in (
+                "BURSt:NCYCles",
+                "BURSt:INTernal:PERiod",
+                "TRIGger1:SOURce",
+                "TRIGger1:SLOPe",
+                "TRIGger1:TIMer",
+            )
+        )
+        for command in payload["commands"]
+    )
+    assert payload["output_state"] == "off"
     assert "OUTPut1 ON" not in payload["commands"]
 
 
@@ -3415,6 +3502,67 @@ def test_counted_burst_cli_rejects_incompatible_options(
     assert payload["success"] is False
     assert payload["error"].startswith("waveform_parameter_error:")
     assert "Traceback" not in captured.err
+    assert manager_calls == []
+    assert manager.opened_resources == []
+
+
+@pytest.mark.parametrize(
+    "burst_args",
+    [
+        [
+            "--burst-count",
+            "2",
+            "--burst-period-s",
+            "0.01",
+            "--burst-trigger-source",
+            "external",
+        ],
+        [
+            "--burst-count",
+            "2",
+            "--burst-trigger-source",
+            "external",
+            "--burst-trigger-timer-s",
+            "0.01",
+        ],
+        [
+            "--burst-count",
+            "2",
+            "--burst-period-s",
+            "0.01",
+            "--burst-trigger-slope",
+            "positive",
+        ],
+        ["--gated-burst", "--burst-count", "2"],
+        ["--gate-polarity", "inverted"],
+    ],
+)
+def test_new_burst_cli_invalid_combinations_fail_before_visa(
+    monkeypatch, capsys, burst_args
+) -> None:
+    manager = FakeManager()
+    manager_calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-sine",
+            "--resource",
+            USB_RESOURCE,
+            "--frequency-hz",
+            "1000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+            *burst_args,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+    assert payload["error"].startswith("waveform_parameter_error:")
+    assert captured.err == ""
     assert manager_calls == []
     assert manager.opened_resources == []
 

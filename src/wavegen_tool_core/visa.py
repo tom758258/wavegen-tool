@@ -354,6 +354,17 @@ class CountedBurstConfig:
     period_s: object = None
     trigger_source: object = "immediate"
     trigger_timer_s: object = None
+    trigger_slope: object = None
+
+
+@dataclass(frozen=True)
+class GatedBurstConfig:
+    """Gated-burst settings."""
+
+    polarity: object = "normal"
+
+
+BurstConfig = CountedBurstConfig | GatedBurstConfig
 
 
 @dataclass(frozen=True)
@@ -376,7 +387,7 @@ class SineConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -400,7 +411,7 @@ class SineDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -621,7 +632,7 @@ class SquareConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -646,7 +657,7 @@ class SquareDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -671,7 +682,7 @@ class RampConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -696,7 +707,7 @@ class RampDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -720,7 +731,7 @@ class TriangleConfigurationResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -744,7 +755,7 @@ class TriangleDryRunResult:
     pm: PMConfig | None = None
     fsk: FSKConfig | None = None
     bpsk: BPSKConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -769,7 +780,7 @@ class PulseConfigurationResult:
     channel: int = 1
     am: AMConfig | None = None
     pwm: PWMConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -794,7 +805,7 @@ class PulseDryRunResult:
     channel: int = 1
     am: AMConfig | None = None
     pwm: PWMConfig | None = None
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
     sum: SumConfig | None = None
 
 
@@ -874,7 +885,7 @@ class PrbsConfigurationResult:
     load: str
     output_state: str = "off"
     channel: int = 1
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -893,7 +904,7 @@ class PrbsDryRunResult:
     executed: bool = False
     output_state: str = "off"
     channel: int = 1
-    burst: CountedBurstConfig | None = None
+    burst: BurstConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -1707,7 +1718,7 @@ def configure_sine(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -1849,7 +1860,7 @@ def dry_run_sine(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
 ) -> SineDryRunResult:
     """Preview a validated Channel 1 sine configuration without VISA I/O."""
@@ -4081,23 +4092,51 @@ def _validate_modulation_exclusive(
 def _prepare_counted_burst(
     carrier: str,
     carrier_rate_hz: float,
-    config: CountedBurstConfig | None,
+    config: BurstConfig | None,
     *modulations: object,
     ordinary_phase_deg: float | None = None,
-) -> tuple[CountedBurstConfig | None, tuple[str, ...]]:
+) -> tuple[BurstConfig | None, tuple[str, ...]]:
     if config is None:
         return None, ()
-    if not isinstance(config, CountedBurstConfig):
+    if not isinstance(config, (CountedBurstConfig, GatedBurstConfig)):
         raise WaveformParameterError(
-            "Burst configuration must use CountedBurstConfig."
+            "Burst configuration must use CountedBurstConfig or GatedBurstConfig."
         )
     if any(modulation is not None for modulation in modulations):
         raise WaveformParameterError(
-            "Counted Burst cannot be configured with AM, FM, PM, FSK, BPSK, PWM, or Sum."
+            "Burst cannot be configured with AM, FM, PM, FSK, BPSK, PWM, or Sum."
         )
     if ordinary_phase_deg is not None and ordinary_phase_deg != 0.0:
         raise WaveformParameterError(
-            "Waveform phase must be 0 degrees when Counted Burst is enabled."
+            "Waveform phase must be 0 degrees when Burst is enabled."
+        )
+    if isinstance(config, GatedBurstConfig):
+        if not isinstance(config.polarity, str):
+            raise WaveformParameterError(
+                "Gated Burst polarity must be normal or inverted."
+            )
+        polarity = config.polarity.strip().casefold()
+        if polarity not in {"normal", "inverted"}:
+            raise WaveformParameterError(
+                "Gated Burst polarity must be normal or inverted."
+            )
+        if carrier_rate_hz < BURST_MIN_CARRIER_RATE_HZ:
+            raise WaveformParameterError(
+                "Burst carrier frequency or PRBS bit rate must be at least 0.002001 Hz."
+            )
+        if (
+            carrier in {"sine", "square"}
+            and carrier_rate_hz > BURST_MAX_SINE_SQUARE_FREQUENCY_HZ
+        ):
+            raise WaveformParameterError(
+                "Burst Sine and Square carrier frequency must not exceed 6000000 Hz."
+            )
+        normalized = GatedBurstConfig(polarity=polarity)
+        return normalized, (
+            "SOURce1:BURSt:MODE GATed",
+            f"SOURce1:BURSt:GATE:POLarity {'NORMal' if polarity == 'normal' else 'INVerted'}",
+            "SOURce1:BURSt:PHASe 0",
+            "SOURce1:BURSt:STATe ON",
         )
     if isinstance(config.count, bool) or not isinstance(config.count, int):
         raise WaveformParameterError(
@@ -4119,10 +4158,30 @@ def _prepare_counted_burst(
             "Burst Sine and Square carrier frequency must not exceed 6000000 Hz."
         )
     minimum_period = config.count / carrier_rate_hz + BURST_PERIOD_MARGIN_S
-    trigger_source = _normalize_trigger_source(
-        config.trigger_source,
-        waveform="Burst",
-    )
+    if not isinstance(config.trigger_source, str):
+        raise WaveformParameterError(
+            "Burst trigger source must be immediate, bus, timer, or external."
+        )
+    trigger_source = config.trigger_source.strip().casefold()
+    if trigger_source not in {"immediate", "bus", "timer", "external"}:
+        raise WaveformParameterError(
+            "Burst trigger source must be immediate, bus, timer, or external."
+        )
+    trigger_slope: str | None = None
+    if config.trigger_slope is not None:
+        if not isinstance(config.trigger_slope, str):
+            raise WaveformParameterError(
+                "Burst trigger slope must be positive or negative and is only valid for external trigger source."
+            )
+        trigger_slope = config.trigger_slope.strip().casefold()
+        if trigger_slope not in {"positive", "negative"}:
+            raise WaveformParameterError(
+                "Burst trigger slope must be positive or negative and is only valid for external trigger source."
+            )
+        if trigger_source != "external":
+            raise WaveformParameterError(
+                "Burst trigger slope is only valid for external trigger source."
+            )
     period: float | None = None
     trigger_timer: float | None = None
     if trigger_source == "immediate":
@@ -4153,7 +4212,7 @@ def _prepare_counted_burst(
             raise WaveformParameterError(
                 "Burst period and trigger timer must be omitted for bus trigger source."
             )
-    else:
+    elif trigger_source == "timer":
         if config.period_s is not None:
             raise WaveformParameterError(
                 "Burst period must be omitted for timer trigger source."
@@ -4164,11 +4223,22 @@ def _prepare_counted_burst(
             waveform="Burst",
             minimum_timer_s=minimum_period,
         )
+    else:
+        if config.period_s is not None:
+            raise WaveformParameterError(
+                "Burst period must be omitted for external trigger source."
+            )
+        if config.trigger_timer_s is not None:
+            raise WaveformParameterError(
+                "Burst trigger timer must be omitted for external trigger source."
+            )
+        trigger_slope = trigger_slope or "positive"
     normalized = CountedBurstConfig(
         count=config.count,
         period_s=period,
         trigger_source=trigger_source,
         trigger_timer_s=trigger_timer,
+        trigger_slope=trigger_slope,
     )
     period_commands = (
         (f"SOURce1:BURSt:INTernal:PERiod {_format_scpi_number(period)}",)
@@ -4185,7 +4255,18 @@ def _prepare_counted_burst(
             else ()
         ),
         "SOURce1:BURSt:PHASe 0",
-        _build_trigger_commands(trigger_source, None)[0],
+        (
+            "TRIGger1:SOURce EXTernal"
+            if trigger_source == "external"
+            else _build_trigger_commands(trigger_source, None)[0]
+        ),
+        *(
+            (
+                f"TRIGger1:SLOPe {'POSitive' if trigger_slope == 'positive' else 'NEGative'}",
+            )
+            if trigger_source == "external"
+            else ()
+        ),
         "SOURce1:BURSt:STATe ON",
     )
     return normalized, commands
@@ -4626,7 +4707,7 @@ def configure_square(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -4792,7 +4873,7 @@ def dry_run_square(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
 ) -> SquareDryRunResult:
     """Preview a validated Channel 1 square configuration without VISA I/O."""
@@ -5044,7 +5125,7 @@ def configure_ramp(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -5189,7 +5270,7 @@ def dry_run_ramp(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
 ) -> RampDryRunResult:
     """Preview a validated Channel 1 ramp configuration without VISA I/O."""
@@ -5387,7 +5468,7 @@ def configure_triangle(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -5528,7 +5609,7 @@ def dry_run_triangle(
     pm: PMConfig | None = None,
     fsk: FSKConfig | None = None,
     bpsk: BPSKConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
 ) -> TriangleDryRunResult:
     """Preview a validated Channel 1 triangle configuration without VISA I/O."""
@@ -5697,7 +5778,7 @@ def configure_pulse(
     channel: int = 1,
     am: AMConfig | None = None,
     pwm: PWMConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -6078,7 +6159,7 @@ def dry_run_pulse(
     channel: int = 1,
     am: AMConfig | None = None,
     pwm: PWMConfig | None = None,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     sum: SumConfig | None = None,
 ) -> PulseDryRunResult:
     """Preview a validated Channel 1 pulse configuration without VISA I/O."""
@@ -6568,7 +6649,7 @@ def configure_prbs(
     backend: str | None = None,
     *,
     channel: int = 1,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -6631,7 +6712,7 @@ def dry_run_prbs(
     load: object = 50,
     *,
     channel: int = 1,
-    burst: CountedBurstConfig | None = None,
+    burst: BurstConfig | None = None,
 ) -> PrbsDryRunResult:
     """Preview a validated Channel 1 PRBS configuration without VISA I/O."""
 

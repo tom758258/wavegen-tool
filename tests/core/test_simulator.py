@@ -10,6 +10,7 @@ from wavegen_tool_core import (
     CountedBurstConfig,
     FMConfig,
     FSKConfig,
+    GatedBurstConfig,
     PMConfig,
     PWMConfig,
     SIMULATED_33521B_IDN,
@@ -117,6 +118,48 @@ def test_channel_two_counted_burst_trigger_does_not_pollute_channel_one() -> Non
     assert state.ch1.trigger_source == "immediate"
     assert state.ch2.burst_enabled is True
     assert state.ch2.trigger_source == "bus"
+
+
+def test_two_channel_simulator_isolates_external_and_gated_burst_cleanup() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1000,
+        0.1,
+        burst=CountedBurstConfig(5, trigger_source="external"),
+        channel=1,
+        resource_manager_factory=factory,
+    )
+    configure_square(
+        factory.resource_name,
+        1000,
+        0.1,
+        burst=GatedBurstConfig("inverted"),
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.burst_enabled is True
+    assert state.ch1.burst_mode == "triggered"
+    assert state.ch1.trigger_source == "external"
+    assert state.ch1.burst_trigger_slope == "positive"
+    assert state.ch2.burst_enabled is True
+    assert state.ch2.burst_mode == "gated"
+    assert state.ch2.burst_gate_polarity == "inverted"
+
+    configure_square(
+        factory.resource_name,
+        1000,
+        0.1,
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.burst_enabled is True
+    assert state.ch1.trigger_source == "external"
+    assert state.ch2.burst_enabled is False
 
 
 def test_simulator_accepts_one_instrument_wide_bus_trigger() -> None:
