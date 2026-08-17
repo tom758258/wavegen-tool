@@ -2581,6 +2581,7 @@ def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
     )
     expected_commands = (
         "OUTPut1 OFF",
+        "SOURce1:FREQuency:MODE CW",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
@@ -2620,6 +2621,33 @@ def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
     assert "OUTPut1 ON" not in expected_commands
     assert expected_commands[-2] == "TRIGger1:SOURce IMMediate"
     assert expected_commands[-1] == "SOURce1:FREQuency:MODE LIST"
+
+
+@pytest.mark.parametrize(
+    ("dry_run", "carrier_command"),
+    [
+        (dry_run_sine_list_sweep, "SOURce1:FUNCtion SIN"),
+        (dry_run_square_list_sweep, "SOURce1:FUNCtion SQUare"),
+        (dry_run_ramp_list_sweep, "SOURce1:FUNCtion RAMP"),
+        (dry_run_triangle_list_sweep, "SOURce1:FUNCtion TRIangle"),
+    ],
+)
+def test_all_list_sweep_plans_restore_cw_before_carrier_and_phase(
+    dry_run, carrier_command
+) -> None:
+    preview = dry_run("keysight-33521b", [1000, 3000], 0.005, 0.1, phase_deg=90)
+
+    cw_index = preview.commands.index("SOURce1:FREQuency:MODE CW")
+    carrier_index = preview.commands.index(carrier_command)
+    phase_index = next(
+        index
+        for index, command in enumerate(preview.commands)
+        if command.startswith("SOURce1:PHASe ")
+    )
+    assert preview.commands[0] == "OUTPut1 OFF"
+    assert cw_index < carrier_index
+    assert cw_index < phase_index
+    assert preview.commands[-1] == "SOURce1:FREQuency:MODE LIST"
 
 
 @pytest.mark.parametrize("point_count", [1, 128])
@@ -2681,7 +2709,12 @@ def test_list_sweep_channel_two_plan_and_single_channel_rejection() -> None:
         "TRIGger2:SOURce IMMediate",
         "SOURce2:FREQuency:MODE LIST",
     )
-    assert all("SOURce1" not in command for command in preview.commands)
+    assert "SOURce2:FREQuency:MODE CW" in preview.commands
+    assert "UNIT:ANGLe DEGree" in preview.commands
+    assert all(
+        all(prefix not in command for prefix in ("SOURce1", "OUTPut1", "TRIGger1"))
+        for command in preview.commands
+    )
     with pytest.raises(WaveformParameterError, match="Channel 2"):
         dry_run_sine_list_sweep(
             "keysight-33521b", [1000], 1, 0.1, channel=2

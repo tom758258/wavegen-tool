@@ -754,6 +754,7 @@ def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
 def test_simulator_stores_frequency_list_mode_and_dwell() -> None:
     state = Simulated33521BState()
     factory = SimulatedResourceManagerFactory(state)
+    assert state.ch1.frequency_mode == "CW"
 
     result = configure_sine_list_sweep(
         factory.resource_name,
@@ -768,6 +769,35 @@ def test_simulator_stores_frequency_list_mode_and_dwell() -> None:
     assert state.ch1.list_frequencies_hz == (7000.0, 1000.0, 7000.0)
     assert state.ch1.list_dwell_s == 0.005
     assert state.ch1.trigger_source == "immediate"
+    assert state.ch1.output_enabled is False
+
+
+def test_simulator_reconfigures_sine_list_to_square_list() -> None:
+    state = Simulated33521BState()
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine_list_sweep(
+        factory.resource_name,
+        [1000, 2000],
+        0.005,
+        0.1,
+        phase_deg=90,
+        resource_manager_factory=factory,
+    )
+    configure_square_list_sweep(
+        factory.resource_name,
+        [3000, 4000],
+        0.01,
+        0.2,
+        phase_deg=45,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.active_function == "SQUARE"
+    assert state.ch1.frequency_mode == "LIST"
+    assert state.ch1.list_frequencies_hz == (3000.0, 4000.0)
+    assert state.ch1.list_dwell_s == 0.01
+    assert state.ch1.phase_deg == 45.0
     assert state.ch1.output_enabled is False
 
 

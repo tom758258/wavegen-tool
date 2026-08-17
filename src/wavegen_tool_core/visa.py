@@ -3090,6 +3090,7 @@ def _build_list_sweep_commands(
     frequency_list = ",".join(_format_scpi_number(value) for value in frequencies_hz)
     return (
         base_commands[0],
+        "SOURce1:FREQuency:MODE CW",
         "SOURce1:AM:STATe OFF",
         "SOURce1:FM:STATe OFF",
         "SOURce1:PM:STATe OFF",
