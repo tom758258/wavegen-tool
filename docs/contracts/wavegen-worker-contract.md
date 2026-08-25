@@ -89,18 +89,27 @@ are rejected.
 non-boolean integer from `1` through `100`. Execution drains the instrument
 error queue.
 
-Waveform arguments and defaults are:
+Waveform arguments and defaults are shown below. For the voltage-bearing
+waveforms and sweeps, callers provide exactly one of these mutually exclusive
+voltage forms: `amplitude_vpp` with optional `offset_v`, or paired
+`high_level_v` and `low_level_v`. Admission rejects mixed forms and unpaired
+`high_level_v` / `low_level_v`.
 
 | Command | Required arguments | Optional defaults |
 | --- | --- | --- |
-| `configure-sine` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `load="50"` |
-| `configure-square` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `duty_cycle_percent=50`, `load="50"` |
-| `configure-ramp` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `symmetry_percent=100`, `load="50"` |
-| `configure-triangle` | `frequency_hz`, `amplitude_vpp` | `offset_v=0`, `load="50"` |
-| `configure-pulse` | `frequency_hz`, `amplitude_vpp`, `pulse_width_s` | `offset_v=0`, `edge_time_s=1e-8`, `load="50"` |
+| `configure-sine` | `frequency_hz`, voltage form | `offset_v=0` (form A only), `phase_deg=0.0`, `load="50"` |
+| `configure-square` | `frequency_hz`, voltage form | `offset_v=0` (form A only), `phase_deg=0.0`, `duty_cycle_percent=50`, `load="50"` |
+| `configure-ramp` | `frequency_hz`, voltage form | `offset_v=0` (form A only), `phase_deg=0.0`, `symmetry_percent=100`, `load="50"` |
+| `configure-triangle` | `frequency_hz`, voltage form | `offset_v=0` (form A only), `phase_deg=0.0`, `load="50"` |
+| `configure-pulse` | `frequency_hz`, voltage form, `pulse_width_s` | `offset_v=0` (form A only), `phase_deg=0.0`, edge form, `load="50"` |
 | `configure-dc` | `voltage_v` | `load="50"` |
-| `configure-noise` | `amplitude_vpp`, `bandwidth_hz` | `offset_v=0`, `load="50"` |
-| `configure-prbs` | `bit_rate_bps`, `amplitude_vpp` | `pattern="PN7"`, `offset_v=0`, `edge_time_s=8.4e-9`, `load="50"` |
+| `configure-noise` | `bandwidth_hz`, voltage form | `offset_v=0` (form A only), `load="50"` |
+| `configure-prbs` | `bit_rate_bps`, voltage form | `offset_v=0` (form A only), `pattern="PN7"`, `edge_time_s=8.4e-9`, `load="50"` |
+
+Pulse accepts either shared `edge_time_s` (default `1e-8`) or paired
+`leading_edge_s` and `trailing_edge_s`; the two forms are mutually exclusive.
+Sine, square, ramp, triangle, pulse, and all four sweep commands accept
+optional `phase_deg`, defaulting to `0.0`. Noise and PRBS do not.
 
 Waveform numeric ranges, load values, patterns, and SCPI planning rules are
 owned by the existing Core `dry_run_*` functions. The Worker does not duplicate
@@ -110,10 +119,10 @@ Sweep arguments and defaults are:
 
 | Command | Required arguments | Optional defaults |
 | --- | --- | --- |
-| `configure-sine-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `load="50"` |
-| `configure-square-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `duty_cycle_percent=50`, `load="50"` |
-| `configure-ramp-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `symmetry_percent=100`, `load="50"` |
-| `configure-triangle-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `load="50"` |
+| `configure-sine-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, voltage form | `offset_v=0` (form A only), `hold_time_s=0`, `return_time_s=0`, `phase_deg=0.0`, `load="50"` |
+| `configure-square-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, voltage form | `offset_v=0` (form A only), `hold_time_s=0`, `return_time_s=0`, `phase_deg=0.0`, `duty_cycle_percent=50`, `load="50"` |
+| `configure-ramp-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, voltage form | `offset_v=0` (form A only), `hold_time_s=0`, `return_time_s=0`, `phase_deg=0.0`, `symmetry_percent=100`, `load="50"` |
+| `configure-triangle-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, voltage form | `offset_v=0` (form A only), `hold_time_s=0`, `return_time_s=0`, `phase_deg=0.0`, `load="50"` |
 
 Sweep numeric ranges, spacing, trigger source, and SCPI planning rules are
 owned by the existing Core `dry_run_*_sweep` functions. The Worker does not

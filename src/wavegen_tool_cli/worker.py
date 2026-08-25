@@ -53,9 +53,11 @@ from wavegen_tool_core import (
     validate_backend_transport,
 )
 from wavegen_tool_core.transport import normalize_resource
-from wavegen_tool_cli.worker_commands import (
+from wavegen_tool_cli.worker_protocol import (
     WORKER_SCHEMA_VERSION,
     WORKER_SERVICE_NAME,
+)
+from wavegen_tool_cli.worker_commands import (
     ValidatedWorkerCommand,
     WorkerRequestValidationError,
     validate_worker_command_request,

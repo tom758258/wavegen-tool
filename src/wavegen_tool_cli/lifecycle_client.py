@@ -8,9 +8,9 @@ import json
 import sys
 import time
 from typing import Any
+from wavegen_tool_cli.worker_protocol import WORKER_SCHEMA_VERSION, WORKER_SERVICE_NAME
 
 
-_SCHEMA_VERSION = 2
 _SUCCESS = 0
 _CLI_USAGE = 2
 _RUNTIME_ERROR = 3
@@ -42,7 +42,7 @@ def run_send_command(args: Any) -> int:
         return _emit(args, _local_error(args, endpoint, url, error), "")
 
     request: dict[str, object] = {
-        "schema_version": _SCHEMA_VERSION,
+        "schema_version": WORKER_SCHEMA_VERSION,
         "command": args.worker_command,
         "arguments": arguments,
         "context": context,
@@ -349,11 +349,11 @@ def _request_json(
         return _invalid_response(status, request_sent, "Worker response must be valid UTF-8 JSON.", started)
     if not isinstance(payload, dict):
         return _invalid_response(status, request_sent, "Worker response must be a JSON object.", started)
-    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 2:
+    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != WORKER_SCHEMA_VERSION:
         return _invalid_response(
             status,
             request_sent,
-            "Worker response schema_version must be exact integer 2.",
+            f"Worker response schema_version must be exact integer {WORKER_SCHEMA_VERSION}.",
             started,
         )
     return _HTTPOutcome(
@@ -419,8 +419,8 @@ def _validate_send(
 def _validate_status(payload: dict[str, object] | None) -> str | None:
     if payload is None:
         return "Worker response is missing."
-    if payload.get("service") != "wavegen-tool":
-        return "Worker status response must identify service=wavegen-tool."
+    if payload.get("service") != WORKER_SERVICE_NAME:
+        return f"Worker status response must identify service={WORKER_SERVICE_NAME}."
     if not _nonempty(payload.get("run_id")):
         return "Worker status response must contain a run_id."
     if payload.get("status") not in _STATUSES:
@@ -591,7 +591,7 @@ def _result(
     elapsed_ms: int | None = None,
 ) -> dict[str, object]:
     result = dict(payload or {})
-    result["schema_version"] = _SCHEMA_VERSION
+    result["schema_version"] = WORKER_SCHEMA_VERSION
     result["ok"] = ok
     if exit_code is not None:
         result["exit_code"] = exit_code

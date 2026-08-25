@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from wavegen_tool_core import resolve_voltage_inputs
 from wavegen_tool_core.errors import WaveformParameterError
 from wavegen_tool_core.identity import CANONICAL_MODEL_ID
+from wavegen_tool_cli.worker_protocol import WORKER_SCHEMA_VERSION
 from wavegen_tool_core.visa import (
     dry_run_dc,
     dry_run_noise,
@@ -28,10 +29,6 @@ __all__ = [
     "WorkerRequestValidationError",
     "validate_worker_command_request",
 ]
-
-WORKER_SCHEMA_VERSION = 2
-WORKER_SERVICE_NAME = "wavegen-tool"
-
 
 class WorkerRequestValidationError(ValueError):
     """A Worker command request failed admission validation."""
