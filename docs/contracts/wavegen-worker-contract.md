@@ -10,9 +10,9 @@ It is used with the [Common Worker Protocol](common-worker-protocol.md), the
 [Common Orchestrator Workflows](common-orchestrator-workflows.md). Common
 envelope and lifecycle rules are not repeated here.
 
-The v1 Worker includes a local HTTP control plane, one background command
-runner, and minimal local lifecycle clients. Per-job artifacts are not part of
-v1.
+The current Worker implementation includes a local HTTP control plane, one
+background command runner, and minimal local lifecycle clients. The Worker
+does not create per-job artifacts.
 
 ## Command Envelope
 
@@ -61,18 +61,22 @@ Supported commands are:
 - `configure-square`
 - `configure-ramp`
 - `configure-triangle`
+- `configure-sine-sweep`
+- `configure-square-sweep`
+- `configure-ramp-sweep`
+- `configure-triangle-sweep`
 - `configure-pulse`
 - `configure-dc`
 - `configure-noise`
 - `configure-prbs`
 - `output`
 
-`list-resources`, arbitrary SCPI, and waveform, sweep, burst, or sequence
-commands not listed above are unsupported.
+`list-resources`, arbitrary SCPI, and waveform, burst, or sequence commands
+not listed above are unsupported. List Sweep is also unsupported.
 
-In `dry_run` context, only the eight `configure-*` commands are supported.
+In `dry_run` context, all twelve `configure-*` commands are supported.
 `identify`, `status`, `read-errors`, and `output` do not receive invented
-dry-run behavior in v1.
+dry-run behavior.
 
 ## Command Arguments
 
@@ -102,6 +106,19 @@ Waveform numeric ranges, load values, patterns, and SCPI planning rules are
 owned by the existing Core `dry_run_*` functions. The Worker does not duplicate
 those rules.
 
+Sweep arguments and defaults are:
+
+| Command | Required arguments | Optional defaults |
+| --- | --- | --- |
+| `configure-sine-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `load="50"` |
+| `configure-square-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `duty_cycle_percent=50`, `load="50"` |
+| `configure-ramp-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `symmetry_percent=100`, `load="50"` |
+| `configure-triangle-sweep` | `start_frequency_hz`, `stop_frequency_hz`, `spacing`, `sweep_time_s`, `amplitude_vpp` | `offset_v=0`, `hold_time_s=0`, `return_time_s=0`, `phase_deg=0`, `load="50"` |
+
+Sweep numeric ranges, spacing, trigger source, and SCPI planning rules are
+owned by the existing Core `dry_run_*_sweep` functions. The Worker does not
+duplicate those rules.
+
 `output` requires `enabled`, which must be a boolean. Optional
 `confirm_output`, when present, must also be a boolean. `confirm_output` is an
 admission safety field and is not passed to Core.
@@ -130,7 +147,7 @@ command or perform VISA I/O. Instrument status must be requested with
 `command="status"`.
 
 `POST /stop` follows the Common lifecycle contract and does not change the
-command admission rules above. v1 does not create per-job artifacts.
+command admission rules above. The Worker does not create per-job artifacts.
 
 ## Worker Startup
 

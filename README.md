@@ -430,6 +430,10 @@ CLI invocation starts with fresh state. A live Worker `ready` event means only
 that its local HTTP control plane is accepting requests; it does not mean that
 the physical instrument has been connected or identified.
 
+Worker commands use kebab-case names and include the four linear/logarithmic
+sine, square, ramp, and triangle frequency sweep commands. List Sweep is not
+exposed by the Worker.
+
 Start a simulate Worker on a fixed example port:
 
 ```powershell

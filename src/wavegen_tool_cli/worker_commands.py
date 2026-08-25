@@ -29,6 +29,9 @@ __all__ = [
     "validate_worker_command_request",
 ]
 
+WORKER_SCHEMA_VERSION = 2
+WORKER_SERVICE_NAME = "wavegen-tool"
+
 
 class WorkerRequestValidationError(ValueError):
     """A Worker command request failed admission validation."""
@@ -64,10 +67,10 @@ _SUPPORTED_COMMANDS = frozenset(
         "status",
         "read-errors",
         "configure-sine",
-        "configure_sine_sweep",
-        "configure_square_sweep",
-        "configure_ramp_sweep",
-        "configure_triangle_sweep",
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -81,10 +84,10 @@ _SUPPORTED_COMMANDS = frozenset(
 _CONFIGURE_COMMANDS = frozenset(
     {
         "configure-sine",
-        "configure_sine_sweep",
-        "configure_square_sweep",
-        "configure_ramp_sweep",
-        "configure_triangle_sweep",
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
         "configure-square",
         "configure-ramp",
         "configure-triangle",
@@ -111,7 +114,7 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
             "load",
         }
     ),
-    "configure_sine_sweep": frozenset(
+    "configure-sine-sweep": frozenset(
         {
             "start_frequency_hz",
             "stop_frequency_hz",
@@ -127,7 +130,7 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
             "load",
         }
     ),
-    "configure_square_sweep": frozenset(
+    "configure-square-sweep": frozenset(
         {
             "start_frequency_hz",
             "stop_frequency_hz",
@@ -144,7 +147,7 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
             "load",
         }
     ),
-    "configure_ramp_sweep": frozenset(
+    "configure-ramp-sweep": frozenset(
         {
             "start_frequency_hz",
             "stop_frequency_hz",
@@ -161,7 +164,7 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
             "load",
         }
     ),
-    "configure_triangle_sweep": frozenset(
+    "configure-triangle-sweep": frozenset(
         {
             "start_frequency_hz",
             "stop_frequency_hz",
@@ -255,16 +258,16 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
 _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "read-errors": frozenset(),
     "configure-sine": frozenset({"frequency_hz"}),
-    "configure_sine_sweep": frozenset(
+    "configure-sine-sweep": frozenset(
         {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
     ),
-    "configure_square_sweep": frozenset(
+    "configure-square-sweep": frozenset(
         {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
     ),
-    "configure_ramp_sweep": frozenset(
+    "configure-ramp-sweep": frozenset(
         {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
     ),
-    "configure_triangle_sweep": frozenset(
+    "configure-triangle-sweep": frozenset(
         {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
     ),
     "configure-square": frozenset({"frequency_hz"}),
@@ -281,27 +284,27 @@ _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
 _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
     "read-errors": {"max_reads": 20},
     "configure-sine": {"phase_deg": 0.0, "load": "50"},
-    "configure_sine_sweep": {
+    "configure-sine-sweep": {
         "hold_time_s": 0,
         "return_time_s": 0,
         "phase_deg": 0.0,
         "load": "50",
     },
-    "configure_square_sweep": {
+    "configure-square-sweep": {
         "hold_time_s": 0,
         "return_time_s": 0,
         "phase_deg": 0.0,
         "duty_cycle_percent": 50,
         "load": "50",
     },
-    "configure_ramp_sweep": {
+    "configure-ramp-sweep": {
         "hold_time_s": 0,
         "return_time_s": 0,
         "phase_deg": 0.0,
         "symmetry_percent": 100,
         "load": "50",
     },
-    "configure_triangle_sweep": {
+    "configure-triangle-sweep": {
         "hold_time_s": 0,
         "return_time_s": 0,
         "phase_deg": 0.0,
@@ -357,7 +360,7 @@ def validate_worker_command_request(
         )
 
     schema_version = payload.get("schema_version")
-    if type(schema_version) is not int or schema_version != 2:
+    if type(schema_version) is not int or schema_version != WORKER_SCHEMA_VERSION:
         raise WorkerRequestValidationError(
             "invalid_request", "schema_version must be the exact integer 2."
         )
@@ -581,10 +584,10 @@ def _validate_live_write_safety(
 
 _VOLTAGE_WAVEFORMS = {
     "configure-sine": "Sine",
-    "configure_sine_sweep": "Sine sweep",
-    "configure_square_sweep": "Square sweep",
-    "configure_ramp_sweep": "Ramp sweep",
-    "configure_triangle_sweep": "Triangle sweep",
+    "configure-sine-sweep": "Sine sweep",
+    "configure-square-sweep": "Square sweep",
+    "configure-ramp-sweep": "Ramp sweep",
+    "configure-triangle-sweep": "Triangle sweep",
     "configure-square": "Square",
     "configure-ramp": "Ramp",
     "configure-triangle": "Triangle",
@@ -668,7 +671,7 @@ def _validate_waveform_arguments(
                 arguments["load"],
                 arguments["phase_deg"],
             )
-        elif command == "configure_sine_sweep":
+        elif command == "configure-sine-sweep":
             dry_run_sine_sweep(
                 model_id,
                 arguments["start_frequency_hz"],
@@ -682,7 +685,7 @@ def _validate_waveform_arguments(
                 arguments["load"],
                 arguments["phase_deg"],
             )
-        elif command == "configure_square_sweep":
+        elif command == "configure-square-sweep":
             dry_run_square_sweep(
                 model_id,
                 arguments["start_frequency_hz"],
@@ -697,7 +700,7 @@ def _validate_waveform_arguments(
                 arguments["phase_deg"],
                 duty_cycle_percent=arguments["duty_cycle_percent"],
             )
-        elif command == "configure_ramp_sweep":
+        elif command == "configure-ramp-sweep":
             dry_run_ramp_sweep(
                 model_id,
                 arguments["start_frequency_hz"],
@@ -712,7 +715,7 @@ def _validate_waveform_arguments(
                 arguments["phase_deg"],
                 symmetry_percent=arguments["symmetry_percent"],
             )
-        elif command == "configure_triangle_sweep":
+        elif command == "configure-triangle-sweep":
             dry_run_triangle_sweep(
                 model_id,
                 arguments["start_frequency_hz"],

@@ -58,7 +58,7 @@ def _sine_arguments() -> dict[str, object]:
             },
         ),
         (
-            "configure_sine_sweep",
+            "configure-sine-sweep",
             {
                 "start_frequency_hz": 1000,
                 "stop_frequency_hz": 10000,
@@ -81,7 +81,7 @@ def _sine_arguments() -> dict[str, object]:
             },
         ),
         (
-            "configure_square_sweep",
+            "configure-square-sweep",
             {
                 "start_frequency_hz": 1000,
                 "stop_frequency_hz": 30000,
@@ -105,7 +105,7 @@ def _sine_arguments() -> dict[str, object]:
             },
         ),
         (
-            "configure_ramp_sweep",
+            "configure-ramp-sweep",
             {
                 "start_frequency_hz": 10000,
                 "stop_frequency_hz": 1000,
@@ -128,7 +128,7 @@ def _sine_arguments() -> dict[str, object]:
             },
         ),
         (
-            "configure_triangle_sweep",
+            "configure-triangle-sweep",
             {
                 "start_frequency_hz": 200000,
                 "stop_frequency_hz": 1000,
@@ -316,10 +316,14 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
     ("command", "arguments", "expected_code"),
     [
         ("list-resources", {}, "unsupported_command"),
+        ("configure_sine_sweep", {}, "unsupported_command"),
+        ("configure_square_sweep", {}, "unsupported_command"),
+        ("configure_ramp_sweep", {}, "unsupported_command"),
+        ("configure_triangle_sweep", {}, "unsupported_command"),
         ("status", {"extra": True}, "invalid_arguments"),
         ("configure-sine", {"frequency_hz": 1000}, "invalid_arguments"),
         (
-            "configure_sine_sweep",
+            "configure-sine-sweep",
             {
                 "start_frequency_hz": 1000,
                 "stop_frequency_hz": 10000,
@@ -330,7 +334,7 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
             "invalid_arguments",
         ),
         (
-            "configure_square_sweep",
+            "configure-square-sweep",
             {
                 "start_frequency_hz": 1000,
                 "spacing": "linear",
@@ -340,7 +344,7 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
             "invalid_arguments",
         ),
         (
-            "configure_ramp_sweep",
+            "configure-ramp-sweep",
             {
                 "start_frequency_hz": 1000,
                 "stop_frequency_hz": 10000,
@@ -351,7 +355,7 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
             "invalid_arguments",
         ),
         (
-            "configure_triangle_sweep",
+            "configure-triangle-sweep",
             {
                 "start_frequency_hz": 1000,
                 "stop_frequency_hz": 10000,
@@ -365,7 +369,7 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
             "invalid_arguments",
         ),
         (
-            "configure_triangle_sweep",
+            "configure-triangle-sweep",
             {
                 "start_frequency_hz": 1000,
                 "stop_frequency_hz": 10000,

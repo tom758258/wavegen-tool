@@ -54,6 +54,8 @@ from wavegen_tool_core import (
 )
 from wavegen_tool_core.transport import normalize_resource
 from wavegen_tool_cli.worker_commands import (
+    WORKER_SCHEMA_VERSION,
+    WORKER_SERVICE_NAME,
     ValidatedWorkerCommand,
     WorkerRequestValidationError,
     validate_worker_command_request,
@@ -302,8 +304,8 @@ class WorkerRuntime:
     def status_payload(self) -> dict[str, object]:
         with self._condition:
             return {
-                "schema_version": 2,
-                "service": "wavegen-tool",
+                "schema_version": WORKER_SCHEMA_VERSION,
+                "service": WORKER_SERVICE_NAME,
                 "run_id": self.run_id,
                 "status": self._service_status,
                 "active_job": _job_payload(self._active_job),
@@ -465,7 +467,7 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 **factory_kwargs,
             )
-        if job.command == "configure_sine_sweep":
+        if job.command == "configure-sine-sweep":
             return configure_sine_sweep(
                 resource,
                 arguments["start_frequency_hz"],
@@ -481,7 +483,7 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 **factory_kwargs,
             )
-        if job.command == "configure_square_sweep":
+        if job.command == "configure-square-sweep":
             return configure_square_sweep(
                 resource,
                 arguments["start_frequency_hz"],
@@ -498,7 +500,7 @@ class WorkerRuntime:
                 duty_cycle_percent=arguments["duty_cycle_percent"],
                 **factory_kwargs,
             )
-        if job.command == "configure_ramp_sweep":
+        if job.command == "configure-ramp-sweep":
             return configure_ramp_sweep(
                 resource,
                 arguments["start_frequency_hz"],
@@ -515,7 +517,7 @@ class WorkerRuntime:
                 symmetry_percent=arguments["symmetry_percent"],
                 **factory_kwargs,
             )
-        if job.command == "configure_triangle_sweep":
+        if job.command == "configure-triangle-sweep":
             return configure_triangle_sweep(
                 resource,
                 arguments["start_frequency_hz"],
@@ -636,7 +638,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
             )
-        if command == "configure_sine_sweep":
+        if command == "configure-sine-sweep":
             return dry_run_sine_sweep(
                 model,
                 arguments["start_frequency_hz"],
@@ -650,7 +652,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
             )
-        if command == "configure_square_sweep":
+        if command == "configure-square-sweep":
             return dry_run_square_sweep(
                 model,
                 arguments["start_frequency_hz"],
@@ -665,7 +667,7 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 duty_cycle_percent=arguments["duty_cycle_percent"],
             )
-        if command == "configure_ramp_sweep":
+        if command == "configure-ramp-sweep":
             return dry_run_ramp_sweep(
                 model,
                 arguments["start_frequency_hz"],
@@ -680,7 +682,7 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 symmetry_percent=arguments["symmetry_percent"],
             )
-        if command == "configure_triangle_sweep":
+        if command == "configure-triangle-sweep":
             return dry_run_triangle_sweep(
                 model,
                 arguments["start_frequency_hz"],
@@ -811,9 +813,9 @@ class WorkerRuntime:
 
     def _emit_event(self, event: str, **fields: object) -> None:
         payload: dict[str, object] = {
-            "schema_version": 2,
+            "schema_version": WORKER_SCHEMA_VERSION,
             "event": event,
-            "service": "wavegen-tool",
+            "service": WORKER_SERVICE_NAME,
             "run_id": self.run_id,
             "timestamp_utc": _timestamp(),
         }
@@ -839,7 +841,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path != "/status":
-            self._send_json(404, {"schema_version": 2, "status": "error", "error": "not_found"})
+            self._send_json(404, {"schema_version": WORKER_SCHEMA_VERSION, "status": "error", "error": "not_found"})
             return
         self._send_json(200, self.server.runtime.status_payload())
 
@@ -849,7 +851,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         elif self.path == "/stop":
             self._handle_stop()
         else:
-            self._send_json(404, {"schema_version": 2, "status": "error", "error": "not_found"})
+            self._send_json(404, {"schema_version": WORKER_SCHEMA_VERSION, "status": "error", "error": "not_found"})
 
     def send_error(
         self,
@@ -861,7 +863,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         self._send_json(
             code,
             {
-                "schema_version": 2,
+                "schema_version": WORKER_SCHEMA_VERSION,
                 "status": "error",
                 "error": "http_error",
                 "message": message or "HTTP request failed.",
@@ -912,7 +914,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(
                 409,
                 {
-                    "schema_version": 2,
+                    "schema_version": WORKER_SCHEMA_VERSION,
                     "status": "rejected",
                     "command": validated.command,
                     "job_id": validated.job_id,
@@ -924,7 +926,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         self._send_json(
             202,
             {
-                "schema_version": 2,
+                "schema_version": WORKER_SCHEMA_VERSION,
                 "status": "accepted",
                 "command": job.command,
                 "job_id": job.job_id,
@@ -953,7 +955,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         self._send_json(
             202,
             {
-                "schema_version": 2,
+                "schema_version": WORKER_SCHEMA_VERSION,
                 "status": "accepted",
                 "run_id": self.server.runtime.run_id,
             },
@@ -1015,7 +1017,7 @@ def _request_error(
     run_id: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": WORKER_SCHEMA_VERSION,
         "status": "error",
         "command": command,
         "job_id": job_id,
