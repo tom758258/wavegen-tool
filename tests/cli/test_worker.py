@@ -615,3 +615,40 @@ def test_worker_serialization_keeps_core_channel_field_out_of_worker_results():
 
     assert isinstance(result, dict)
     assert "channel" not in result
+
+
+def test_worker_successful_job_is_memory_first_without_filesystem_artifacts(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.chdir(tmp_path)
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        code, accepted = _request(runtime, "POST", "/command", _payload("status"))
+        assert code == 202
+        assert "artifact_path" not in accepted
+
+        last_job = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")
+        assert isinstance(last_job["result"], dict)
+
+        status = _request(runtime, "GET", "/status")[1]
+        assert status["last_job"]["result"] == last_job["result"]
+        assert "artifact_path" not in status["last_job"]
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+    events = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip()
+    ]
+    finished = next(
+        event
+        for event in events
+        if event["event"] == "job_finished"
+        and event["worker_job_id"] == accepted["worker_job_id"]
+    )
+    assert isinstance(finished["result"], dict)
+
+    assert list(tmp_path.iterdir()) == []
