@@ -359,7 +359,8 @@ def validate_worker_command_request(
     schema_version = payload.get("schema_version")
     if type(schema_version) is not int or schema_version != WORKER_SCHEMA_VERSION:
         raise WorkerRequestValidationError(
-            "invalid_request", "schema_version must be the exact integer 2."
+            "invalid_request",
+            f"schema_version must be the exact integer {WORKER_SCHEMA_VERSION}.",
         )
 
     command = payload.get("command")

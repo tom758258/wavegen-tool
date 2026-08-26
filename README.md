@@ -489,6 +489,31 @@ For normal live shutdown, first submit `output` with `enabled=false`, confirm
 that the job succeeded, and then run `worker-stop`. `worker-stop` never turns
 the instrument output off automatically.
 
+## Tool Manifest
+
+Orchestrators can query static tool identity offline with one command that does
+not start a Worker, bind a port, or perform any VISA or instrument I/O:
+
+```powershell
+uv run wavegen-tool manifest --json
+```
+
+The command prints exactly one JSON object and creates no files or artifacts.
+`tool_version` reports the installed package version:
+
+```json
+{
+  "event": "tool_manifest",
+  "schema_version": 2,
+  "tool_id": "wavegen",
+  "tool_version": "0.1.0",
+  "worker_protocol": {
+    "compatibility_policy": "v2-only",
+    "schema_versions": [2]
+  }
+}
+```
+
 ## List VISA Resources
 
 Raw listing accesses the selected VISA backend, calls
@@ -1266,6 +1291,7 @@ uv run python -m pytest tests -q -p no:cacheprovider
 uv run python -m build
 uv run python -c "import wavegen_tool_core; import wavegen_tool_cli; import wavegen_tool_webui"
 uv run wavegen-tool --help
+uv run wavegen-tool manifest --help
 uv run wavegen-tool list-resources --help
 uv run wavegen-tool identify --help
 uv run wavegen-tool status --help

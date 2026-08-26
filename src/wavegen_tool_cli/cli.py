@@ -92,6 +92,7 @@ from wavegen_tool_cli.lifecycle_client import (
     run_worker_status,
     run_worker_stop,
 )
+from wavegen_tool_cli.manifest import run_manifest
 
 
 class ExitCode(IntEnum):
@@ -1657,6 +1658,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    manifest_parser = subparsers.add_parser(
+        "manifest",
+        help="Print static tool identity and Worker protocol compatibility.",
+        allow_abbrev=False,
+    )
+    manifest_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     send_parser = subparsers.add_parser(
         "send-command",
         help="Submit one command to a local Wavegen Worker.",
@@ -1763,6 +1776,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_wait_ready(args)
     if args.command == "worker-stop":
         return run_worker_stop(args)
+    if args.command == "manifest":
+        return run_manifest(args)
     waveform_commands = {
         "configure-sine",
         "configure-sine-sweep",
