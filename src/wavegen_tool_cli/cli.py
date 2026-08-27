@@ -85,7 +85,7 @@ from wavegen_tool_core.simulator import (
     Simulated33521BState,
     SimulatedResourceManagerFactory,
 )
-from wavegen_tool_cli.worker import run_worker, validate_worker_startup
+from wavegen_tool_cli.capabilities import run_capabilities
 from wavegen_tool_cli.lifecycle_client import (
     run_send_command,
     run_wait_ready,
@@ -93,6 +93,7 @@ from wavegen_tool_cli.lifecycle_client import (
     run_worker_stop,
 )
 from wavegen_tool_cli.manifest import run_manifest
+from wavegen_tool_cli.worker import run_worker, validate_worker_startup
 
 
 class ExitCode(IntEnum):
@@ -1670,6 +1671,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    capabilities_parser = subparsers.add_parser(
+        "capabilities",
+        help="Print static model identity and capabilities offline.",
+        allow_abbrev=False,
+    )
+    capabilities_parser.add_argument(
+        "--model",
+        required=True,
+        help="Exact registered model ID.",
+    )
+    capabilities_parser.add_argument(
+        "--json",
+        action="store_true",
+        required=True,
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     send_parser = subparsers.add_parser(
         "send-command",
         help="Submit one command to a local Wavegen Worker.",
@@ -1778,6 +1797,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_worker_stop(args)
     if args.command == "manifest":
         return run_manifest(args)
+    if args.command == "capabilities":
+        return run_capabilities(args)
     waveform_commands = {
         "configure-sine",
         "configure-sine-sweep",
