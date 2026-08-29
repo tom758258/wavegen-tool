@@ -1,4 +1,4 @@
-from inspect import signature
+from inspect import Parameter, signature
 
 from pyvisa.constants import RENLineOperation
 import pytest
@@ -2589,6 +2589,7 @@ def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         "OUTPut1:LOAD INF",
         "SOURce1:VOLTage:UNIT VPP",
         "SOURce1:FUNCtion SIN",
@@ -2670,10 +2671,37 @@ def test_all_list_sweep_plans_restore_cw_before_carrier_and_phase(
         for index, command in enumerate(preview.commands)
         if command.startswith("SOURce1:PHASe ")
     )
+    sum_off_index = preview.commands.index("SOURce1:SUM:STATe OFF")
+    list_frequency_index = next(
+        index
+        for index, command in enumerate(preview.commands)
+        if command.startswith("SOURce1:LIST:FREQuency ")
+    )
     assert preview.commands[0] == "OUTPut1 OFF"
     assert cw_index < carrier_index
     assert cw_index < phase_index
+    assert cw_index < sum_off_index < list_frequency_index
     assert preview.commands[-1] == "SOURce1:FREQuency:MODE LIST"
+
+
+@pytest.mark.parametrize(
+    "api",
+    [
+        visa_module.configure_sine_list_sweep,
+        visa_module.configure_square_list_sweep,
+        visa_module.configure_ramp_list_sweep,
+        visa_module.configure_triangle_list_sweep,
+        visa_module.dry_run_sine_list_sweep,
+        visa_module.dry_run_square_list_sweep,
+        visa_module.dry_run_ramp_list_sweep,
+        visa_module.dry_run_triangle_list_sweep,
+    ],
+)
+def test_list_sweep_dwell_and_trigger_parameters_are_keyword_only(api) -> None:
+    parameters = signature(api).parameters
+
+    assert parameters["dwell_s"].kind is Parameter.KEYWORD_ONLY
+    assert parameters["trigger_source"].kind is Parameter.KEYWORD_ONLY
 
 
 @pytest.mark.parametrize("point_count", [1, 128])

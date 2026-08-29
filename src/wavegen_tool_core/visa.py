@@ -3215,6 +3215,7 @@ def _build_list_sweep_commands(
         "SOURce1:BPSK:STATe OFF",
         "SOURce1:PWM:STATe OFF",
         "SOURce1:BURSt:STATe OFF",
+        "SOURce1:SUM:STATe OFF",
         *base_commands[1:],
         f"SOURce1:LIST:FREQuency {frequency_list}",
         *dwell_commands,

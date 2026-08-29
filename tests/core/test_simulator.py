@@ -858,6 +858,41 @@ def test_two_channel_simulator_stores_selected_bus_list_trigger_source() -> None
     assert state.ch2.output_enabled is False
 
 
+def test_two_channel_simulator_list_cleans_selected_sum_state() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    state.ch1.sum_enabled = True
+    factory = SimulatedResourceManagerFactory(state)
+
+    configure_sine(
+        factory.resource_name,
+        1_000,
+        0.1,
+        channel=2,
+        sum=SumConfig(250, 20),
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.sum_enabled is True
+    assert state.ch2.sum_enabled is True
+
+    configure_sine_list_sweep(
+        factory.resource_name,
+        [1000, 3000, 7000],
+        0.1,
+        trigger_source="bus",
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert state.ch1.sum_enabled is True
+    assert state.ch1.frequency_mode == "CW"
+    assert state.ch1.trigger_source == "immediate"
+    assert state.ch2.sum_enabled is False
+    assert state.ch2.frequency_mode == "LIST"
+    assert state.ch2.trigger_source == "bus"
+    assert state.ch2.output_enabled is False
+
+
 def test_two_channel_simulator_am_state_is_isolated_and_static_config_recovers() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     factory = SimulatedResourceManagerFactory(state)
