@@ -908,6 +908,18 @@ class PrbsDryRunResult:
 
 
 @dataclass(frozen=True)
+class OutputConfig:
+    """Selected-channel output configuration (partial update)."""
+
+    load: object = None
+    polarity: object = None
+    voltage_limit_low: object = None
+    voltage_limit_high: object = None
+    voltage_limits_enabled: object = None
+    autorange_enabled: object = None
+
+
+@dataclass(frozen=True)
 class OutputResult:
     """A successful explicit output-state change."""
 
@@ -917,6 +929,43 @@ class OutputResult:
     identity: InstrumentIdentity
     output_state: str
     channel: int = 1
+
+
+@dataclass(frozen=True)
+class OutputConfigurationResult:
+    """Successful selected-channel output configuration (partial update)."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    channel: int = 1
+    output_state: str = "off"
+    load: str | None = None
+    polarity: str | None = None
+    voltage_limit_low: float | None = None
+    voltage_limit_high: float | None = None
+    voltage_limits_enabled: bool | None = None
+    autorange_enabled: bool | None = None
+    commands: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class OutputDryRunResult:
+    """Hardware-free preview of selected-channel output configuration."""
+
+    model: str
+    canonical_model_id: str
+    channel: int = 1
+    output_state: str = "off"
+    executed: bool = False
+    commands: tuple[str, ...] = ()
+    load: str | None = None
+    polarity: str | None = None
+    voltage_limit_low: float | None = None
+    voltage_limit_high: float | None = None
+    voltage_limits_enabled: bool | None = None
+    autorange_enabled: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -7247,6 +7296,239 @@ def _normalize_load(value: object, *, waveform: str = "Sine") -> str:
     elif value == 50:
         return "50"
     raise WaveformParameterError(f"{waveform} load must be 50 or high-z.")
+
+
+def _normalize_output_load(value: object) -> str:
+    if isinstance(value, bool):
+        raise WaveformParameterError("Output load must be high-z or between 1 and 10000.")
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise WaveformParameterError("Output load must be high-z or between 1 and 10000.")
+        if stripped.casefold() == "high-z":
+            return "high-z"
+        try:
+            numeric = float(stripped)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise WaveformParameterError(
+                "Output load must be high-z or between 1 and 10000."
+            ) from exc
+        if not math.isfinite(numeric):
+            raise WaveformParameterError(
+                "Output load must be high-z or between 1 and 10000."
+            )
+        if not 1 <= numeric <= 10000:
+            raise WaveformParameterError("Output load must be between 1 and 10000.")
+        return _format_scpi_number(numeric)
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            raise WaveformParameterError(
+                "Output load must be high-z or between 1 and 10000."
+            )
+        if not 1 <= numeric <= 10000:
+            raise WaveformParameterError("Output load must be between 1 and 10000.")
+        return _format_scpi_number(numeric)
+    raise WaveformParameterError("Output load must be high-z or between 1 and 10000.")
+
+
+def _normalize_output_polarity(value: object) -> str:
+    if not isinstance(value, str):
+        raise WaveformParameterError("Output polarity must be normal or inverted.")
+    normalized = value.strip().casefold()
+    if normalized not in {"normal", "inverted"}:
+        raise WaveformParameterError("Output polarity must be normal or inverted.")
+    return normalized
+
+
+def _normalize_output_bool(value: object, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise WaveformParameterError(f"{label} must be a boolean.")
+    return value
+
+
+def _prepare_output(config: OutputConfig) -> tuple[
+    str | None,
+    str | None,
+    float | None,
+    float | None,
+    bool | None,
+    bool | None,
+    tuple[str, ...],
+]:
+    if not isinstance(config, OutputConfig):
+        raise WaveformParameterError("Output configuration must use OutputConfig.")
+    has_load = config.load is not None
+    has_polarity = config.polarity is not None
+    has_low = config.voltage_limit_low is not None
+    has_high = config.voltage_limit_high is not None
+    has_limits_enabled = config.voltage_limits_enabled is not None
+    has_autorange = config.autorange_enabled is not None
+
+    if not any((has_load, has_polarity, has_low, has_high, has_limits_enabled, has_autorange)):
+        raise WaveformParameterError(
+            "At least one output configuration field must be provided."
+        )
+
+    normalized_load: str | None = None
+    normalized_polarity: str | None = None
+    normalized_low: float | None = None
+    normalized_high: float | None = None
+    normalized_limits_enabled: bool | None = None
+    normalized_autorange: bool | None = None
+
+    if has_load:
+        normalized_load = _normalize_output_load(config.load)
+    if has_polarity:
+        normalized_polarity = _normalize_output_polarity(config.polarity)
+    if has_low or has_high:
+        if has_low != has_high:
+            raise WaveformParameterError(
+                "Output voltage limits require both low and high values."
+            )
+        normalized_low = _normalize_finite_number(
+            config.voltage_limit_low, "voltage limit low", waveform="Output"
+        )
+        normalized_high = _normalize_finite_number(
+            config.voltage_limit_high, "voltage limit high", waveform="Output"
+        )
+        if not normalized_low < normalized_high:
+            raise WaveformParameterError(
+                "Output voltage limit low must be less than high."
+            )
+    if has_limits_enabled:
+        normalized_limits_enabled = _normalize_output_bool(
+            config.voltage_limits_enabled, "Output voltage limits"
+        )
+    if has_autorange:
+        normalized_autorange = _normalize_output_bool(
+            config.autorange_enabled, "Output autorange"
+        )
+
+    # Cross-field rules
+    if has_load and normalized_limits_enabled is True and not (has_low and has_high):
+        raise WaveformParameterError(
+            "Output load and voltage limits cannot be enabled without a complete low/high pair."
+        )
+    if has_load and (has_low or has_high) and normalized_limits_enabled is None:
+        raise WaveformParameterError(
+            "Output load and voltage limits require explicit voltage-limits state when adjusting limits together."
+        )
+
+    # Build ordered SCPI plan (request-dependent)
+    commands: list[str] = []
+    commands.append("OUTPut1 OFF")
+    if has_load and has_limits_enabled:
+        commands.append("SOURce1:VOLTage:LIMit:STATe OFF")
+    if normalized_load is not None:
+        load_cmd = "INF" if normalized_load == "high-z" else normalized_load
+        commands.append(f"OUTPut1:LOAD {load_cmd}")
+    if normalized_polarity is not None:
+        pol = "NORMal" if normalized_polarity == "normal" else "INVerted"
+        commands.append(f"OUTPut1:POLarity {pol}")
+    if normalized_low is not None and normalized_high is not None:
+        commands.append(f"SOURce1:VOLTage:LIMit:LOW {_format_scpi_number(normalized_low)}")
+        commands.append(f"SOURce1:VOLTage:LIMit:HIGH {_format_scpi_number(normalized_high)}")
+    if normalized_autorange is not None:
+        auto_cmd = "ON" if normalized_autorange else "OFF"
+        commands.append(f"SOURce1:VOLTage:RANGe:AUTO {auto_cmd}")
+    if normalized_limits_enabled is not None:
+        lim_cmd = "ON" if normalized_limits_enabled else "OFF"
+        commands.append(f"SOURce1:VOLTage:LIMit:STATe {lim_cmd}")
+    commands.append("OUTPut1 OFF")
+    return (
+        normalized_load,
+        normalized_polarity,
+        normalized_low,
+        normalized_high,
+        normalized_limits_enabled,
+        normalized_autorange,
+        tuple(commands),
+    )
+
+
+def configure_output(
+    resource: str,
+    config: OutputConfig,
+    backend: str | None = None,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> OutputConfigurationResult:
+    """Validate and configure selected-channel output load/polarity/limits/autorange."""
+
+    def prepare_configuration(
+        capabilities: WavegenCapabilities,
+    ) -> tuple[tuple[object, ...], tuple[str, ...]]:
+        # Validate channel against capabilities before building plan
+        _validate_channel(channel, capabilities, None)
+        values = _prepare_output(config)
+        return values[:-1], values[-1]
+
+    context, prepared = _prepare_and_write_to_supported_instrument(
+        resource,
+        backend,
+        prepare_configuration,
+        channel=channel,
+        independent_channel_guard=True,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    (
+        load,
+        polarity,
+        low,
+        high,
+        limits_enabled,
+        autorange_enabled,
+    ) = prepared
+    return OutputConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        channel=channel,
+        output_state="off",
+        load=load,
+        polarity=polarity,
+        voltage_limit_low=low,
+        voltage_limit_high=high,
+        voltage_limits_enabled=limits_enabled,
+        autorange_enabled=autorange_enabled,
+        commands=_channelize_commands(_prepare_output(config)[-1], channel),
+    )
+
+
+def dry_run_output(
+    model: str,
+    config: OutputConfig,
+    *,
+    channel: int = 1,
+) -> OutputDryRunResult:
+    """Preview selected-channel output configuration without VISA I/O."""
+
+    model_info, capabilities = _require_hardware_free_model(model, "output")
+    selected_channel = _validate_channel(
+        channel, capabilities, model_info.canonical_model
+    )
+    load, polarity, low, high, limits_enabled, autorange, commands = _prepare_output(config)
+    return OutputDryRunResult(
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
+        channel=selected_channel,
+        output_state="off",
+        executed=False,
+        commands=_channelize_commands(commands, selected_channel),
+        load=load,
+        polarity=polarity,
+        voltage_limit_low=low,
+        voltage_limit_high=high,
+        voltage_limits_enabled=limits_enabled,
+        autorange_enabled=autorange,
+    )
 
 
 def _validate_vpp_levels(

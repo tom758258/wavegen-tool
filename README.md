@@ -1270,6 +1270,57 @@ The `output` command identifies the instrument in the same session and writes
 only the requested selected-channel output state. Only an explicit
 `output --state on` command enables the output.
 
+## Configure Selected-Channel Output
+
+`configure-output` configures selected-channel output load, polarity,
+voltage limits, and voltage autorange while keeping output off.
+Select Channel 1 or 2 with `--channel`; the default is Channel 1.
+All fields are optional (partial update), but at least one must be
+provided. Configuration first attempts to turn the selected output off;
+once that write succeeds, no later command in the operation can enable
+the output.
+
+```powershell
+uv run wavegen-tool configure-output `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --channel 2 `
+  --load 1000 `
+  --polarity inverted `
+  --voltage-limit-low -1 `
+  --voltage-limit-high 1 `
+  --voltage-limits on `
+  --autorange off
+```
+
+Preview the ordered SCPI plan without VISA I/O:
+
+```powershell
+uv run wavegen-tool configure-output `
+  --dry-run `
+  --model keysight-33512b `
+  --channel 2 `
+  --load 1000 `
+  --polarity inverted `
+  --voltage-limit-low -1 `
+  --voltage-limit-high 1 `
+  --voltage-limits on `
+  --autorange off
+```
+
+Options: `--load <1..10000|high-z>` maps to `OUTPut:LOAD {<ohms>|INF}`,
+`--polarity normal|inverted` maps to `OUTPut:POLarity`,
+`--voltage-limit-low`/`--voltage-limit-high` with `--voltage-limits on|off`
+map to `SOURce:VOLTage:LIMit:LOW/HIGH/STATe`, and `--autorange on|off`
+maps to `SOURce:VOLTage:RANGe:AUTO`. `ONCE` is not supported. Changing
+load while voltage limits are enabled requires explicitly disabling or
+reconfiguring the limits in the same request (`--load` together with
+`--voltage-limits` and, when enabling, a complete low/high pair).
+All numeric loads and voltage limits are validated as finite numbers;
+`low < high` is required and `load` must be `high-z` or between 1 and
+10000 inclusive; `load=True` is rejected. Partial polarity or autorange
+changes do not alter voltage limits. Result types describe the canonical
+requested/applied partial configuration, not a full instrument readback.
+
 ## Safety Boundary
 
 The identify command opens only the resource supplied by the user, issues
@@ -1298,13 +1349,14 @@ the error queue, or change output state.
 `configure-sine`, `configure-sine-sweep`, `configure-square-sweep`,
 `configure-ramp-sweep`, `configure-triangle-sweep`, `configure-square`,
 `configure-ramp`, `configure-triangle`, `configure-pulse`, `configure-dc`,
-`configure-noise`, and `configure-prbs` first turn only the selected channel
-off and leave it off after configuration. They cannot enable output. The
-`output` command changes only the selected channel output state and does not
-reconfigure or reset the instrument. On two-channel live instruments, sweep
-configuration on either channel requires frequency coupling, voltage coupling,
-and tracking on both channels to be reported as off before any write. The tool
-does not change those coupling or tracking settings automatically.
+`configure-noise`, `configure-prbs`, and `configure-output` first turn only
+the selected channel off and leave it off after configuration. They cannot
+enable output. The `output` command changes only the selected channel output
+state and does not reconfigure or reset the instrument. On two-channel live
+instruments, sweep and output configuration on either channel require
+frequency coupling, voltage coupling, and tracking on both channels to be
+reported as off before any write. The tool does not change those coupling or
+tracking settings automatically.
 
 For identify, the `@py` plus USB combination and any `@bt` live connection request are rejected before the
 ResourceManager is created or any VISA I/O occurs. USB resources remain

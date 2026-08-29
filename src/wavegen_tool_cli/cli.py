@@ -15,6 +15,7 @@ from wavegen_tool_core import (
     GatedBurstConfig,
     FMConfig,
     FSKConfig,
+    OutputConfig,
     PMConfig,
     PWMConfig,
     SumConfig,
@@ -37,6 +38,7 @@ from wavegen_tool_core import (
     WavegenError,
     configure_dc,
     configure_noise,
+    configure_output,
     configure_prbs,
     configure_pulse,
     configure_ramp,
@@ -53,6 +55,7 @@ from wavegen_tool_core import (
     configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
+    dry_run_output,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
@@ -474,6 +477,35 @@ def _sum_config_from_args(args: argparse.Namespace) -> SumConfig | None:
     return SumConfig(
         modulation_frequency_hz=args.sum_frequency,
         amplitude_percent=args.sum_amplitude_percent,
+    )
+
+
+def _output_config_from_args(args: argparse.Namespace) -> OutputConfig:
+    limits = None
+    if getattr(args, "voltage_limits", None) is not None:
+        limits_str = args.voltage_limits.strip().casefold()
+        if limits_str == "on":
+            limits = True
+        elif limits_str == "off":
+            limits = False
+        else:
+            limits = args.voltage_limits
+    autorange = None
+    if getattr(args, "autorange", None) is not None:
+        auto_str = args.autorange.strip().casefold()
+        if auto_str == "on":
+            autorange = True
+        elif auto_str == "off":
+            autorange = False
+        else:
+            autorange = args.autorange
+    return OutputConfig(
+        load=getattr(args, "load", None),
+        polarity=getattr(args, "polarity", None),
+        voltage_limit_low=getattr(args, "voltage_limit_low", None),
+        voltage_limit_high=getattr(args, "voltage_limit_high", None),
+        voltage_limits_enabled=limits,
+        autorange_enabled=autorange,
     )
 
 
@@ -1573,6 +1605,74 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    configure_output_parser = subparsers.add_parser(
+        "configure-output",
+        help="Configure selected-channel output load, polarity, voltage limits and autorange with output off.",
+        allow_abbrev=False,
+    )
+    _add_simulate_argument(configure_output_parser)
+    _add_channel_argument(configure_output_parser)
+    _add_validation_support_policy_argument(configure_output_parser)
+    configure_output_parser.add_argument(
+        "--resource",
+        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+    )
+    configure_output_parser.add_argument(
+        "--backend",
+        default="system",
+        help="VISA backend name validated by Core (default: system).",
+    )
+    configure_output_parser.add_argument(
+        "--load",
+        default=None,
+        help="Output load (<1..10000> ohms or high-z).",
+    )
+    configure_output_parser.add_argument(
+        "--polarity",
+        choices=("normal", "inverted"),
+        default=None,
+        help="Output polarity.",
+    )
+    configure_output_parser.add_argument(
+        "--voltage-limit-low",
+        default=None,
+        help="Output voltage limit low in volts.",
+    )
+    configure_output_parser.add_argument(
+        "--voltage-limit-high",
+        default=None,
+        help="Output voltage limit high in volts.",
+    )
+    configure_output_parser.add_argument(
+        "--voltage-limits",
+        choices=("on", "off"),
+        default=None,
+        help="Output voltage limit state.",
+    )
+    configure_output_parser.add_argument(
+        "--autorange",
+        choices=("on", "off"),
+        default=None,
+        help="Output voltage autorange.",
+    )
+    configure_output_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview validated SCPI without VISA I/O.",
+    )
+    configure_output_parser.add_argument(
+        "--model",
+        choices=_REGISTERED_MODEL_IDS,
+        default=CANONICAL_MODEL_ID,
+        help="Target model for dry-run or simulation (default: keysight-33521b).",
+    )
+    configure_output_parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_output",
+        help="Emit exactly one JSON object.",
+    )
+
     trigger_parser = subparsers.add_parser(
         "trigger",
         help="Send one instrument-wide IEEE-488.2 bus trigger without waiting.",
@@ -1825,6 +1925,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-dc",
         "configure-noise",
         "configure-prbs",
+        "configure-output",
     }
     validation_only_live_commands = {
         "identify",
@@ -1932,6 +2033,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_noise(args)
     if args.command == "configure-prbs":
         return _run_configure_prbs(args)
+    if args.command == "configure-output":
+        return _run_configure_output(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "trigger":
@@ -3303,6 +3406,69 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_configure_output(args: argparse.Namespace) -> int:
+    if args.dry_run:
+        return _run_output_dry_run(args)
+    resource, factory = (
+        _simulated_target(args.model) if args.simulate else (args.resource, None)
+    )
+    config = _output_config_from_args(args)
+    return _run_control(
+        args,
+        lambda: configure_output(
+            resource,
+            config,
+            args.backend,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        ),
+    )
+
+
+def _run_output_dry_run(args: argparse.Namespace) -> int:
+    try:
+        config = _output_config_from_args(args)
+        result = dry_run_output(
+            args.model,
+            config,
+            channel=args.channel,
+        )
+    except WavegenError as exc:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _output_dry_run_error_payload(exc),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print(_human_error(exc), file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        if args.json_output:
+            print(
+                json.dumps(
+                    _output_dry_run_internal_error_payload(),
+                    separators=(",", ":"),
+                )
+            )
+        else:
+            print("Error [internal_error]: unexpected internal failure.", file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+
+    if args.json_output:
+        print(
+            json.dumps(
+                _output_dry_run_success_payload(result),
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(_human_output_dry_run_success(result))
+    return int(ExitCode.SUCCESS)
+
+
 def _run_output(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target(args.model or CANONICAL_MODEL_ID)
@@ -3758,6 +3924,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "configure-dc",
         "configure-noise",
         "configure-prbs",
+        "configure-output",
         "output",
     } | _LIST_SWEEP_ACTIONS:
         payload["channel"] = getattr(result, "channel", 1)
@@ -3845,6 +4012,17 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             edge_time_s=result.edge_time_s,
             load=result.load,
         )
+    if action == "configure-output":
+        payload.update(
+            load=result.load,
+            polarity=result.polarity,
+            voltage_limit_low=result.voltage_limit_low,
+            voltage_limit_high=result.voltage_limit_high,
+            voltage_limits_enabled=result.voltage_limits_enabled,
+            autorange_enabled=result.autorange_enabled,
+        )
+        if hasattr(result, "commands"):
+            payload["commands"] = list(result.commands)
     payload.update(_am_payload_fields(result))
     payload.update(_fm_payload_fields(result))
     payload.update(_pm_payload_fields(result))
@@ -4430,6 +4608,45 @@ def _prbs_dry_run_internal_error_payload() -> dict[str, object]:
     }
 
 
+def _output_dry_run_success_payload(result: Any) -> dict[str, object]:
+    return {
+        "success": True,
+        "action": "configure-output",
+        "mode": "dry-run",
+        "model": result.model,
+        "canonical_model_id": result.canonical_model_id,
+        "channel": getattr(result, "channel", 1),
+        "load": result.load,
+        "polarity": result.polarity,
+        "voltage_limit_low": result.voltage_limit_low,
+        "voltage_limit_high": result.voltage_limit_high,
+        "voltage_limits_enabled": result.voltage_limits_enabled,
+        "autorange_enabled": result.autorange_enabled,
+        "commands": list(result.commands),
+        "executed": result.executed,
+        "output_state": result.output_state,
+        "error": None,
+    }
+
+
+def _output_dry_run_error_payload(error: WavegenError) -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-output",
+        "mode": "dry-run",
+        "error": _error_text(error),
+    }
+
+
+def _output_dry_run_internal_error_payload() -> dict[str, object]:
+    return {
+        "success": False,
+        "action": "configure-output",
+        "mode": "dry-run",
+        "error": "internal_error: unexpected internal failure",
+    }
+
+
 def _control_error_payload(
     action: str,
     error: WavegenError,
@@ -4460,6 +4677,7 @@ def _control_error_payload(
         "configure-dc",
         "configure-noise",
         "configure-prbs",
+        "configure-output",
         "output",
     } | _LIST_SWEEP_ACTIONS:
         payload["channel"] = channel
@@ -4772,6 +4990,8 @@ def _human_control_success(action: str, result: Any) -> str:
         heading = f"Channel {channel} noise waveform configured with output off."
     elif action == "configure-prbs":
         heading = f"Channel {channel} PRBS waveform configured with output off."
+    elif action == "configure-output":
+        heading = f"Channel {channel} output configuration applied with output off."
     else:
         heading = f"Channel {channel} output set to {result.output_state}."
     lines = [
@@ -4869,6 +5089,17 @@ def _human_control_success(action: str, result: Any) -> str:
                     f"Trailing edge (seconds): {result.trailing_edge_s}",
                 )
             )
+    if action == "configure-output":
+        lines.extend(
+            (
+                f"Load: {result.load}",
+                f"Polarity: {result.polarity}",
+                f"Voltage limit low: {result.voltage_limit_low}",
+                f"Voltage limit high: {result.voltage_limit_high}",
+                f"Voltage limits enabled: {result.voltage_limits_enabled}",
+                f"Autorange enabled: {result.autorange_enabled}",
+            )
+        )
     lines.extend(_human_am_lines(result))
     lines.extend(_human_fm_lines(result))
     lines.extend(_human_pm_lines(result))
@@ -5161,6 +5392,27 @@ def _human_prbs_dry_run_success(result: Any) -> str:
             f"Canonical model ID: {result.canonical_model_id}",
             "Executed: no",
             *_human_burst_lines(result),
+            f"Planned output state: {result.output_state}",
+            "Planned SCPI commands:",
+            commands,
+        )
+    )
+
+
+def _human_output_dry_run_success(result: Any) -> str:
+    commands = "\n".join(f"- {command}" for command in result.commands)
+    return "\n".join(
+        (
+            f"Channel {result.channel} output dry-run completed; no VISA I/O was performed.",
+            f"Target model: {result.model}",
+            f"Canonical model ID: {result.canonical_model_id}",
+            "Executed: no",
+            f"Load: {result.load}",
+            f"Polarity: {result.polarity}",
+            f"Voltage limit low: {result.voltage_limit_low}",
+            f"Voltage limit high: {result.voltage_limit_high}",
+            f"Voltage limits enabled: {result.voltage_limits_enabled}",
+            f"Autorange enabled: {result.autorange_enabled}",
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,

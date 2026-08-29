@@ -23,6 +23,11 @@ class SimulatedChannelState:
 
     output_enabled: bool = False
     output_load: str = "50"
+    output_polarity: str = "normal"
+    voltage_limit_low: float = -5.0
+    voltage_limit_high: float = 5.0
+    voltage_limit_enabled: bool = False
+    autorange_enabled: bool = True
     voltage_unit: str = "VPP"
     active_function: str = "SIN"
     frequency_hz: float = 1000.0
@@ -622,6 +627,12 @@ class SimulatedResource:
             f"OUTPut{prefix_ch} ON": ("output_enabled", True),
             f"OUTPut{prefix_ch}:LOAD 50": ("output_load", "50"),
             f"OUTPut{prefix_ch}:LOAD INF": ("output_load", "high-z"),
+            f"OUTPut{prefix_ch}:POLarity NORMal": ("output_polarity", "normal"),
+            f"OUTPut{prefix_ch}:POLarity INVerted": ("output_polarity", "inverted"),
+            f"SOURce{prefix_ch}:VOLTage:LIMit:STATe OFF": ("voltage_limit_enabled", False),
+            f"SOURce{prefix_ch}:VOLTage:LIMit:STATe ON": ("voltage_limit_enabled", True),
+            f"SOURce{prefix_ch}:VOLTage:RANGe:AUTO OFF": ("autorange_enabled", False),
+            f"SOURce{prefix_ch}:VOLTage:RANGe:AUTO ON": ("autorange_enabled", True),
             f"SOURce{prefix_ch}:VOLTage:UNIT VPP": ("voltage_unit", "VPP"),
             f"SOURce{prefix_ch}:FREQuency MINimum": ("frequency_hz", 0.000001),
             f"SOURce{prefix_ch}:FUNCtion SIN": ("active_function", "SIN"),
@@ -722,6 +733,43 @@ class SimulatedResource:
         update = exact_updates.get(command)
         if update is not None:
             setattr(ch_state, update[0], update[1])
+            return
+
+        # Generic output load handling (1..10000 or INF)
+        load_prefix = f"OUTPut{prefix_ch}:LOAD "
+        if command.startswith(load_prefix):
+            value = command[len(load_prefix) :].strip()
+            if value == "INF":
+                ch_state.output_load = "high-z"
+                return
+            num = _parse_finite_number(value)
+            if not 1 <= num <= 10000:
+                raise ValueError("Simulated load out of range.")
+            ch_state.output_load = _format_number(num)
+            return
+
+        # Output polarity
+        pol_prefix = f"OUTPut{prefix_ch}:POLarity "
+        if command.startswith(pol_prefix):
+            value = command[len(pol_prefix) :].strip().casefold()
+            if value.startswith("norm"):
+                ch_state.output_polarity = "normal"
+                return
+            if value.startswith("inv"):
+                ch_state.output_polarity = "inverted"
+                return
+            raise ValueError("Unsupported simulated polarity.")
+
+        # Voltage limits and autorange
+        if command.startswith(f"SOURce{prefix_ch}:VOLTage:LIMit:LOW "):
+            ch_state.voltage_limit_low = _parse_finite_number(
+                command[len(f"SOURce{prefix_ch}:VOLTage:LIMit:LOW ") :]
+            )
+            return
+        if command.startswith(f"SOURce{prefix_ch}:VOLTage:LIMit:HIGH "):
+            ch_state.voltage_limit_high = _parse_finite_number(
+                command[len(f"SOURce{prefix_ch}:VOLTage:LIMit:HIGH ") :]
+            )
             return
 
         list_frequency_prefix = f"SOURce{prefix_ch}:LIST:FREQuency "
@@ -918,6 +966,11 @@ class SimulatedResource:
                 if ch_state.output_load == "high-z"
                 else ch_state.output_load
             ),
+            f"OUTPut{prefix_ch}:POLarity?": "NORM" if ch_state.output_polarity == "normal" else "INV",
+            f"SOURce{prefix_ch}:VOLTage:LIMit:LOW?": _format_number(ch_state.voltage_limit_low),
+            f"SOURce{prefix_ch}:VOLTage:LIMit:HIGH?": _format_number(ch_state.voltage_limit_high),
+            f"SOURce{prefix_ch}:VOLTage:LIMit:STATe?": "1" if ch_state.voltage_limit_enabled else "0",
+            f"SOURce{prefix_ch}:VOLTage:RANGe:AUTO?": "1" if ch_state.autorange_enabled else "0",
             f"SOURce{prefix_ch}:FM:STATe?": "1" if ch_state.fm_enabled else "0",
             f"SOURce{prefix_ch}:FM:SOURce?": ch_state.fm_source,
             f"SOURce{prefix_ch}:FM:INTernal:FUNCtion?": ch_state.fm_internal_function,
