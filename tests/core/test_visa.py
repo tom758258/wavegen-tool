@@ -2572,11 +2572,11 @@ def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
     result = configure_sine_list_sweep(
         USB_RESOURCE,
         [7000, 1000, 7000],
-        0.005,
         0.2,
         0.1,
         "high-z",
         phase_deg=90,
+        dwell_s=0.005,
         resource_manager_factory=RecordingFactory(manager),
     )
     expected_commands = (
@@ -2605,11 +2605,11 @@ def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
     preview = dry_run_sine_list_sweep(
         "keysight-33521b",
         (7000, 1000, 7000),
-        0.005,
         0.2,
         0.1,
         "high-z",
         90,
+        dwell_s=0.005,
     )
 
     assert session.writes == list(expected_commands)
@@ -2617,10 +2617,30 @@ def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
     assert result.frequencies_hz == (7000.0, 1000.0, 7000.0)
     assert preview.frequencies_hz == result.frequencies_hz
     assert result.dwell_s == preview.dwell_s == 0.005
+    assert result.trigger_source == preview.trigger_source == "immediate"
     assert result.output_state == preview.output_state == "off"
     assert "OUTPut1 ON" not in expected_commands
     assert expected_commands[-2] == "TRIGger1:SOURce IMMediate"
     assert expected_commands[-1] == "SOURce1:FREQuency:MODE LIST"
+
+
+def test_bus_list_sweep_plan_omits_dwell_and_does_not_trigger() -> None:
+    preview = dry_run_sine_list_sweep(
+        "keysight-33521b",
+        [1000, 3000, 7000],
+        0.1,
+        trigger_source="BUS",
+    )
+
+    assert preview.dwell_s is None
+    assert preview.trigger_source == "bus"
+    assert preview.commands[-3:] == (
+        "SOURce1:LIST:FREQuency 1000,3000,7000",
+        "TRIGger1:SOURce BUS",
+        "SOURce1:FREQuency:MODE LIST",
+    )
+    assert all("LIST:DWELl" not in command for command in preview.commands)
+    assert "*TRG" not in preview.commands
 
 
 @pytest.mark.parametrize(
@@ -2635,7 +2655,13 @@ def test_sine_list_sweep_core_and_dry_run_share_ordered_plan() -> None:
 def test_all_list_sweep_plans_restore_cw_before_carrier_and_phase(
     dry_run, carrier_command
 ) -> None:
-    preview = dry_run("keysight-33521b", [1000, 3000], 0.005, 0.1, phase_deg=90)
+    preview = dry_run(
+        "keysight-33521b",
+        [1000, 3000],
+        0.1,
+        phase_deg=90,
+        dwell_s=0.005,
+    )
 
     cw_index = preview.commands.index("SOURce1:FREQuency:MODE CW")
     carrier_index = preview.commands.index(carrier_command)
@@ -2653,20 +2679,48 @@ def test_all_list_sweep_plans_restore_cw_before_carrier_and_phase(
 @pytest.mark.parametrize("point_count", [1, 128])
 def test_sine_list_sweep_accepts_boundary_point_counts(point_count) -> None:
     frequencies = [1000] * point_count
-    result = dry_run_sine_list_sweep("keysight-33521b", frequencies, 1, 0.1)
+    result = dry_run_sine_list_sweep(
+        "keysight-33521b", frequencies, 0.1, dwell_s=1
+    )
     assert result.frequencies_hz == tuple([1000.0] * point_count)
 
 
 @pytest.mark.parametrize("frequencies", [[], [1000] * 129, "1000,2000"])
 def test_sine_list_sweep_rejects_invalid_frequency_collections(frequencies) -> None:
     with pytest.raises(WaveformParameterError):
-        dry_run_sine_list_sweep("keysight-33521b", frequencies, 1, 0.1)
+        dry_run_sine_list_sweep(
+            "keysight-33521b", frequencies, 0.1, dwell_s=1
+        )
 
 
 @pytest.mark.parametrize("dwell", [0.0000009, 1000.000001])
 def test_sine_list_sweep_rejects_out_of_range_dwell(dwell) -> None:
     with pytest.raises(WaveformParameterError, match="dwell"):
-        dry_run_sine_list_sweep("keysight-33521b", [1000], dwell, 0.1)
+        dry_run_sine_list_sweep(
+            "keysight-33521b", [1000], 0.1, dwell_s=dwell
+        )
+
+
+@pytest.mark.parametrize(
+    ("trigger_source", "dwell_s", "message"),
+    [
+        ("immediate", None, "dwell is required"),
+        ("bus", 0.5, "dwell must be omitted"),
+        ("timer", None, "immediate or bus"),
+        ("external", None, "trigger source"),
+    ],
+)
+def test_list_sweep_rejects_invalid_trigger_and_dwell_combinations(
+    trigger_source, dwell_s, message
+) -> None:
+    with pytest.raises(WaveformParameterError, match=message):
+        dry_run_sine_list_sweep(
+            "keysight-33521b",
+            [1000],
+            0.1,
+            dwell_s=dwell_s,
+            trigger_source=trigger_source,
+        )
 
 
 @pytest.mark.parametrize(
@@ -2675,7 +2729,7 @@ def test_sine_list_sweep_rejects_out_of_range_dwell(dwell) -> None:
 )
 def test_ramp_and_triangle_list_sweep_reject_above_200_khz(dry_run) -> None:
     with pytest.raises(WaveformParameterError, match="200000 Hz"):
-        dry_run("keysight-33521b", [1000, 200001], 1, 0.1)
+        dry_run("keysight-33521b", [1000, 200001], 0.1, dwell_s=1)
 
 
 @pytest.mark.parametrize(
@@ -2684,7 +2738,7 @@ def test_ramp_and_triangle_list_sweep_reject_above_200_khz(dry_run) -> None:
 )
 def test_sine_and_square_list_sweep_respect_model_frequency_limit(dry_run) -> None:
     with pytest.raises(WaveformParameterError, match="20000000 Hz"):
-        dry_run("keysight-33512b", [1000, 20000001], 1, 0.1)
+        dry_run("keysight-33512b", [1000, 20000001], 0.1, dwell_s=1)
 
 
 def test_square_list_sweep_validates_duty_at_maximum_frequency() -> None:
@@ -2692,23 +2746,28 @@ def test_square_list_sweep_validates_duty_at_maximum_frequency() -> None:
         dry_run_square_list_sweep(
             "keysight-33521b",
             [1000, 30000000],
-            1,
             0.1,
             duty_cycle_percent=25,
+            dwell_s=1,
         )
 
 
 def test_list_sweep_channel_two_plan_and_single_channel_rejection() -> None:
     preview = dry_run_square_list_sweep(
-        "keysight-33512b", [1000, 3000], 0.005, 0.1, channel=2
+        "keysight-33512b",
+        [1000, 3000],
+        0.1,
+        trigger_source="bus",
+        channel=2,
     )
 
-    assert preview.commands[-4:] == (
+    assert preview.commands[-3:] == (
         "SOURce2:LIST:FREQuency 1000,3000",
-        "SOURce2:LIST:DWELl 0.005",
-        "TRIGger2:SOURce IMMediate",
+        "TRIGger2:SOURce BUS",
         "SOURce2:FREQuency:MODE LIST",
     )
+    assert preview.trigger_source == "bus"
+    assert preview.dwell_s is None
     assert "SOURce2:FREQuency:MODE CW" in preview.commands
     assert "UNIT:ANGLe DEGree" in preview.commands
     assert all(
@@ -2717,7 +2776,7 @@ def test_list_sweep_channel_two_plan_and_single_channel_rejection() -> None:
     )
     with pytest.raises(WaveformParameterError, match="Channel 2"):
         dry_run_sine_list_sweep(
-            "keysight-33521b", [1000], 1, 0.1, channel=2
+            "keysight-33521b", [1000], 0.1, dwell_s=1, channel=2
         )
 
 
@@ -2732,8 +2791,8 @@ def test_two_channel_list_sweep_guard_fails_before_writes() -> None:
         configure_triangle_list_sweep(
             USB_RESOURCE,
             [1000, 3000],
-            0.005,
             0.1,
+            dwell_s=0.005,
             channel=2,
             resource_manager_factory=RecordingFactory(manager),
         )

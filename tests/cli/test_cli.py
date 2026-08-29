@@ -3325,6 +3325,7 @@ def test_frequency_list_sweep_cli_dry_run_commands(
     assert payload["action"] == command
     assert payload["frequencies_hz"] == [7000.0, 1000.0, 7000.0]
     assert payload["dwell_s"] == 0.005
+    assert payload["trigger_source"] == "immediate"
     assert payload["output_state"] == "off"
     assert carrier_command in payload["commands"]
     assert payload["commands"][-2:] == [
@@ -3333,6 +3334,85 @@ def test_frequency_list_sweep_cli_dry_run_commands(
     ]
     if specific_field is not None:
         assert payload[specific_field] == specific_value
+
+
+def test_frequency_list_sweep_cli_bus_without_dwell(capsys) -> None:
+    exit_code = main(
+        [
+            "configure-sine-list-sweep",
+            "--dry-run",
+            "--frequencies-hz",
+            "1000,3000,7000",
+            "--amplitude-vpp",
+            "0.1",
+            "--trigger-source",
+            "bus",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["trigger_source"] == "bus"
+    assert payload["dwell_s"] is None
+    assert payload["commands"][-3:] == [
+        "SOURce1:LIST:FREQuency 1000,3000,7000",
+        "TRIGger1:SOURce BUS",
+        "SOURce1:FREQuency:MODE LIST",
+    ]
+    assert all("LIST:DWELl" not in command for command in payload["commands"])
+
+
+@pytest.mark.parametrize(
+    "trigger_options",
+    [
+        [],
+        ["--trigger-source", "bus", "--dwell-s", "0.5"],
+    ],
+)
+def test_frequency_list_sweep_cli_enforces_trigger_dwell_contract(
+    capsys,
+    trigger_options,
+) -> None:
+    exit_code = main(
+        [
+            "configure-sine-list-sweep",
+            "--dry-run",
+            "--frequencies-hz",
+            "1000,3000,7000",
+            "--amplitude-vpp",
+            "0.1",
+            "--json",
+            *trigger_options,
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+    assert "dwell" in payload["error"]
+
+
+def test_frequency_list_sweep_cli_rejects_timer_trigger(capsys) -> None:
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                "configure-sine-list-sweep",
+                "--dry-run",
+                "--frequencies-hz",
+                "1000,3000,7000",
+                "--amplitude-vpp",
+                "0.1",
+                "--trigger-source",
+                "timer",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert "invalid choice" in captured.err
+    assert "timer" in captured.err
+    assert captured.out == ""
 
 
 @pytest.mark.parametrize("frequencies", ["", "1000,,3000", "1000,nope"])

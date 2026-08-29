@@ -587,8 +587,17 @@ def _add_list_sweep_arguments(
     )
     parser.add_argument(
         "--dwell-s",
-        required=True,
-        help="Shared List Sweep dwell in seconds (range: 0.000001-1000).",
+        default=None,
+        help=(
+            "Shared List Sweep dwell in seconds; required for Immediate and "
+            "omitted for Bus (range: 0.000001-1000)."
+        ),
+    )
+    parser.add_argument(
+        "--trigger-source",
+        choices=("immediate", "bus"),
+        default="immediate",
+        help="List Sweep trigger source (default: immediate).",
     )
     _add_voltage_input_arguments(
         parser,
@@ -2543,11 +2552,12 @@ def _run_configure_sine_list_sweep(args: argparse.Namespace) -> int:
             lambda amplitude, offset: dry_run_sine_list_sweep(
                 args.model,
                 args.frequencies_hz,
-                args.dwell_s,
                 amplitude,
                 offset,
                 args.load,
                 args.phase_deg,
+                dwell_s=args.dwell_s,
+                trigger_source=args.trigger_source,
                 channel=args.channel,
             ),
         )
@@ -2560,12 +2570,13 @@ def _run_configure_sine_list_sweep(args: argparse.Namespace) -> int:
         lambda amplitude, offset: configure_sine_list_sweep(
             resource,
             args.frequencies_hz,
-            args.dwell_s,
             amplitude,
             offset,
             args.load,
             args.backend,
             args.phase_deg,
+            dwell_s=args.dwell_s,
+            trigger_source=args.trigger_source,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2581,12 +2592,13 @@ def _run_configure_square_list_sweep(args: argparse.Namespace) -> int:
             lambda amplitude, offset: dry_run_square_list_sweep(
                 args.model,
                 args.frequencies_hz,
-                args.dwell_s,
                 amplitude,
                 offset,
                 args.load,
                 args.phase_deg,
                 args.duty_cycle_percent,
+                dwell_s=args.dwell_s,
+                trigger_source=args.trigger_source,
                 channel=args.channel,
             ),
         )
@@ -2599,13 +2611,14 @@ def _run_configure_square_list_sweep(args: argparse.Namespace) -> int:
         lambda amplitude, offset: configure_square_list_sweep(
             resource,
             args.frequencies_hz,
-            args.dwell_s,
             amplitude,
             offset,
             args.load,
             args.backend,
             args.phase_deg,
             args.duty_cycle_percent,
+            dwell_s=args.dwell_s,
+            trigger_source=args.trigger_source,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2621,12 +2634,13 @@ def _run_configure_ramp_list_sweep(args: argparse.Namespace) -> int:
             lambda amplitude, offset: dry_run_ramp_list_sweep(
                 args.model,
                 args.frequencies_hz,
-                args.dwell_s,
                 amplitude,
                 offset,
                 args.load,
                 args.phase_deg,
                 args.symmetry_percent,
+                dwell_s=args.dwell_s,
+                trigger_source=args.trigger_source,
                 channel=args.channel,
             ),
         )
@@ -2639,13 +2653,14 @@ def _run_configure_ramp_list_sweep(args: argparse.Namespace) -> int:
         lambda amplitude, offset: configure_ramp_list_sweep(
             resource,
             args.frequencies_hz,
-            args.dwell_s,
             amplitude,
             offset,
             args.load,
             args.backend,
             args.phase_deg,
             args.symmetry_percent,
+            dwell_s=args.dwell_s,
+            trigger_source=args.trigger_source,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -2661,11 +2676,12 @@ def _run_configure_triangle_list_sweep(args: argparse.Namespace) -> int:
             lambda amplitude, offset: dry_run_triangle_list_sweep(
                 args.model,
                 args.frequencies_hz,
-                args.dwell_s,
                 amplitude,
                 offset,
                 args.load,
                 args.phase_deg,
+                dwell_s=args.dwell_s,
+                trigger_source=args.trigger_source,
                 channel=args.channel,
             ),
         )
@@ -2678,12 +2694,13 @@ def _run_configure_triangle_list_sweep(args: argparse.Namespace) -> int:
         lambda amplitude, offset: configure_triangle_list_sweep(
             resource,
             args.frequencies_hz,
-            args.dwell_s,
             amplitude,
             offset,
             args.load,
             args.backend,
             args.phase_deg,
+            dwell_s=args.dwell_s,
+            trigger_source=args.trigger_source,
             channel=args.channel,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
@@ -3748,6 +3765,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         payload.update(
             frequencies_hz=list(result.frequencies_hz),
             dwell_s=result.dwell_s,
+            trigger_source=result.trigger_source,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
             phase_deg=result.phase_deg,
@@ -4078,6 +4096,7 @@ def _list_sweep_dry_run_success_payload(
         "channel": result.channel,
         "frequencies_hz": list(result.frequencies_hz),
         "dwell_s": result.dwell_s,
+        "trigger_source": result.trigger_source,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4781,7 +4800,13 @@ def _human_control_success(action: str, result: Any) -> str:
             (
                 "Frequencies (Hz): "
                 + ",".join(str(value) for value in result.frequencies_hz),
-                f"Dwell (seconds): {result.dwell_s}",
+                f"Trigger source: {result.trigger_source}",
+            )
+        )
+        if result.dwell_s is not None:
+            lines.append(f"Dwell (seconds): {result.dwell_s}")
+        lines.extend(
+            (
                 f"Amplitude (Vpp): {result.amplitude_vpp}",
                 f"Offset (V): {result.offset_v}",
                 f"Load: {result.load}",
@@ -4972,12 +4997,18 @@ def _human_list_sweep_dry_run_success(result: Any, waveform: str) -> str:
         f"Canonical model ID: {result.canonical_model_id}",
         "Executed: no",
         "Frequencies (Hz): " + ",".join(str(value) for value in result.frequencies_hz),
-        f"Dwell (seconds): {result.dwell_s}",
-        f"Amplitude (Vpp): {result.amplitude_vpp}",
-        f"Offset (V): {result.offset_v}",
-        f"Phase (degrees): {result.phase_deg}",
-        f"Load: {result.load}",
+        f"Trigger source: {result.trigger_source}",
     ]
+    if result.dwell_s is not None:
+        lines.append(f"Dwell (seconds): {result.dwell_s}")
+    lines.extend(
+        (
+            f"Amplitude (Vpp): {result.amplitude_vpp}",
+            f"Offset (V): {result.offset_v}",
+            f"Phase (degrees): {result.phase_deg}",
+            f"Load: {result.load}",
+        )
+    )
     if hasattr(result, "duty_cycle_percent"):
         lines.append(f"Duty cycle (percent): {result.duty_cycle_percent}")
     elif hasattr(result, "symmetry_percent"):

@@ -759,8 +759,8 @@ def test_simulator_stores_frequency_list_mode_and_dwell() -> None:
     result = configure_sine_list_sweep(
         factory.resource_name,
         [7000, 1000, 7000],
-        0.005,
         0.1,
+        dwell_s=0.005,
         resource_manager_factory=factory,
     )
 
@@ -779,17 +779,17 @@ def test_simulator_reconfigures_sine_list_to_square_list() -> None:
     configure_sine_list_sweep(
         factory.resource_name,
         [1000, 2000],
-        0.005,
         0.1,
         phase_deg=90,
+        dwell_s=0.005,
         resource_manager_factory=factory,
     )
     configure_square_list_sweep(
         factory.resource_name,
         [3000, 4000],
-        0.01,
         0.2,
         phase_deg=45,
+        dwell_s=0.01,
         resource_manager_factory=factory,
     )
 
@@ -810,8 +810,8 @@ def test_two_channel_simulator_list_isolation_and_static_cw_recovery() -> None:
     configure_square_list_sweep(
         factory.resource_name,
         [1000, 3000],
-        0.005,
         0.1,
+        dwell_s=0.005,
         channel=2,
         resource_manager_factory=factory,
     )
@@ -834,6 +834,28 @@ def test_two_channel_simulator_list_isolation_and_static_cw_recovery() -> None:
     assert state.ch1.frequency_mode == "CW"
     assert state.ch1.list_frequencies_hz == (99.0,)
     assert state.ch2.frequency_mode == "CW"
+
+
+def test_two_channel_simulator_stores_selected_bus_list_trigger_source() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_sine_list_sweep(
+        factory.resource_name,
+        [1000, 3000, 7000],
+        0.1,
+        trigger_source="bus",
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert result.trigger_source == "bus"
+    assert result.dwell_s is None
+    assert state.ch1.trigger_source == "immediate"
+    assert state.ch2.frequency_mode == "LIST"
+    assert state.ch2.list_frequencies_hz == (1000.0, 3000.0, 7000.0)
+    assert state.ch2.trigger_source == "bus"
+    assert state.ch2.output_enabled is False
 
 
 def test_two_channel_simulator_am_state_is_isolated_and_static_config_recovers() -> None:

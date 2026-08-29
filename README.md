@@ -10,7 +10,7 @@ Internal Sine Sum for supported static carriers,
 Immediate-, Bus-, Timer-, and External-triggered Counted Burst plus Gated Burst
 for supported static carriers,
 explicit output control, and sine, square, ramp, and triangle linear/logarithmic
-frequency sweeps and Immediate-triggered frequency List Sweeps for
+frequency sweeps and Immediate- and Bus-triggered frequency List Sweeps for
 Keysight or Agilent 33512B and 33521B instruments.
 
 ## Current Scope
@@ -39,7 +39,7 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Selected-channel sine, square, ramp, and triangle linear and logarithmic
   frequency sweep configuration with Immediate, Bus, or Timer trigger
 - Selected-channel sine, square, ramp, and triangle frequency List Sweep
-  configuration with a shared dwell and Immediate trigger
+  configuration with Immediate or Bus trigger
 - One-shot instrument-wide IEEE-488.2 Bus Trigger
 - Phase offset control for sine, square, ramp, triangle, and pulse in degrees
 - Basic DC voltage, noise, and PRBS configuration
@@ -364,7 +364,8 @@ all eight basic waveform configuration commands, the sine, square, ramp, and
 triangle sweep and List Sweep commands, and explicit output control.
 Two-channel model
 profiles retain independent Channel 1 and Channel 2 state, including sweep
-trigger source/timer/slope and Internal AM/FM/PM/FSK/BPSK/PWM/Sum, Counted
+and List Sweep trigger source, sweep timer/slope, and Internal
+AM/FM/PM/FSK/BPSK/PWM/Sum, Counted
 Burst, and Gated Burst state; normal waveform
 configuration restores CW mode and disables AM, FM, PM, FSK, BPSK, PWM, Sum,
 and Burst only on the selected channel. The
@@ -859,11 +860,11 @@ The Direct CLI supports Frequency List Sweep for Sine, Square, Ramp, and
 Triangle with `configure-sine-list-sweep`, `configure-square-list-sweep`,
 `configure-ramp-list-sweep`, and `configure-triangle-list-sweep`. Provide 1 to
 128 frequencies as one comma-separated `--frequencies-hz` value. Input order is
-preserved and duplicate frequencies are allowed. One shared `--dwell-s` value
-from 0.000001 through 1000 seconds controls how long Immediate trigger remains
-at each frequency.
+preserved and duplicate frequencies are allowed. The trigger source defaults
+to Immediate and may be changed with `--trigger-source bus`.
 
-Preview a Sine List Sweep without VISA I/O:
+For Immediate trigger, provide one shared `--dwell-s` value from 0.000001
+through 1000 seconds. The List advances automatically according to that dwell:
 
 ```powershell
 uv run wavegen-tool configure-sine-list-sweep `
@@ -871,17 +872,35 @@ uv run wavegen-tool configure-sine-list-sweep `
   --model keysight-33521b `
   --frequencies-hz "1000, 3000, 7000" `
   --dwell-s 0.005 `
+  --trigger-source immediate `
   --amplitude-vpp 0.1 `
   --offset-v 0 `
   --phase-deg 0 `
   --load 50
 ```
 
-List Sweep uses Immediate trigger only, configures all parameters before
-enabling List mode, and leaves the selected output off. Pulse, PRBS, Arbitrary,
-External, Bus, Timer, and Manual-triggered List Sweep, per-point dwell, list
-files, instrument list load/store, and markers are outside the current scope.
-Worker and WebUI do not expose List Sweep.
+For Bus trigger, omit `--dwell-s`. Each instrument-wide Bus trigger advances
+the List. Use the existing `wavegen-tool trigger` command to send one `*TRG`:
+
+```powershell
+uv run wavegen-tool configure-sine-list-sweep `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  --frequencies-hz "1000, 3000, 7000" `
+  --trigger-source bus `
+  --amplitude-vpp 0.1 `
+  --offset-v 0 `
+  --phase-deg 0 `
+  --load 50
+
+uv run wavegen-tool trigger `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE"
+```
+
+List Sweep configures all parameters before enabling List mode and leaves the
+selected output off. Configuration does not send a Bus trigger. Pulse, PRBS,
+Arbitrary, External, Timer, and Manual-triggered List Sweep, per-point dwell,
+list files, instrument list load/store, and markers are outside the current
+scope. Worker and WebUI do not expose List Sweep.
 
 ## Configure a Channel 1 Square Wave
 
