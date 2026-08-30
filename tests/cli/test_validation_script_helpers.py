@@ -328,6 +328,58 @@ def test_shareable_json_retains_numeric_array_values(artifact_root: Path) -> Non
     assert report["channels"] == [1, 2]
 
 
+def test_extra_detected_serial_is_removed_from_tcpip_shareable_artifacts(
+    artifact_root: Path,
+) -> None:
+    private_root = artifact_root / "private"
+    shareable_root = artifact_root / "shareable"
+    identity_root = private_root / "identity"
+    identity_root.mkdir(parents=True)
+    shareable_root.mkdir()
+    resource = "TCPIP0::synthetic-host.invalid::inst0::INSTR"
+    serial = "SYNTH_SERIAL_987654"
+    firmware = "9.99"
+    private_payload = {
+        "detected_identity": {
+            "serial": serial,
+            "firmware": firmware,
+        }
+    }
+    (identity_root / "stdout.json").write_text(
+        json.dumps(private_payload), encoding="utf-8"
+    )
+    (identity_root / "diagnostic.txt").write_text(
+        f"serial={serial}\nfirmware={firmware}\n", encoding="utf-8"
+    )
+    summary_path = private_root / "summary.md"
+    summary_path.write_text(
+        f"Serial: {serial}\nFirmware: {firmware}\n", encoding="utf-8"
+    )
+    report_literal = json.dumps(private_payload).replace("'", "''")
+    script = (
+        _dot_source(HELPERS_PATH, PRIVACY_PATH)
+        + f"$report = '{report_literal}' | ConvertFrom-Json; "
+        + "$null = New-ShareableArtifactSet -PrivateReport $report "
+        + f"-PrivateSummaryPath {_ps_quote(summary_path)} "
+        + f"-RunRoot {_ps_quote(artifact_root)} "
+        + f"-PrivateRoot {_ps_quote(private_root)} "
+        + f"-ShareableRoot {_ps_quote(shareable_root)} "
+        + f"-RepoRoot {_ps_quote(REPO_ROOT)} "
+        + f"-Resource {_ps_quote(resource)} "
+        + f"-ExtraSensitiveValues @({_ps_quote(serial)})"
+    )
+
+    _run_powershell(script)
+
+    shareable_text = "\n".join(
+        path.read_text(encoding="utf-8", errors="replace")
+        for path in shareable_root.rglob("*")
+        if path.is_file()
+    )
+    assert serial not in shareable_text
+    assert firmware in shareable_text
+
+
 def test_malformed_json_does_not_raw_copy_to_shareable(artifact_root: Path) -> None:
     private_root = artifact_root / "private"
     shareable_root = artifact_root / "shareable"

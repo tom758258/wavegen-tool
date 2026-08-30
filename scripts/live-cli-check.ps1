@@ -172,7 +172,8 @@ function Publish-LiveArtifacts {
         [Parameter(Mandatory = $true)]$Report,
         [Parameter(Mandatory = $true)]$Run,
         [Parameter(Mandatory = $true)][string]$PrivateReportPath,
-        [Parameter(Mandatory = $true)][string]$PrivateSummaryPath
+        [Parameter(Mandatory = $true)][string]$PrivateSummaryPath,
+        [AllowEmptyCollection()][string[]]$ExtraSensitiveValues = @()
     )
 
     Write-JsonReport -LiteralPath $PrivateReportPath -Report $Report
@@ -185,7 +186,8 @@ function Publish-LiveArtifacts {
             -PrivateRoot $Run.Private `
             -ShareableRoot $Run.Shareable `
             -RepoRoot $repoRoot `
-            -Resource $Resource
+            -Resource $Resource `
+            -ExtraSensitiveValues $ExtraSensitiveValues
         return $true
     } catch {
         $Report.status = "FAIL"
@@ -452,7 +454,12 @@ Write-Host "Resource: $Resource"
 Write-Host "Sine: 1000 Hz, 0.1 Vpp, 0 V offset, 0 deg phase, 50 ohm load"
 Write-Host "Output ON will not be used; every exercised channel will remain OFF."
 Write-Host ""
-$confirmation = Read-Host "Type YES to begin Live validation"
+$confirmation = $null
+if ([Console]::IsInputRedirected) {
+    Write-Host "Live validation requires interactive confirmation; redirected stdin is rejected."
+} else {
+    $confirmation = Read-Host "Type YES to begin Live validation"
+}
 if ($confirmation -cne "YES") {
     $report.status = "CANCELLED"
     $report.cases = @($cases)
@@ -484,6 +491,7 @@ $liveCommon = @(
 )
 $identityPassed = $false
 $stopChannels = $false
+$detectedSensitiveValues = @()
 
 $identityReasons = [System.Collections.ArrayList]::new()
 $identityInvocation = $null
@@ -518,6 +526,9 @@ if ($identityReasons.Count -eq 0) {
         serial = $identityInvocation.Payload.serial
         firmware = $identityInvocation.Payload.firmware
     }) -Force
+    if (-not [string]::IsNullOrWhiteSpace([string]$identityInvocation.Payload.serial)) {
+        $detectedSensitiveValues = @([string]$identityInvocation.Payload.serial)
+    }
 } else {
     Add-LiveCase `
         -Cases $cases `
@@ -765,7 +776,8 @@ $published = Publish-LiveArtifacts `
     -Report $report `
     -Run $run `
     -PrivateReportPath $privateReportPath `
-    -PrivateSummaryPath $privateSummaryPath
+    -PrivateSummaryPath $privateSummaryPath `
+    -ExtraSensitiveValues $detectedSensitiveValues
 if (-not $published) {
     $report.status = "FAIL"
 }

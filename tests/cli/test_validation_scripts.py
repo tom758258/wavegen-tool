@@ -32,6 +32,7 @@ def _run_script(
     artifact_root: Path,
     *arguments: str,
     python: str | Path = sys.executable,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     if POWERSHELL is None:
         pytest.skip("Windows PowerShell is unavailable")
@@ -55,6 +56,7 @@ def _run_script(
         text=True,
         encoding="utf-8",
         errors="replace",
+        input=stdin,
         check=False,
     )
 
@@ -201,6 +203,33 @@ def test_live_plan_only_is_hardware_free_and_capability_driven(
     assert shareable["promotes_live_support"] is False
 
 
+def test_live_redirected_stdin_cannot_authorize_hardware(
+    artifact_root: Path,
+) -> None:
+    result = _run_script(
+        LIVE_SCRIPT,
+        artifact_root,
+        "-Target",
+        "keysight-33512b",
+        "-Connection",
+        "usb",
+        "-Resource",
+        USB_RESOURCE,
+        stdin="YES\n",
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "redirected stdin is rejected" in result.stdout
+    run_root = _only_run(artifact_root)
+    report = _read_report(run_root)
+    assert report["status"] == "CANCELLED"
+    assert report["hardware_touched"] is False
+    assert report["visa_io_performed"] is False
+    assert (run_root / "private" / "report.json").is_file()
+    assert (run_root / "shareable" / "report.json").is_file()
+    assert not (run_root / "private" / "identity").exists()
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected_error"),
     [
@@ -224,6 +253,18 @@ def test_live_plan_only_is_hardware_free_and_capability_driven(
                 "usb",
                 "-Resource",
                 "TCPIP0::synthetic.invalid::inst0::INSTR",
+                "-PlanOnly",
+            ],
+            "does not match",
+        ),
+        (
+            [
+                "-Target",
+                "keysight-33512b",
+                "-Connection",
+                "tcpip",
+                "-Resource",
+                USB_RESOURCE,
                 "-PlanOnly",
             ],
             "does not match",
