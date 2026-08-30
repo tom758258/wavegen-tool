@@ -526,6 +526,60 @@ def test_worker_shared_simulator_state_persists_across_commands():
         assert runtime.wait(timeout=2.0)
 
 
+def test_worker_33512b_channel_two_output_and_status_are_independent():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        requests = [
+            (
+                "configure-square",
+                {"frequency_hz": 2000, "amplitude_vpp": 0.2, "channel": 2},
+            ),
+            (
+                "output",
+                {"enabled": True, "confirm_output": True, "channel": 2},
+            ),
+            ("status", {"channel": 2}),
+        ]
+        results: list[dict[str, object]] = []
+        for index, (command, arguments) in enumerate(requests):
+            code, accepted = _request(
+                runtime,
+                "POST",
+                "/command",
+                _payload(
+                    command,
+                    arguments,
+                    job_id=f"channel-two-{index}",
+                    model_id="keysight-33512b",
+                ),
+            )
+            assert code == 202
+            completed = _wait_for_job(
+                runtime, accepted["worker_job_id"], "succeeded"
+            )
+            results.append(completed["result"])
+            assert runtime.simulator_state is not None
+            assert runtime.simulator_state.model_id == "keysight-33512b"
+
+        configuration, output, status = results
+        assert configuration["channel"] == 2
+        assert output["channel"] == 2
+        assert output["output_state"] == "on"
+        assert status["channel"] == 2
+        assert status["function"] == "SQUARE"
+        assert status["output_state"] == "on"
+
+        assert runtime.simulator_state is not None
+        assert runtime.simulator_state.ch1.active_function == "SIN"
+        assert runtime.simulator_state.ch1.output_enabled is False
+        assert runtime.simulator_state.ch2.active_function == "SQUARE"
+        assert runtime.simulator_state.ch2.output_enabled is True
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
 @pytest.mark.parametrize(
     ("model_id", "channel"),
     [
@@ -707,6 +761,52 @@ def test_worker_live_expected_model_is_only_a_mismatch_guard(monkeypatch):
     with pytest.raises(WavegenError):
         runtime._execute_command(mismatching)
     assert state.frequency_hz == 2000
+
+
+def test_worker_live_matching_33510_guard_does_not_bypass_product_policy(
+    monkeypatch,
+):
+    state = Simulated33521BState(model_id="keysight-33510b")
+    runtime = WorkerRuntime(
+        WorkerConfig(
+            mode="live",
+            resource=state.resource_name,
+            backend="system",
+            control_port=0,
+            allow_output_writes=True,
+        )
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_factory_kwargs",
+        lambda: {
+            "resource_manager_factory": lambda _library: SimulatedResourceManager(
+                state
+            )
+        },
+    )
+    runtime.start()
+    try:
+        code, accepted = _request(
+            runtime,
+            "POST",
+            "/command",
+            _payload(
+                "configure-sine",
+                _sine_arguments(),
+                mode="live",
+                expected_model_id="keysight-33510b",
+            ),
+        )
+        assert code == 202
+        failed = _wait_for_job(runtime, accepted["worker_job_id"], "failed")
+        assert failed["context"]["expected_model_id"] == "keysight-33510b"
+        assert failed["error"]["code"] == "unsupported_instrument"
+        assert failed["error"]["identity"]["model"] == "33510B"
+        assert failed["error"]["identity"]["model_supported"] is False
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
 
 
 @pytest.mark.parametrize(
