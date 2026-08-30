@@ -184,12 +184,41 @@ def test_live_plan_only_is_hardware_free_and_capability_driven(
     assert report["channels_planned"] == expected_channels
     assert report["channels_tested"] == []
     assert "detected_model" not in report
+    assert "Wavegen Tool Live CLI Validation" in result.stdout
+    assert f"Target: {model_id}" in result.stdout
+    assert "Connection: usb" in result.stdout
+    assert "Backend: system" in result.stdout
+    assert "Resource: <redacted-resource>" in result.stdout
+    assert f"Channels: {', '.join(map(str, expected_channels))}" in result.stdout
+    assert "Validation cases:" in result.stdout
+    assert "identity" in result.stdout
+    assert "baseline-error-drain" in result.stdout
+    assert "Representative waveform:" in result.stdout
+    assert "Frequency: 1000 Hz" in result.stdout
+    assert "Amplitude: 0.1 Vpp" in result.stdout
+    assert "Offset: 0 V" in result.stdout
+    assert "Phase: 0 deg" in result.stdout
+    assert "Load: 50 ohm" in result.stdout
+    assert "Output ON will not be used" in result.stdout
+    assert "No reset, preset or recall is performed" in result.stdout
+    assert "Coupling or tracking is not changed automatically" in result.stdout
+    assert "hardware_touched=false" in result.stdout
+    assert "visa_io_performed=false" in result.stdout
+    assert "Result: PLANNED" in result.stdout
+    assert "Private artifacts:" in result.stdout
+    assert "Shareable report:" in result.stdout
+    assert "Shareable summary:" in result.stdout
     for channel in expected_channels:
         assert f"ch{channel}/sine-config" in report["planned_cases"]
+        assert f"ch{channel}/sine-config" in result.stdout
+        assert f"ch{channel}/sine-readback" in result.stdout
     if unexpected_case is not None:
         assert unexpected_case not in report["planned_cases"]
     shareable_root = run_root / "shareable"
     assert (shareable_root / "report.json").is_file()
+    assert str(run_root / "private") in result.stdout
+    assert str(shareable_root / "report.json") in result.stdout
+    assert str(shareable_root / "summary.md") in result.stdout
     shareable_text = "\n".join(
         path.read_text(encoding="utf-8", errors="replace")
         for path in shareable_root.rglob("*")
@@ -220,6 +249,24 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
 
     assert result.returncode == 2, result.stdout + result.stderr
     assert "redirected stdin is rejected" in result.stdout
+    assert "Wavegen Tool Live CLI Validation" in result.stdout
+    assert "Target: keysight-33512b" in result.stdout
+    assert "Connection: usb" in result.stdout
+    assert "Backend: system" in result.stdout
+    assert "Resource: <redacted-resource>" in result.stdout
+    assert "Channels: 1, 2" in result.stdout
+    assert "Validation cases:" in result.stdout
+    assert "ch1/sine-config" in result.stdout
+    assert "ch2/sine-readback" in result.stdout
+    assert "Frequency: 1000 Hz" in result.stdout
+    assert "Amplitude: 0.1 Vpp" in result.stdout
+    assert "Output ON will not be used" in result.stdout
+    assert "No reset, preset or recall is performed" in result.stdout
+    assert "Coupling or tracking is not changed automatically" in result.stdout
+    assert "Result: CANCELLED" in result.stdout
+    assert "Private artifacts:" in result.stdout
+    assert "Shareable report:" in result.stdout
+    assert "Shareable summary:" in result.stdout
     run_root = _only_run(artifact_root)
     report = _read_report(run_root)
     assert report["status"] == "CANCELLED"
@@ -227,7 +274,14 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
     assert report["visa_io_performed"] is False
     assert (run_root / "private" / "report.json").is_file()
     assert (run_root / "shareable" / "report.json").is_file()
+    assert str(run_root / "private") in result.stdout
+    assert str(run_root / "shareable" / "report.json") in result.stdout
+    assert str(run_root / "shareable" / "summary.md") in result.stdout
     assert not (run_root / "private" / "identity").exists()
+
+    script_text = LIVE_SCRIPT.read_text(encoding="utf-8")
+    assert 'Read-Host "Type YES to begin Live validation, or Ctrl+C to cancel"' in script_text
+    assert '$confirmation -cne "YES"' in script_text
 
 
 @pytest.mark.parametrize(

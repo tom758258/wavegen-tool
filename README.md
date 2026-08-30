@@ -360,13 +360,31 @@ reserved WebUI import packages.
 
 ## CLI Validation Scripts
 
-Run the hardware-free preflight for every registered validation target:
+| Script / mode | Hardware use | Purpose |
+| --- | --- | --- |
+| `preflight-cli.ps1` | No hardware | Validate registered targets through Core capabilities, dry-run, and simulator paths. |
+| `live-cli-check.ps1 -PlanOnly` | No hardware | Generate and validate the intended Live CLI plan without opening VISA. |
+| `live-cli-check.ps1` | Explicit real hardware | Run operator-confirmed representative Live validation for one exact target, connection, backend, and VISA resource. |
+
+The preflight accepts `-Target all` or one canonical target:
+`keysight-33510b`, `keysight-33512b`, or `keysight-33521b`. It does not need a
+VISA resource and never opens hardware.
 
 ```powershell
 .\scripts\preflight-cli.ps1 -Target all
 ```
 
-Review a Live plan without opening VISA or touching hardware:
+The Live runner accepts `-Target`, `-Connection`, `-Resource`, `-Backend`,
+`-PlanOnly`, `-Python`, and `-OutputRoot`. Live use requires one exact target;
+`-Target all` is rejected. The operator must provide the resource explicitly.
+The script does not scan, guess, or auto-select resources, and the selected
+connection must match the resource transport. Backend support policy remains
+owned by Core.
+
+Use `-PlanOnly` to review the intended run without opening VISA, touching
+hardware, or sending Live SCPI. An explicit resource is still required so the
+plan represents the intended connection. PlanOnly produces the same private
+and sanitized shareable artifact layout as other validation-script runs.
 
 ```powershell
 .\scripts\live-cli-check.ps1 `
@@ -376,10 +394,22 @@ Review a Live plan without opening VISA or touching hardware:
   -PlanOnly
 ```
 
-Remove `-PlanOnly` to run the representative Live check. The resource is always
-explicit, channels come from Core capabilities, and every exercised output
-remains off. Each run creates private and sanitized shareable artifacts under
-`.tmp_tests`; a validation PASS does not promote Product Live support.
+Recommended sequence:
+
+1. Run the hardware-free preflight.
+2. Run the intended target with `-PlanOnly`.
+3. Review the displayed channels, cases, waveform, and safety plan.
+4. For future real-hardware validation, remove `-PlanOnly` and complete the
+   interactive confirmation.
+
+Channels always come from Core capabilities, and every exercised output remains
+off. Real Live validation never scans for a resource and requires exact
+uppercase `YES` from an interactive terminal before hardware access. Each run
+creates private and sanitized shareable artifacts under `.tmp_tests`.
+
+A successful validation run proves only the exact model, connection, backend,
+and validation scope exercised by that run. Validation evidence does not
+automatically promote Product Live support.
 
 ## Stateful Simulator
 

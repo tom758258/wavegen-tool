@@ -137,6 +137,27 @@ function Get-PlannedLiveCases {
     return @($planned)
 }
 
+function Write-CompletionSummary {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("PLANNED", "PASS", "FAIL", "CANCELLED")]
+        [string]$Result,
+        [Parameter(Mandatory = $true)]$Run,
+        [bool]$ShareableAvailable = $true
+    )
+
+    Write-Host ""
+    Write-Host "Result: $Result"
+    Write-Host ""
+    Write-Host "Private artifacts:"
+    Write-Host "  $($Run.Private)"
+    Write-Host ""
+    Write-Host "Shareable report:"
+    Write-Host $(if ($ShareableAvailable) { "  $(Join-Path $Run.Shareable 'report.json')" } else { "  unavailable" })
+    Write-Host "Shareable summary:"
+    Write-Host $(if ($ShareableAvailable) { "  $(Join-Path $Run.Shareable 'summary.md')" } else { "  unavailable" })
+}
+
 function Write-PrivateSummary {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -337,13 +358,8 @@ try {
 if (@($cases | Where-Object { $_.name -eq "preflight" -and $_.status -eq "FAIL" }).Count -gt 0) {
     $report.cases = @($cases)
     $report.summary_counts = Get-SummaryCounts -Cases $cases
-    if (-not (Publish-LiveArtifacts -Report $report -Run $run -PrivateReportPath $privateReportPath -PrivateSummaryPath $privateSummaryPath)) {
-        Write-Host "Result: FAIL"
-    } else {
-        Write-Host "Result: FAIL"
-    }
-    Write-Host "Private artifacts: $($run.Private)"
-    Write-Host "Shareable artifacts: $($run.Shareable)"
+    $published = Publish-LiveArtifacts -Report $report -Run $run -PrivateReportPath $privateReportPath -PrivateSummaryPath $privateSummaryPath
+    Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $published
     exit 1
 }
 
@@ -401,14 +417,12 @@ if ($capabilityReasons.Count -eq 0) {
         -FailureReasons "Authoritative channel_count is unavailable."
     $report.cases = @($cases)
     $report.summary_counts = Get-SummaryCounts -Cases $cases
-    $null = Publish-LiveArtifacts `
+    $published = Publish-LiveArtifacts `
         -Report $report `
         -Run $run `
         -PrivateReportPath $privateReportPath `
         -PrivateSummaryPath $privateSummaryPath
-    Write-Host "Result: FAIL"
-    Write-Host "Private artifacts: $($run.Private)"
-    Write-Host "Shareable artifacts: $($run.Shareable)"
+    Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $published
     exit 1
 }
 
@@ -417,19 +431,48 @@ $plannedCases = @(Get-PlannedLiveCases -Channels $channels)
 $report.channel_count = $channelCount
 $report.channels_planned = $channels
 $report.planned_cases = $plannedCases
+$resourceDisplay = Protect-ArtifactText `
+    -Text $Resource `
+    -Resource $Resource `
+    -RepoRoot $repoRoot `
+    -PrivateRoot $run.Private
 
+Write-Host ""
+Write-Host "Wavegen Tool Live CLI Validation"
 Write-Host ""
 Write-Host "Target: $expectedModel"
 Write-Host "Connection: $connectionName"
 Write-Host "Backend: $backendName"
+Write-Host "Resource: $resourceDisplay"
 Write-Host "Channels: $($channels -join ', ')"
+Write-Host ""
+Write-Host "Validation cases:"
+foreach ($caseName in $plannedCases) {
+    Write-Host "  $caseName"
+}
+Write-Host ""
+Write-Host "Representative waveform:"
+Write-Host "  Function: Sine"
+Write-Host "  Frequency: 1000 Hz"
+Write-Host "  Amplitude: 0.1 Vpp"
+Write-Host "  Offset: 0 V"
+Write-Host "  Phase: 0 deg"
+Write-Host "  Load: 50 ohm"
+Write-Host ""
+Write-Host "Safety:"
+Write-Host "  - Output ON will not be used."
+Write-Host "  - Each exercised channel is forced OFF before configuration."
+Write-Host "  - Each exercised channel remains OFF after validation."
+Write-Host "  - No resource scanning or guessing is performed."
+Write-Host "  - No reset, preset or recall is performed."
+Write-Host "  - Coupling or tracking is not changed automatically."
 
 if ($PlanOnly) {
     Write-Host ""
-    Write-Host "Planned Live cases:"
-    foreach ($caseName in $plannedCases) {
-        Write-Host "  $caseName"
-    }
+    Write-Host "Plan-only status:"
+    Write-Host "  hardware_touched=false"
+    Write-Host "  visa_io_performed=false"
+    Write-Host "  No VISA session is opened and no Live SCPI is sent."
     $report.status = "PASS"
     $report.cases = @($cases)
     $report.summary_counts = Get-SummaryCounts -Cases $cases
@@ -439,26 +482,19 @@ if ($PlanOnly) {
         -PrivateReportPath $privateReportPath `
         -PrivateSummaryPath $privateSummaryPath
     if (-not $published) {
-        Write-Host "Result: FAIL"
-        Write-Host "Private artifacts: $($run.Private)"
+        Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $false
         exit 1
     }
-    Write-Host ""
-    Write-Host "Result: PASS (plan only; no hardware was validated)"
-    Write-Host "Private artifacts: $($run.Private)"
-    Write-Host "Shareable artifacts: $($run.Shareable)"
+    Write-CompletionSummary -Result PLANNED -Run $run
     exit 0
 }
 
-Write-Host "Resource: $Resource"
-Write-Host "Sine: 1000 Hz, 0.1 Vpp, 0 V offset, 0 deg phase, 50 ohm load"
-Write-Host "Output ON will not be used; every exercised channel will remain OFF."
 Write-Host ""
 $confirmation = $null
 if ([Console]::IsInputRedirected) {
     Write-Host "Live validation requires interactive confirmation; redirected stdin is rejected."
 } else {
-    $confirmation = Read-Host "Type YES to begin Live validation"
+    $confirmation = Read-Host "Type YES to begin Live validation, or Ctrl+C to cancel"
 }
 if ($confirmation -cne "YES") {
     $report.status = "CANCELLED"
@@ -470,13 +506,10 @@ if ($confirmation -cne "YES") {
         -PrivateReportPath $privateReportPath `
         -PrivateSummaryPath $privateSummaryPath
     if (-not $published) {
-        Write-Host "Result: FAIL"
-        Write-Host "Private artifacts: $($run.Private)"
+        Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $false
         exit 1
     }
-    Write-Host "Result: CANCELLED (no hardware was touched)"
-    Write-Host "Private artifacts: $($run.Private)"
-    Write-Host "Shareable artifacts: $($run.Shareable)"
+    Write-CompletionSummary -Result CANCELLED -Run $run
     exit 2
 }
 
@@ -782,10 +815,10 @@ if (-not $published) {
     $report.status = "FAIL"
 }
 
-Write-Host ""
-Write-Host "Result: $($report.status)"
-Write-Host "Private artifacts: $($run.Private)"
-Write-Host "Shareable artifacts: $($run.Shareable)"
+Write-CompletionSummary `
+    -Result $report.status `
+    -Run $run `
+    -ShareableAvailable $published
 if ($report.status -eq "PASS") {
     exit 0
 }
