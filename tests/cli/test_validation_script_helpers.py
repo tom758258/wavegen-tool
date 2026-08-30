@@ -304,6 +304,41 @@ def test_structured_json_is_sanitized_and_safe_metadata_is_retained(
     assert resource not in (shareable_root / "summary.md").read_text(encoding="utf-8")
 
 
+def test_malformed_json_does_not_raw_copy_to_shareable(artifact_root: Path) -> None:
+    private_root = artifact_root / "private"
+    shareable_root = artifact_root / "shareable"
+    private_root.mkdir()
+    shareable_root.mkdir()
+    sensitive_marker = "SYNTH_PRIVATE_SECRET_123456"
+    malformed = (
+        '{"resource":"USB0::0x0957::0x2C07::'
+        f'{sensitive_marker}::INSTR"'
+    )
+    broken_private_path = private_root / "broken.json"
+    broken_private_path.write_text(malformed, encoding="utf-8")
+    summary_path = private_root / "summary.md"
+    summary_path.write_text("Synthetic summary", encoding="utf-8")
+    script = (
+        _dot_source(HELPERS_PATH, PRIVACY_PATH)
+        + "$report = [ordered]@{ status = 'PASS' }; "
+        + "$null = New-ShareableArtifactSet -PrivateReport $report "
+        + f"-PrivateSummaryPath {_ps_quote(summary_path)} -RunRoot {_ps_quote(artifact_root)} "
+        + f"-PrivateRoot {_ps_quote(private_root)} -ShareableRoot {_ps_quote(shareable_root)} "
+        + f"-RepoRoot {_ps_quote(REPO_ROOT)}"
+    )
+    _run_powershell(script)
+
+    broken_shareable_path = shareable_root / "broken.json"
+    shareable_content = broken_shareable_path.read_text(encoding="utf-8")
+    placeholder = json.loads(shareable_content)
+    assert broken_private_path.exists()
+    assert placeholder["artifact_available"] is False
+    assert placeholder["parse_status"] == "failed"
+    assert placeholder["private_raw_artifact_retained"] is True
+    assert sensitive_marker not in shareable_content
+    assert shareable_content != malformed
+
+
 def test_unknown_artifact_is_not_copied_to_shareable(artifact_root: Path) -> None:
     private_root = artifact_root / "private"
     shareable_root = artifact_root / "shareable"
