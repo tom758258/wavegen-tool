@@ -239,6 +239,8 @@ def test_supported_command_matrix_preserves_envelope_and_adds_defaults(
     assert isinstance(result, ValidatedWorkerCommand)
     assert result.schema_version == 2
     assert result.command == command
+    if command not in {"identify", "read-errors"}:
+        expected_arguments = {**expected_arguments, "channel": 1}
     assert result.arguments == expected_arguments
     assert result.job_id == "job-1"
     assert result.context == {"mode": "live"}
@@ -562,9 +564,9 @@ def test_configure_sine_delegates_to_core_and_converts_parameter_errors(monkeypa
     real_dry_run_sine = worker_commands.dry_run_sine
     calls = []
 
-    def spy(*args):
-        calls.append(args)
-        return real_dry_run_sine(*args)
+    def spy(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_dry_run_sine(*args, **kwargs)
 
     monkeypatch.setattr(worker_commands, "dry_run_sine", spy)
 
@@ -572,17 +574,28 @@ def test_configure_sine_delegates_to_core_and_converts_parameter_errors(monkeypa
         _payload(
             "configure-sine",
             {**_sine_arguments(), "phase_deg": 90.0},
+            context={
+                "mode": "live",
+                "expected_model_id": "keysight-33521b",
+            },
         ),
         worker_mode="live",
         allow_output_writes=True,
     )
     assert isinstance(result, ValidatedWorkerCommand)
-    assert calls[0][0] == "keysight-33521b"
-    assert calls[0][1:] == (1000, 0.1, 0, "50", 90.0)
+    assert calls[0][0] == ("keysight-33521b", 1000, 0.1, 0, "50", 90.0)
+    assert calls[0][1] == {"channel": 1}
 
     with pytest.raises(WorkerRequestValidationError) as error:
         validate_worker_command_request(
-            _payload("configure-sine", {"frequency_hz": 0, "amplitude_vpp": 0.1}),
+            _payload(
+                "configure-sine",
+                {"frequency_hz": 0, "amplitude_vpp": 0.1},
+                context={
+                    "mode": "live",
+                    "expected_model_id": "keysight-33521b",
+                },
+            ),
             worker_mode="live",
             allow_output_writes=True,
         )
@@ -610,7 +623,119 @@ def test_validation_does_not_mutate_arguments_or_add_live_identity_guard():
         "offset_v": 0,
         "phase_deg": 0.0,
         "load": "50",
+        "channel": 1,
     }
     assert result.arguments is not payload["arguments"]
     assert result.context == {"mode": "live"}
     assert "expected_model_id" not in result.context
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["keysight-33510b", "keysight-33512b", "keysight-33521b"],
+)
+@pytest.mark.parametrize("mode", ["simulate", "dry_run"])
+def test_hardware_free_context_accepts_registered_planning_models(model_id, mode):
+    result = validate_worker_command_request(
+        _payload(
+            "configure-sine",
+            _sine_arguments(),
+            context={"mode": mode, "planning_model_id": model_id},
+        ),
+        worker_mode="simulate" if mode == "simulate" else "live",
+        allow_output_writes=False,
+    )
+
+    assert result.context["planning_model_id"] == model_id
+
+
+@pytest.mark.parametrize("model_id", ["keysight-33510b", "keysight-33512b"])
+def test_two_channel_registered_models_admit_hardware_free_channel_two(model_id):
+    result = validate_worker_command_request(
+        _payload(
+            "configure-sine",
+            {**_sine_arguments(), "channel": 2},
+            context={"mode": "dry_run", "planning_model_id": model_id},
+        ),
+        worker_mode="live",
+        allow_output_writes=False,
+    )
+
+    assert result.arguments["channel"] == 2
+
+
+def test_single_channel_model_rejects_channel_two_through_core_validation():
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload(
+                "configure-sine",
+                {**_sine_arguments(), "channel": 2},
+                context={
+                    "mode": "dry_run",
+                    "planning_model_id": "keysight-33521b",
+                },
+            ),
+            worker_mode="live",
+            allow_output_writes=False,
+        )
+
+    assert error.value.code == "invalid_arguments"
+
+
+@pytest.mark.parametrize("channel", [True, 1.0, "1", 0, -1])
+def test_channel_requires_a_positive_integer(channel):
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload("status", {"channel": channel}),
+            worker_mode="live",
+            allow_output_writes=False,
+        )
+
+    assert error.value.code == "invalid_arguments"
+
+
+@pytest.mark.parametrize("command", ["identify", "read-errors"])
+def test_non_channel_commands_reject_channel(command):
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload(command, {"channel": 1}),
+            worker_mode="live",
+            allow_output_writes=False,
+        )
+
+    assert error.value.code == "invalid_arguments"
+
+
+def test_live_without_expected_model_defers_model_dependent_validation():
+    result = validate_worker_command_request(
+        _payload(
+            "configure-sine",
+            {"frequency_hz": 0, "amplitude_vpp": 0.1, "channel": 99},
+        ),
+        worker_mode="live",
+        allow_output_writes=True,
+    )
+
+    assert result.context == {"mode": "live"}
+    assert result.arguments["channel"] == 99
+
+
+def test_worker_command_set_is_not_expanded():
+    assert worker_commands._SUPPORTED_COMMANDS == {
+        "identify",
+        "status",
+        "read-errors",
+        "configure-sine",
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
+        "configure-square",
+        "configure-ramp",
+        "configure-triangle",
+        "configure-pulse",
+        "configure-dc",
+        "configure-noise",
+        "configure-prbs",
+        "output",
+    }

@@ -531,8 +531,10 @@ Direct CLI exit categories are:
 
 ## Worker CLI
 
-The Worker is a loopback-only local HTTP control plane. It currently supports
-only `keysight-33521b`; its simulator uses 33521B process-lifetime state.
+The Worker is a loopback-only local HTTP control plane. Model admission follows
+Core: dry-run and simulator requests accept registered 33510B, 33512B, and
+33521B planning models, while Product Live admits 33512B and 33521B. The
+33510B remains unavailable for Product Live.
 
 Start a simulated Worker:
 
@@ -566,6 +568,13 @@ The Worker does not expose Direct CLI resource listing, `trigger`,
 any other unlisted command. Worker command names use kebab-case and request
 argument fields use snake_case.
 
+`status`, all listed `configure-*` commands, and `output` accept optional
+integer `channel`, defaulting to 1. Core validates the model-specific channel
+count. The two-channel 33510B and 33512B hardware-free paths accept Channels 1
+and 2; 33512B Product Live also admits both channels. The one-channel 33521B
+rejects Channel 2. `identify` and `read-errors` do not accept `channel`.
+Selected-channel Worker results retain the canonical Core `channel` field.
+
 Live Worker write safety is narrower than Direct CLI invocation:
 
 - identify/status/read-errors do not require `allow_output_writes`;
@@ -578,10 +587,16 @@ The Worker has one active job slot. A second request is rejected as `busy`, or
 as `stopping` after a cooperative stop request.
 
 Every `POST /command` supplies a request context. `simulate` and `dry_run`
-contexts require `planning_model_id: "keysight-33521b"` and must omit
-`expected_model_id`. A `live` context may supply
-`expected_model_id: "keysight-33521b"` as a guard and must omit
-`planning_model_id`. Exact context and argument schemas remain contract-owned.
+contexts require an exact registered `planning_model_id` and must omit
+`expected_model_id`. Dry-run never binds simulator state. The first admitted
+simulate job binds the Worker to its planning model for the process lifetime;
+later requests cannot silently switch models.
+
+A `live` context may supply an exact registered `expected_model_id` as an
+optional mismatch guard and must omit `planning_model_id`. Detected `*IDN?`
+identity and Core Product policy remain authoritative. Omitting the guard does
+not default to 33521B. Exact context and argument schemas remain
+contract-owned.
 
 An accepted command returns HTTP 202 and runs asynchronously. Malformed or
 inadmissible requests return HTTP 400; busy or stopping admission returns HTTP
@@ -623,10 +638,11 @@ object. An accepted `send-command` result confirms admission, not job
 completion; use lifecycle status to observe the result.
 
 For normal live shutdown, submit explicit output-off before stopping. Use the
+[Wavegen CLI JSON / JSONL contract](../contracts/wavegen-cli-jsonl-contract.md),
 [Worker contract](../contracts/wavegen-worker-contract.md),
-[common protocol](../contracts/common-worker-protocol.md), and
-[orchestrator workflows](../contracts/common-orchestrator-workflows.md) for the
-exact schemas, lifecycle meanings, and queue rules.
+[Wavegen orchestrator workflows](../contracts/wavegen-orchestrator-workflows.md),
+and [common protocol](../contracts/common-worker-protocol.md) for the exact
+schemas, lifecycle meanings, and queue rules.
 
 ## CLI Validation Scripts
 
@@ -697,4 +713,6 @@ Product Live decision policy.
 - [Supported models](../core/supported-models.md)
 - [Contributing](../CONTRIBUTING.md)
 - [Testing guidelines](../testing-guidelines.md)
+- [Wavegen CLI JSON / JSONL contract](../contracts/wavegen-cli-jsonl-contract.md)
 - [Worker contract](../contracts/wavegen-worker-contract.md)
+- [Wavegen orchestrator workflows](../contracts/wavegen-orchestrator-workflows.md)

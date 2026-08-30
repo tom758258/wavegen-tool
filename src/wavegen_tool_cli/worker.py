@@ -15,10 +15,8 @@ import traceback
 import uuid
 
 from wavegen_tool_core import (
-    SIMULATED_33521B_RESOURCE,
     SYSTEM_BACKEND,
     Simulated33521BState,
-    SimulatedResourceManager,
     WavegenError,
     classify_transport,
     configure_dc,
@@ -52,6 +50,8 @@ from wavegen_tool_core import (
     set_output,
     validate_backend_transport,
 )
+from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_PRODUCT
+from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 from wavegen_tool_core.transport import normalize_resource
 from wavegen_tool_cli.worker_protocol import (
     WORKER_SCHEMA_VERSION,
@@ -168,9 +168,7 @@ class WorkerRuntime:
         self._failed_jobs = 0
         self._summary_emitted = False
         self._exit_code = 0
-        self._simulator_state = (
-            Simulated33521BState() if config.mode == "simulate" else None
-        )
+        self._simulator_state: Simulated33521BState | None = None
 
     @property
     def control_port(self) -> int:
@@ -282,6 +280,18 @@ class WorkerRuntime:
                 return "stopping", None
             if self._active_job is not None:
                 return "busy", None
+            simulator_state = self._simulator_state
+            if command.context["mode"] == "simulate":
+                planning_model_id = str(command.context["planning_model_id"])
+                if (
+                    simulator_state is not None
+                    and simulator_state.model_id != planning_model_id
+                ):
+                    return "simulator_model_mismatch", None
+                if simulator_state is None:
+                    simulator_state = Simulated33521BState(
+                        model_id=planning_model_id
+                    )
             job = JobRecord(
                 worker_job_id=str(uuid.uuid4()),
                 job_id=command.job_id,
@@ -291,6 +301,8 @@ class WorkerRuntime:
                 state="queued",
                 accepted_at=_timestamp(),
             )
+            if command.context["mode"] == "simulate":
+                self._simulator_state = simulator_state
             self._active_job = job
             self._service_status = "busy"
             self._accepted_jobs += 1
@@ -440,23 +452,34 @@ class WorkerRuntime:
         if context_mode == "dry_run":
             return self._execute_dry_run(job.command, arguments, job.context)
 
-        resource = (
-            SIMULATED_33521B_RESOURCE
-            if self.config.mode == "simulate"
-            else self.config.resource
-        )
-        factory_kwargs = self._factory_kwargs()
+        simulator_state = self._simulator_state
+        if self.config.mode == "simulate":
+            if simulator_state is None:  # pragma: no cover - admission invariant
+                raise RuntimeError("Simulator state is not bound.")
+            resource = simulator_state.resource_name
+        else:
+            resource = self.config.resource
+        core_kwargs = self._factory_kwargs()
+        core_kwargs["support_policy_mode"] = SUPPORT_POLICY_MODE_PRODUCT
+        expected_model_id = job.context.get("expected_model_id")
+        if isinstance(expected_model_id, str):
+            core_kwargs["expected_model_id"] = expected_model_id
         backend = self.config.backend
         if job.command == "identify":
-            return identify_instrument(resource, backend, **factory_kwargs)
+            return identify_instrument(resource, backend, **core_kwargs)
         if job.command == "status":
-            return query_status(resource, backend, **factory_kwargs)
+            return query_status(
+                resource,
+                backend,
+                channel=arguments["channel"],
+                **core_kwargs,
+            )
         if job.command == "read-errors":
             return read_error_queue(
                 resource,
                 backend,
                 max_reads=arguments["max_reads"],
-                **factory_kwargs,
+                **core_kwargs,
             )
         if job.command == "configure-sine":
             return configure_sine(
@@ -467,7 +490,8 @@ class WorkerRuntime:
                 arguments["load"],
                 backend,
                 arguments["phase_deg"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-sine-sweep":
             return configure_sine_sweep(
@@ -483,7 +507,8 @@ class WorkerRuntime:
                 arguments["load"],
                 backend,
                 arguments["phase_deg"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-square-sweep":
             return configure_square_sweep(
@@ -500,7 +525,8 @@ class WorkerRuntime:
                 backend,
                 arguments["phase_deg"],
                 duty_cycle_percent=arguments["duty_cycle_percent"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-ramp-sweep":
             return configure_ramp_sweep(
@@ -517,7 +543,8 @@ class WorkerRuntime:
                 backend,
                 arguments["phase_deg"],
                 symmetry_percent=arguments["symmetry_percent"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-triangle-sweep":
             return configure_triangle_sweep(
@@ -533,7 +560,8 @@ class WorkerRuntime:
                 arguments["load"],
                 backend,
                 arguments["phase_deg"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-square":
             return configure_square(
@@ -545,7 +573,8 @@ class WorkerRuntime:
                 arguments["load"],
                 backend,
                 arguments["phase_deg"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-ramp":
             return configure_ramp(
@@ -557,7 +586,8 @@ class WorkerRuntime:
                 arguments["load"],
                 backend,
                 arguments["phase_deg"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-triangle":
             return configure_triangle(
@@ -568,7 +598,8 @@ class WorkerRuntime:
                 arguments["load"],
                 backend,
                 arguments["phase_deg"],
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-pulse":
             return configure_pulse(
@@ -583,7 +614,8 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 arguments.get("leading_edge_s"),
                 arguments.get("trailing_edge_s"),
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-dc":
             return configure_dc(
@@ -591,7 +623,8 @@ class WorkerRuntime:
                 arguments["voltage_v"],
                 arguments["load"],
                 backend,
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-noise":
             return configure_noise(
@@ -601,7 +634,8 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["load"],
                 backend,
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "configure-prbs":
             return configure_prbs(
@@ -613,14 +647,16 @@ class WorkerRuntime:
                 arguments["edge_time_s"],
                 arguments["load"],
                 backend,
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         if job.command == "output":
             return set_output(
                 resource,
                 "on" if arguments["enabled"] else "off",
                 backend,
-                **factory_kwargs,
+                channel=arguments["channel"],
+                **core_kwargs,
             )
         raise RuntimeError(f"Unsupported admitted command: {job.command}.")
 
@@ -639,6 +675,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=arguments["channel"],
             )
         if command == "configure-sine-sweep":
             return dry_run_sine_sweep(
@@ -653,6 +690,7 @@ class WorkerRuntime:
                 arguments["return_time_s"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=arguments["channel"],
             )
         if command == "configure-square-sweep":
             return dry_run_square_sweep(
@@ -668,6 +706,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 duty_cycle_percent=arguments["duty_cycle_percent"],
+                channel=arguments["channel"],
             )
         if command == "configure-ramp-sweep":
             return dry_run_ramp_sweep(
@@ -683,6 +722,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 symmetry_percent=arguments["symmetry_percent"],
+                channel=arguments["channel"],
             )
         if command == "configure-triangle-sweep":
             return dry_run_triangle_sweep(
@@ -697,6 +737,7 @@ class WorkerRuntime:
                 arguments["return_time_s"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=arguments["channel"],
             )
         if command == "configure-square":
             return dry_run_square(
@@ -707,6 +748,7 @@ class WorkerRuntime:
                 arguments["duty_cycle_percent"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=arguments["channel"],
             )
         if command == "configure-ramp":
             return dry_run_ramp(
@@ -717,6 +759,7 @@ class WorkerRuntime:
                 arguments["symmetry_percent"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=arguments["channel"],
             )
         if command == "configure-triangle":
             return dry_run_triangle(
@@ -726,6 +769,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=arguments["channel"],
             )
         if command == "configure-pulse":
             return dry_run_pulse(
@@ -739,9 +783,15 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 arguments.get("leading_edge_s"),
                 arguments.get("trailing_edge_s"),
+                channel=arguments["channel"],
             )
         if command == "configure-dc":
-            return dry_run_dc(model, arguments["voltage_v"], arguments["load"])
+            return dry_run_dc(
+                model,
+                arguments["voltage_v"],
+                arguments["load"],
+                channel=arguments["channel"],
+            )
         if command == "configure-noise":
             return dry_run_noise(
                 model,
@@ -749,6 +799,7 @@ class WorkerRuntime:
                 arguments["bandwidth_hz"],
                 arguments["offset_v"],
                 arguments["load"],
+                channel=arguments["channel"],
             )
         if command == "configure-prbs":
             return dry_run_prbs(
@@ -759,6 +810,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["edge_time_s"],
                 arguments["load"],
+                channel=arguments["channel"],
             )
         raise RuntimeError(f"Unsupported admitted dry-run command: {command}.")
 
@@ -766,13 +818,11 @@ class WorkerRuntime:
         if self.config.mode != "simulate":
             return {}
         state = self._simulator_state
-
-        def factory(_pyvisa_library: str) -> SimulatedResourceManager:
-            if state is None:  # pragma: no cover - configuration invariant
-                raise RuntimeError("Simulator state is not available.")
-            return SimulatedResourceManager(state)
-
-        return {"resource_manager_factory": factory}
+        if state is None:  # pragma: no cover - admission invariant
+            raise RuntimeError("Simulator state is not bound.")
+        return {
+            "resource_manager_factory": SimulatedResourceManagerFactory(state)
+        }
 
     def _shutdown_server(self) -> None:
         server = self._server
@@ -912,6 +962,18 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             return
 
         reason, job = self.server.runtime.admit(validated)
+        if reason == "simulator_model_mismatch":
+            self._send_json(
+                400,
+                _request_error(
+                    validated.command,
+                    validated.job_id,
+                    "invalid_context",
+                    "planning_model_id does not match the bound simulator model.",
+                    run_id=self.server.runtime.run_id,
+                ),
+            )
+            return
         if reason != "accepted" or job is None:
             self._send_json(
                 409,
@@ -1068,9 +1130,7 @@ def _wavegen_error_payload(error: WavegenError) -> dict[str, object]:
 
 def _json_safe(value: object) -> object:
     if is_dataclass(value):
-        serialized = asdict(value)
-        serialized.pop("channel", None)
-        return serialized
+        return asdict(value)
     if isinstance(value, tuple):
         return [_json_safe(item) for item in value]
     if isinstance(value, list):

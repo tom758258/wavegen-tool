@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from wavegen_tool_core import resolve_voltage_inputs
 from wavegen_tool_core.errors import WaveformParameterError
-from wavegen_tool_core.identity import CANONICAL_MODEL_ID
+from wavegen_tool_core.identity import model_info_for_model_id
 from wavegen_tool_cli.worker_protocol import WORKER_SCHEMA_VERSION
 from wavegen_tool_core.visa import (
     dry_run_dc,
@@ -95,6 +95,7 @@ _CONFIGURE_COMMANDS = frozenset(
     }
 )
 _DRY_RUN_COMMANDS = _CONFIGURE_COMMANDS
+_CHANNEL_COMMANDS = _CONFIGURE_COMMANDS | frozenset({"status", "output"})
 
 _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "identify": frozenset(),
@@ -409,12 +410,18 @@ def validate_worker_command_request(
 
     if command in _CONFIGURE_COMMANDS:
         _canonicalize_voltage_arguments(command, arguments)
-        planning_model_id = (
-            CANONICAL_MODEL_ID
+        validation_model_id = (
+            context.get("expected_model_id")
             if request_mode == "live"
             else context["planning_model_id"]
         )
-        _validate_waveform_arguments(command, arguments, planning_model_id)
+        if validation_model_id is not None:
+            _validate_waveform_arguments(
+                command,
+                arguments,
+                validation_model_id,
+                channel=arguments["channel"],
+            )
 
     return ValidatedWorkerCommand(
         schema_version=schema_version,
@@ -450,13 +457,10 @@ def _validate_context(
                 "invalid_context",
                 "live context must not include planning_model_id.",
             )
-        if "expected_model_id" in context and (
-            not isinstance(context["expected_model_id"], str)
-            or context["expected_model_id"] != CANONICAL_MODEL_ID
-        ):
-            raise WorkerRequestValidationError(
-                "invalid_context",
-                "expected_model_id must be keysight-33521b when provided.",
+        if "expected_model_id" in context:
+            _validate_registered_model_id(
+                context["expected_model_id"],
+                field_name="expected_model_id",
             )
     else:
         if "expected_model_id" in context:
@@ -464,16 +468,15 @@ def _validate_context(
                 "invalid_context",
                 f"{request_mode} context must not include expected_model_id.",
             )
-        if (
-            "planning_model_id" not in context
-            or not isinstance(context["planning_model_id"], str)
-            or context["planning_model_id"] != CANONICAL_MODEL_ID
-        ):
+        if "planning_model_id" not in context:
             raise WorkerRequestValidationError(
                 "invalid_context",
-                f"{request_mode} context requires planning_model_id "
-                "keysight-33521b.",
+                f"{request_mode} context requires planning_model_id.",
             )
+        _validate_registered_model_id(
+            context["planning_model_id"],
+            field_name="planning_model_id",
+        )
 
     if not isinstance(worker_mode, str) or worker_mode not in _WORKER_MODES:
         raise WorkerRequestValidationError(
@@ -494,7 +497,10 @@ def _validate_context(
 
 
 def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
-    unknown_fields = _unknown_fields(arguments, _ARGUMENT_FIELDS[command])
+    allowed_fields = _ARGUMENT_FIELDS[command]
+    if command in _CHANNEL_COMMANDS:
+        allowed_fields = allowed_fields | {"channel"}
+    unknown_fields = _unknown_fields(arguments, allowed_fields)
     if unknown_fields:
         raise WorkerRequestValidationError(
             "invalid_arguments",
@@ -514,6 +520,13 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
 
     for field, default in _DEFAULT_ARGUMENTS.get(command, {}).items():
         arguments.setdefault(field, default)
+
+    if command in _CHANNEL_COMMANDS:
+        channel = arguments.setdefault("channel", 1)
+        if isinstance(channel, bool) or not isinstance(channel, int) or channel < 1:
+            raise WorkerRequestValidationError(
+                "invalid_arguments", "channel must be a positive integer."
+            )
 
     if command == "configure-pulse":
         has_shared = "edge_time_s" in arguments
@@ -658,6 +671,8 @@ def _validate_waveform_arguments(
     command: str,
     arguments: Mapping[str, object],
     model_id: object,
+    *,
+    channel: int,
 ) -> None:
     try:
         if command == "configure-sine":
@@ -668,6 +683,7 @@ def _validate_waveform_arguments(
                 arguments["offset_v"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=channel,
             )
         elif command == "configure-sine-sweep":
             dry_run_sine_sweep(
@@ -682,6 +698,7 @@ def _validate_waveform_arguments(
                 arguments["return_time_s"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=channel,
             )
         elif command == "configure-square-sweep":
             dry_run_square_sweep(
@@ -697,6 +714,7 @@ def _validate_waveform_arguments(
                 arguments["load"],
                 arguments["phase_deg"],
                 duty_cycle_percent=arguments["duty_cycle_percent"],
+                channel=channel,
             )
         elif command == "configure-ramp-sweep":
             dry_run_ramp_sweep(
@@ -712,6 +730,7 @@ def _validate_waveform_arguments(
                 arguments["load"],
                 arguments["phase_deg"],
                 symmetry_percent=arguments["symmetry_percent"],
+                channel=channel,
             )
         elif command == "configure-triangle-sweep":
             dry_run_triangle_sweep(
@@ -726,6 +745,7 @@ def _validate_waveform_arguments(
                 arguments["return_time_s"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=channel,
             )
         elif command == "configure-square":
             dry_run_square(
@@ -736,6 +756,7 @@ def _validate_waveform_arguments(
                 arguments["duty_cycle_percent"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=channel,
             )
         elif command == "configure-ramp":
             dry_run_ramp(
@@ -746,6 +767,7 @@ def _validate_waveform_arguments(
                 arguments["symmetry_percent"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=channel,
             )
         elif command == "configure-triangle":
             dry_run_triangle(
@@ -755,6 +777,7 @@ def _validate_waveform_arguments(
                 arguments["offset_v"],
                 arguments["load"],
                 arguments["phase_deg"],
+                channel=channel,
             )
         elif command == "configure-pulse":
             dry_run_pulse(
@@ -768,12 +791,14 @@ def _validate_waveform_arguments(
                 arguments["phase_deg"],
                 arguments.get("leading_edge_s"),
                 arguments.get("trailing_edge_s"),
+                channel=channel,
             )
         elif command == "configure-dc":
             dry_run_dc(
                 model_id,
                 arguments["voltage_v"],
                 arguments["load"],
+                channel=channel,
             )
         elif command == "configure-noise":
             dry_run_noise(
@@ -782,6 +807,7 @@ def _validate_waveform_arguments(
                 arguments["bandwidth_hz"],
                 arguments["offset_v"],
                 arguments["load"],
+                channel=channel,
             )
         elif command == "configure-prbs":
             dry_run_prbs(
@@ -792,9 +818,18 @@ def _validate_waveform_arguments(
                 arguments["offset_v"],
                 arguments["edge_time_s"],
                 arguments["load"],
+                channel=channel,
             )
     except WaveformParameterError as exc:
         raise WorkerRequestValidationError("invalid_arguments", str(exc)) from exc
+
+
+def _validate_registered_model_id(value: object, *, field_name: str) -> None:
+    if not isinstance(value, str) or model_info_for_model_id(value) is None:
+        raise WorkerRequestValidationError(
+            "invalid_context",
+            f"{field_name} must be an exact registered model ID.",
+        )
 
 
 def _unknown_fields(

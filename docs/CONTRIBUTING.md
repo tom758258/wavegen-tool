@@ -18,6 +18,18 @@ Run the narrowest relevant hardware-free checks first. Follow the
 [Testing Guidelines](testing-guidelines.md), report every check that was not
 run, and do not substitute a simulator or dry-run result for hardware evidence.
 
+The canonical broader development checks are:
+
+```powershell
+uv run python -m ruff check src tests
+uv run python -m pytest tests -q -p no:cacheprovider
+uv run python -m build
+```
+
+Run only the checks relevant to a focused change before expanding to these
+broader commands. A small documentation or isolated regression change does not
+automatically require the full suite and build.
+
 ## Architecture and Ownership
 
 Wavegen Tool is one distribution with three import packages:

@@ -102,10 +102,19 @@ automatically.
 Configuration leaves the selected output off. Output-on remains an explicit
 operation. The tool does not use `*RST` as part of normal operation.
 
-## Worker Scope
+## Adapter Exposure
 
-The local Worker is a narrower adapter surface, not a second support matrix. It
-currently supports only `keysight-33521b` and only the commands explicitly
-listed in the authoritative [Worker contract](../contracts/wavegen-worker-contract.md).
-Direct Core or CLI support must not be used to infer Worker model or command
-support.
+The Direct CLI exposes the broader Core-backed waveform, modulation, burst,
+sweep, List Sweep, output, trigger, and diagnostic surface documented in the
+[CLI guide](../cli/README.md).
+
+The local Worker is a narrower adapter surface, not a second model support
+matrix. It uses Core's registered models for dry-run and simulator planning and
+Core's Product policy for live admission. Therefore 33512B and 33521B are
+Product Live within the existing Worker command surface, while 33510B remains
+hardware-free only.
+
+Worker model admission does not broaden Worker command exposure. Only commands
+listed in the authoritative
+[Worker contract](../contracts/wavegen-worker-contract.md) are accepted; Direct
+Core or CLI command availability must not be used to infer Worker commands.

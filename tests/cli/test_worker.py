@@ -14,7 +14,7 @@ from wavegen_tool_cli.worker import (
     validate_worker_startup,
 )
 from wavegen_tool_cli.worker_commands import validate_worker_command_request
-from wavegen_tool_core import WavegenError
+from wavegen_tool_core import Simulated33521BState, SimulatedResourceManager, WavegenError
 
 
 MODEL_ID = "keysight-33521b"
@@ -68,10 +68,14 @@ def _payload(
     *,
     mode: str = "simulate",
     job_id: str = "job-1",
+    model_id: str = MODEL_ID,
+    expected_model_id: str | None = None,
 ) -> dict[str, object]:
     context: dict[str, object] = {"mode": mode}
     if mode in {"simulate", "dry_run"}:
-        context["planning_model_id"] = MODEL_ID
+        context["planning_model_id"] = model_id
+    elif expected_model_id is not None:
+        context["expected_model_id"] = expected_model_id
     return {
         "schema_version": 2,
         "command": command,
@@ -86,25 +90,29 @@ def _sine_arguments() -> dict[str, object]:
 
 
 def _admitted_job(
+    runtime: WorkerRuntime,
     command: str,
     arguments: dict[str, object],
     *,
     mode: str = "simulate",
+    model_id: str = MODEL_ID,
+    expected_model_id: str | None = None,
 ) -> JobRecord:
     validated = validate_worker_command_request(
-        _payload(command, arguments, mode=mode),
-        worker_mode="live" if mode == "live" else "simulate",
+        _payload(
+            command,
+            arguments,
+            mode=mode,
+            model_id=model_id,
+            expected_model_id=expected_model_id,
+        ),
+        worker_mode=runtime.config.mode,
         allow_output_writes=True,
     )
-    return JobRecord(
-        worker_job_id="worker-job-1",
-        job_id=validated.job_id,
-        command=validated.command,
-        arguments=validated.arguments,
-        context=validated.context,
-        state="running",
-        accepted_at="2026-01-01T00:00:00Z",
-    )
+    reason, job = runtime.admit(validated)
+    assert reason == "accepted"
+    assert isinstance(job, JobRecord)
+    return job
 
 
 def _wait_for_job(runtime: WorkerRuntime, worker_job_id: str, state: str) -> dict:
@@ -318,11 +326,17 @@ def test_worker_command_execution_mapping(
         monkeypatch.setattr(worker_module, "identify_instrument", fake_identify)
         runtime = WorkerRuntime(_worker_config("live"))
         result = runtime._execute_command(
-            _admitted_job(command, arguments, mode="live")
+            _admitted_job(runtime, command, arguments, mode="live")
         )
         assert result["resource"] == runtime.config.resource
         assert result["backend"] == "system"
-        assert calls == [(runtime.config.resource, "system", {})]
+        assert calls == [
+            (
+                runtime.config.resource,
+                "system",
+                {"support_policy_mode": "product"},
+            )
+        ]
         assert runtime.simulator_state is None
         return
 
@@ -347,7 +361,7 @@ def test_worker_command_execution_mapping(
 
     runtime = WorkerRuntime(_worker_config())
     result = runtime._execute_command(
-        _admitted_job(command, arguments, mode=request_mode)
+        _admitted_job(runtime, command, arguments, mode=request_mode)
     )
     assert isinstance(result, dict) or hasattr(result, "__dataclass_fields__")
     if command == "output":
@@ -389,6 +403,15 @@ def test_worker_status_and_invalid_request_are_memory_only(monkeypatch):
     runtime = WorkerRuntime(_worker_config())
     runtime.start()
     try:
+        bind_code, bind_accepted = _request(
+            runtime,
+            "POST",
+            "/command",
+            _payload("identify", job_id="bind-state"),
+        )
+        assert bind_code == 202
+        _wait_for_job(runtime, bind_accepted["worker_job_id"], "succeeded")
+        assert runtime.simulator_state is not None
         runtime.simulator_state.error_queue.append('-100,"fixture"')
         status_code, status = _request(runtime, "GET", "/status")
         assert status_code == 200
@@ -503,6 +526,318 @@ def test_worker_shared_simulator_state_persists_across_commands():
         assert runtime.wait(timeout=2.0)
 
 
+@pytest.mark.parametrize(
+    ("model_id", "channel"),
+    [
+        ("keysight-33510b", 1),
+        ("keysight-33510b", 2),
+        ("keysight-33512b", 1),
+        ("keysight-33512b", 2),
+        ("keysight-33521b", 1),
+    ],
+)
+def test_worker_simulator_uses_registered_model_capabilities(model_id, channel):
+    runtime = WorkerRuntime(_worker_config())
+    job = _admitted_job(
+        runtime,
+        "configure-sine",
+        {**_sine_arguments(), "channel": channel},
+        model_id=model_id,
+    )
+
+    result = runtime._execute_command(job)
+
+    assert result.identity.canonical_model_id == model_id
+    assert result.channel == channel
+    assert runtime.simulator_state is not None
+    assert result.resource == runtime.simulator_state.resource_name
+
+
+def test_worker_simulator_channel_two_fails_closed_for_33521b():
+    runtime = WorkerRuntime(_worker_config())
+    with pytest.raises(worker_module.WorkerRequestValidationError):
+        _admitted_job(
+            runtime,
+            "configure-sine",
+            {**_sine_arguments(), "channel": 2},
+            model_id="keysight-33521b",
+        )
+
+    assert runtime.simulator_state is None
+
+
+@pytest.mark.parametrize("model_id", ["keysight-33510b", "keysight-33512b"])
+@pytest.mark.parametrize("channel", [1, 2])
+def test_worker_dry_run_uses_registered_two_channel_capabilities(model_id, channel):
+    runtime = WorkerRuntime(_worker_config("live"))
+    job = _admitted_job(
+        runtime,
+        "configure-sine",
+        {**_sine_arguments(), "channel": channel},
+        mode="dry_run",
+        model_id=model_id,
+    )
+
+    result = runtime._execute_command(job)
+
+    assert result.canonical_model_id == model_id
+    assert result.channel == channel
+    assert runtime.simulator_state is None
+
+
+@pytest.mark.parametrize(
+    ("model_id", "channel"),
+    [
+        ("keysight-33512b", 1),
+        ("keysight-33512b", 2),
+        ("keysight-33521b", 1),
+    ],
+)
+def test_worker_live_uses_core_product_model_admission(
+    model_id, channel, monkeypatch
+):
+    state = Simulated33521BState(model_id=model_id)
+    config = WorkerConfig(
+        mode="live",
+        resource=state.resource_name,
+        backend="system",
+        control_port=0,
+        allow_output_writes=True,
+    )
+    runtime = WorkerRuntime(config)
+    monkeypatch.setattr(
+        runtime,
+        "_factory_kwargs",
+        lambda: {
+            "resource_manager_factory": lambda _library: SimulatedResourceManager(
+                state
+            )
+        },
+    )
+    job = _admitted_job(
+        runtime,
+        "configure-sine",
+        {**_sine_arguments(), "channel": channel},
+        mode="live",
+    )
+
+    result = runtime._execute_command(job)
+
+    assert result.identity.canonical_model_id == model_id
+    assert result.channel == channel
+
+
+@pytest.mark.parametrize(
+    ("model_id", "channel"),
+    [("keysight-33510b", 1), ("keysight-33521b", 2)],
+)
+def test_worker_live_core_rejects_unsupported_model_or_channel(
+    model_id, channel, monkeypatch
+):
+    state = Simulated33521BState(model_id=model_id)
+    runtime = WorkerRuntime(
+        WorkerConfig(
+            mode="live",
+            resource=state.resource_name,
+            backend="system",
+            control_port=0,
+            allow_output_writes=True,
+        )
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_factory_kwargs",
+        lambda: {
+            "resource_manager_factory": lambda _library: SimulatedResourceManager(
+                state
+            )
+        },
+    )
+    job = _admitted_job(
+        runtime,
+        "configure-sine",
+        {**_sine_arguments(), "channel": channel},
+        mode="live",
+    )
+
+    with pytest.raises(WavegenError):
+        runtime._execute_command(job)
+
+
+def test_worker_live_expected_model_is_only_a_mismatch_guard(monkeypatch):
+    state = Simulated33521BState(model_id="keysight-33512b")
+    runtime = WorkerRuntime(
+        WorkerConfig(
+            mode="live",
+            resource=state.resource_name,
+            backend="system",
+            control_port=0,
+            allow_output_writes=True,
+        )
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_factory_kwargs",
+        lambda: {
+            "resource_manager_factory": lambda _library: SimulatedResourceManager(
+                state
+            )
+        },
+    )
+
+    matching = _admitted_job(
+        runtime,
+        "configure-sine",
+        {"frequency_hz": 2000, "amplitude_vpp": 0.1},
+        mode="live",
+        expected_model_id="keysight-33512b",
+    )
+    assert runtime._execute_command(matching).identity.canonical_model_id == (
+        "keysight-33512b"
+    )
+    runtime._finish_job(matching, result={}, error=None)
+
+    mismatching = _admitted_job(
+        runtime,
+        "configure-sine",
+        {"frequency_hz": 3000, "amplitude_vpp": 0.1},
+        mode="live",
+        expected_model_id="keysight-33521b",
+    )
+    with pytest.raises(WavegenError):
+        runtime._execute_command(mismatching)
+    assert state.frequency_hz == 2000
+
+
+@pytest.mark.parametrize(
+    ("model_id", "channel", "error_code"),
+    [
+        ("keysight-33510b", 1, "unsupported_instrument"),
+        ("keysight-33521b", 2, "waveform_parameter_error"),
+    ],
+)
+def test_live_without_expected_model_defers_model_rejection_to_job(
+    model_id, channel, error_code, monkeypatch
+):
+    state = Simulated33521BState(model_id=model_id)
+    runtime = WorkerRuntime(
+        WorkerConfig(
+            mode="live",
+            resource=state.resource_name,
+            backend="system",
+            control_port=0,
+            allow_output_writes=True,
+        )
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_factory_kwargs",
+        lambda: {
+            "resource_manager_factory": lambda _library: SimulatedResourceManager(
+                state
+            )
+        },
+    )
+    runtime.start()
+    try:
+        code, accepted = _request(
+            runtime,
+            "POST",
+            "/command",
+            _payload(
+                "configure-sine",
+                {**_sine_arguments(), "channel": channel},
+                mode="live",
+            ),
+        )
+        assert code == 202
+        failed = _wait_for_job(runtime, accepted["worker_job_id"], "failed")
+        assert failed["error"]["code"] == error_code
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
+def test_simulator_binding_is_atomic_with_job_admission():
+    runtime = WorkerRuntime(_worker_config())
+    first = validate_worker_command_request(
+        _payload("status", model_id="keysight-33512b"),
+        worker_mode="simulate",
+        allow_output_writes=True,
+    )
+    reason, job = runtime.admit(first)
+    assert reason == "accepted"
+    assert job is not None
+    assert runtime.simulator_state is not None
+    assert runtime.simulator_state.model_id == "keysight-33512b"
+
+    busy = validate_worker_command_request(
+        _payload("status", model_id="keysight-33521b"),
+        worker_mode="simulate",
+        allow_output_writes=True,
+    )
+    assert runtime.admit(busy) == ("busy", None)
+    assert runtime.simulator_state.model_id == "keysight-33512b"
+
+    runtime._finish_job(job, result={}, error=None)
+    assert runtime.admit(busy) == ("simulator_model_mismatch", None)
+    assert runtime.simulator_state.model_id == "keysight-33512b"
+
+    dry_run = validate_worker_command_request(
+        _payload(
+            "configure-sine",
+            _sine_arguments(),
+            mode="dry_run",
+            model_id="keysight-33521b",
+        ),
+        worker_mode="simulate",
+        allow_output_writes=True,
+    )
+    reason, dry_job = runtime.admit(dry_run)
+    assert reason == "accepted"
+    assert dry_job is not None
+    assert runtime.simulator_state.model_id == "keysight-33512b"
+
+    fresh_dry = WorkerRuntime(_worker_config())
+    reason, fresh_dry_job = fresh_dry.admit(dry_run)
+    assert reason == "accepted"
+    assert fresh_dry_job is not None
+    assert fresh_dry.simulator_state is None
+
+    fresh = WorkerRuntime(_worker_config())
+    fresh.request_stop()
+    assert fresh.admit(first) == ("stopping", None)
+    assert fresh.simulator_state is None
+
+
+def test_bound_simulator_rejects_model_switch_as_invalid_context():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        first_code, first = _request(
+            runtime,
+            "POST",
+            "/command",
+            _payload("identify", model_id="keysight-33512b"),
+        )
+        assert first_code == 202
+        _wait_for_job(runtime, first["worker_job_id"], "succeeded")
+
+        switch_code, switch = _request(
+            runtime,
+            "POST",
+            "/command",
+            _payload("status", model_id="keysight-33521b"),
+        )
+        assert switch_code == 400
+        assert switch["error"] == "invalid_context"
+        assert runtime.simulator_state is not None
+        assert runtime.simulator_state.model_id == "keysight-33512b"
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
 def test_worker_job_failure_returns_ready_and_recovers(monkeypatch):
     runtime = WorkerRuntime(_worker_config())
     calls = 0
@@ -603,7 +938,7 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
     assert events[-1]["exit_code"] == 0
 
 
-def test_worker_serialization_keeps_core_channel_field_out_of_worker_results():
+def test_worker_serialization_keeps_core_channel_field_in_worker_results():
     result = worker_module._json_safe(
         cli_module.dry_run_sine(
             MODEL_ID,
@@ -614,7 +949,7 @@ def test_worker_serialization_keeps_core_channel_field_out_of_worker_results():
     )
 
     assert isinstance(result, dict)
-    assert "channel" not in result
+    assert result["channel"] == 1
 
 
 def test_worker_successful_job_is_memory_first_without_filesystem_artifacts(

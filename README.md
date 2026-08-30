@@ -71,6 +71,11 @@ This installs the `wavegen-tool` entry point and the `wavegen_tool_core`,
 `wavegen_tool_cli`, and `wavegen_tool_webui` import packages from the single
 root distribution.
 
+Live use with the default `--backend system` also requires a System/IVI VISA
+runtime that PyVISA can load. Wavegen Tool does not bundle a vendor or system
+VISA runtime. Installing one does not by itself expand the Product Live model,
+transport, or backend scope.
+
 ## Quick Start
 
 Inspect an offline model profile:
@@ -111,7 +116,9 @@ output-safety rules in the [CLI guide](docs/cli/README.md).
 - [CLI guide](docs/cli/README.md)
 - [Contributing](docs/CONTRIBUTING.md)
 - [Testing guidelines](docs/testing-guidelines.md)
-- [Worker contract](docs/contracts/wavegen-worker-contract.md)
+- [Wavegen CLI JSON / JSONL contract](docs/contracts/wavegen-cli-jsonl-contract.md)
+- [Wavegen Worker contract](docs/contracts/wavegen-worker-contract.md)
+- [Wavegen orchestrator workflows](docs/contracts/wavegen-orchestrator-workflows.md)
 - [Common CLI JSONL contract](docs/contracts/common-cli-jsonl-contract.md)
 - [Common Worker protocol](docs/contracts/common-worker-protocol.md)
 - [Common orchestrator workflows](docs/contracts/common-orchestrator-workflows.md)

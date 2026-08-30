@@ -38,15 +38,15 @@ contributor validation mode may additionally admit the registered 33510B route.
 Accepted manufacturers are `Keysight Technologies` and
 `Agilent Technologies`.
 
-An expected model supplied by a validation adapter is a guard. It must equal
-the canonical model resolved from the live identity. It cannot replace or
+An expected model ID supplied by an adapter is a guard. It must equal the
+canonical model ID resolved from the live identity. It cannot replace or
 override that identity.
 
 ## Capability Lookup and Admission
 
-Resolve a canonical model before capability lookup or model-specific planning.
-Core owns the current channel counts and frequency limits described in
-[Supported Models](supported-models.md).
+Resolve a canonical model ID before capability lookup or model-specific
+planning. Core owns the current channel counts and frequency limits described
+in [Supported Models](supported-models.md).
 
 Validate the complete request before hardware writes. Admission includes the
 model, channel, waveform values, voltage representation, modulation or burst
@@ -86,9 +86,14 @@ Simulator mode uses Core's in-memory resource manager and state. Registered
 profiles provide deterministic planning and selected-channel behavior; callers
 that need state across calls must reuse the same simulator state/factory.
 
-The Worker is a separate adapter with its own contract and currently uses a
-process-lifetime 33521B simulator. Do not infer Worker command or model support
-from the broader direct Core/CLI simulator surface.
+The Worker is a separate adapter with its own command contract. Its dry-run and
+simulator requests accept registered planning model IDs. The first admitted
+simulate job binds one persistent model-aware Core simulator state; dry-run
+does not bind it, and later requests cannot silently switch models.
+
+Worker live admission follows Core Product support. Detected identity remains
+authoritative and an optional `expected_model_id` is only a mismatch guard.
+Do not infer Worker command exposure from the broader Direct Core/CLI surface.
 
 ## Live Resource and Backend Boundary
 

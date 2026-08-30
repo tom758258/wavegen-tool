@@ -7,7 +7,8 @@ Compatibility policy: `v2-only`
 This contract defines Wavegen-specific command admission and command semantics.
 It is used with the [Common Worker Protocol](common-worker-protocol.md), the
 [Common CLI JSON / JSONL Contract](common-cli-jsonl-contract.md), and the
-[Common Orchestrator Workflows](common-orchestrator-workflows.md). Common
+[Wavegen CLI JSON / JSONL Contract](wavegen-cli-jsonl-contract.md), and the
+[Wavegen Orchestrator Workflows](wavegen-orchestrator-workflows.md). Common
 envelope and lifecycle rules are not repeated here.
 
 The current Worker implementation includes a local HTTP control plane, one
@@ -38,17 +39,26 @@ Worker startup mode is either `live` or `simulate`.
 
 Other combinations are rejected.
 
-The only supported model ID is `keysight-33521b`.
-
 | Request context mode | Required fields | Forbidden fields |
 | --- | --- | --- |
 | `live` | `mode`; optional `expected_model_id` | `planning_model_id` |
 | `simulate` | `mode`, `planning_model_id` | `expected_model_id` |
 | `dry_run` | `mode`, `planning_model_id` | `expected_model_id` |
 
-For `live`, `expected_model_id`, when present, must be
-`keysight-33521b`. For `simulate` and `dry_run`, `planning_model_id` must be
-`keysight-33521b`. Unknown context fields are rejected.
+`planning_model_id` and `expected_model_id`, when present, must be exact model
+IDs registered by Core. The Worker does not maintain a second Product model
+allowlist.
+
+For live requests, Core opens only the explicit startup resource, resolves the
+detected `*IDN?` manufacturer/model, and applies Product support policy.
+`expected_model_id` is an optional mismatch guard; it cannot replace detected
+identity. Omitting it does not select or imply 33521B. Product Live currently
+admits 33512B and 33521B. The registered 33510B remains hardware-free only and
+cannot use a Worker validation-policy bypass.
+
+For simulator and dry-run requests, `planning_model_id` may select 33510B,
+33512B, or 33521B. This planning context is not a physical identity claim and
+does not expand Product Live support. Unknown context fields are rejected.
 
 ## Supported Commands
 
@@ -83,11 +93,18 @@ dry-run behavior.
 Arguments use `snake_case`. Unknown argument fields and missing required fields
 are rejected.
 
-`identify` and `status` do not allow argument fields.
+`identify` does not allow argument fields.
+
+`status`, all twelve `configure-*` commands, and `output` accept optional
+`channel`, defaulting to integer `1`. Worker admission requires a non-boolean
+positive integer. Core owns the supported channel domain and model-specific
+channel count: 33510B and 33512B admit Channels 1 and 2, while 33521B rejects
+Channel 2. The Worker does not maintain a model/channel allowlist.
 
 `read-errors` accepts optional `max_reads`, default `20`. It must be a
 non-boolean integer from `1` through `100`. Execution drains the instrument
-error queue.
+error queue. `identify` and `read-errors` reject `channel` as an unknown or
+inapplicable argument.
 
 Waveform arguments and defaults are shown below. For the voltage-bearing
 waveforms and sweeps, callers provide exactly one of these mutually exclusive
@@ -184,16 +201,26 @@ while either state is active, another command is rejected with HTTP `409` and
 `reason="busy"`. New commands are rejected with `reason="stopping"` after a
 stop request.
 
-Simulation creates one `Simulated33521BState` for the Worker lifetime. Each
-simulated command creates a new `SimulatedResourceManager` over that shared
-state and executes through the existing Core command functions. State is not
-reset when a manager or session closes. A live Worker retains only its
-resource and backend; each command uses the existing Core per-command VISA
-open, identification, execution, verification, and cleanup lifecycle.
+Simulation binds one `Simulated33521BState(model_id=...)` lazily when the first
+simulate job is actually admitted. Job reservation and first binding are
+atomic. Rejected busy or stopping requests and every dry-run request leave the
+binding unchanged. Later simulate requests must use the bound planning model;
+the Worker does not silently switch models. Each simulated command uses the
+bound state's model-aware resource and Core simulator factory. State is not
+reset when a manager or session closes.
+
+A later simulate request with a different planning model is rejected before
+queueing with HTTP `400` and `error="invalid_context"`. A request already
+rejected as busy or stopping does not bind or mutate simulator state.
+
+A live Worker retains only its explicit resource and backend. Each command
+uses the existing Core per-command VISA open, authoritative identity,
+Product-policy admission, execution, verification, and cleanup lifecycle.
 
 All admitted dry-run commands use the existing Core `dry_run_*` functions and
 do not create a live or simulated session. Results are serialized as stable
 JSON objects and are retained in the terminal job event and `last_job`.
+Selected-channel results retain Core's canonical integer `channel` field.
 
 ## HTTP Control Plane
 
@@ -205,6 +232,13 @@ be requested with `POST /command` and `command="status"`.
 single active slot has been reserved. The background runner performs the
 domain command. Admission errors return HTTP `400`; busy and stopping
 requests return HTTP `409`.
+
+For a live request without `expected_model_id`, HTTP admission performs only
+model-independent validation and does not open VISA. Model-specific channel,
+capability, and range validation follows authoritative identity resolution in
+the background Core operation. Such failures are terminal failed jobs after
+HTTP 202, not HTTP 400 admission failures. Supplying an expected guard does not
+make it the detected model or change Product policy.
 
 `POST /stop` accepts an empty body or `{}` and is idempotent while the server
 is reachable. It requests cooperative shutdown, allows an accepted job to
