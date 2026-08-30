@@ -34,6 +34,7 @@ from wavegen_tool_core.visa import (
     FMConfig,
     FSKConfig,
     GatedBurstConfig,
+    OutputConfig,
     PMConfig,
     PWMConfig,
     SumConfig,
@@ -47,6 +48,7 @@ from wavegen_tool_core.visa import (
     configure_ramp,
     configure_ramp_sweep,
     configure_sine,
+    configure_output,
     configure_sine_list_sweep,
     configure_sine_sweep,
     configure_square,
@@ -56,6 +58,7 @@ from wavegen_tool_core.visa import (
     configure_triangle_sweep,
     dry_run_dc,
     dry_run_noise,
+    dry_run_output,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
@@ -5525,3 +5528,122 @@ def test_output_channel_two_changes_only_selected_output():
 
     assert result.channel == 2
     assert session.writes == ["OUTPut2 ON"]
+
+
+def test_configure_output_happy_path_exact_plan():
+    config = OutputConfig(
+        load=1000,
+        polarity="inverted",
+        voltage_limit_low=-1,
+        voltage_limit_high=1,
+        voltage_limits_enabled=True,
+        autorange_enabled=False,
+    )
+    result = dry_run_output("keysight-33512b", config, channel=1)
+    assert result.load == "1000"
+    assert result.polarity == "inverted"
+    assert result.voltage_limit_low == -1.0
+    assert result.voltage_limit_high == 1.0
+    assert result.voltage_limits_enabled is True
+    assert result.autorange_enabled is False
+    assert result.output_state == "off"
+    assert result.commands[0] == "OUTPut1 OFF"
+    assert result.commands[-1] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in result.commands
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "SOURce1:VOLTage:LIMit:STATe OFF",
+        "OUTPut1:LOAD 1000",
+        "OUTPut1:POLarity INVerted",
+        "SOURce1:VOLTage:LIMit:LOW -1",
+        "SOURce1:VOLTage:LIMit:HIGH 1",
+        "SOURce1:VOLTage:RANGe:AUTO OFF",
+        "SOURce1:VOLTage:LIMit:STATe ON",
+        "OUTPut1 OFF",
+    )
+    # Live path shares same ordered plan and guard
+    session = FakeSession(response="Keysight Technologies,33512B,MY00000000,1.00")
+    manager = FakeManager(session)
+    live = configure_output(
+        USB_RESOURCE,
+        config,
+        channel=1,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id="keysight-33512b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+    assert live.load == "1000"
+    assert live.channel == 1
+    assert session.writes == list(result.commands)
+
+
+def test_configure_output_polarity_only_does_not_disable_limits():
+    config = OutputConfig(polarity="inverted")
+    result = dry_run_output("keysight-33512b", config, channel=1)
+    assert result.commands == (
+        "OUTPut1 OFF",
+        "OUTPut1:POLarity INVerted",
+        "OUTPut1 OFF",
+    )
+    assert "VOLTage:LIMit:STATe OFF" not in result.commands
+
+
+def test_configure_output_load_only_and_high_z():
+    highz = dry_run_output("keysight-33512b", OutputConfig(load="high-z"), channel=1)
+    assert highz.commands == ("OUTPut1 OFF", "OUTPut1:LOAD INF", "OUTPut1 OFF")
+    assert highz.load == "high-z"
+    assert "VOLTage:LIMit:STATe" not in highz.commands
+    numeric = dry_run_output("keysight-33512b", OutputConfig(load=1000), channel=2)
+    assert numeric.commands == ("OUTPut2 OFF", "OUTPut2:LOAD 1000", "OUTPut2 OFF")
+
+
+@pytest.mark.parametrize(
+    ("config", "valid"),
+    [
+        (OutputConfig(load=0.5), False),
+        (OutputConfig(load=10001), False),
+        (OutputConfig(voltage_limit_low=1), False),
+        (OutputConfig(voltage_limit_high=1), False),
+        (OutputConfig(), False),
+        (OutputConfig(load=1000, voltage_limits_enabled=True), False),
+        (OutputConfig(load=1000, voltage_limit_low=-1, voltage_limit_high=1), False),
+        (OutputConfig(voltage_limit_low=1, voltage_limit_high=1), False),
+        (OutputConfig(voltage_limit_low=1, voltage_limit_high=1.0005), False),
+        (OutputConfig(voltage_limit_low=0, voltage_limit_high=0.000999), False),
+        (OutputConfig(load=True), False),
+        (OutputConfig(voltage_limit_low=0, voltage_limit_high=0.001), True),
+        (OutputConfig(voltage_limit_low=1, voltage_limit_high=1.001), True),
+        (OutputConfig(voltage_limit_low=-1, voltage_limit_high=1), True),
+        (OutputConfig(load=1000, voltage_limit_low=-1, voltage_limit_high=1, voltage_limits_enabled=True), True),
+        (OutputConfig(polarity="inverted"), True),
+        (OutputConfig(autorange_enabled=True), True),
+    ],
+)
+def test_configure_output_validation_boundaries(config, valid):
+    if valid:
+        result = dry_run_output("keysight-33512b", config, channel=1)
+        assert result is not None
+    else:
+        with pytest.raises(WaveformParameterError):
+            dry_run_output("keysight-33512b", config, channel=1)
+
+
+def test_configure_output_independent_channel_guard_fails_before_write():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={
+            "SOURce1:FREQuency:COUPle:STATe?": "1",
+        },
+    )
+    manager = FakeManager(session)
+    config = OutputConfig(polarity="inverted")
+    with pytest.raises(WaveformVerificationError):
+        configure_output(
+            USB_RESOURCE,
+            config,
+            channel=1,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+    assert session.writes == []

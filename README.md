@@ -1316,10 +1316,11 @@ load while voltage limits are enabled requires explicitly disabling or
 reconfiguring the limits in the same request (`--load` together with
 `--voltage-limits` and, when enabling, a complete low/high pair).
 All numeric loads and voltage limits are validated as finite numbers;
-`low < high` is required and `load` must be `high-z` or between 1 and
-10000 inclusive; `load=True` is rejected. Partial polarity or autorange
-changes do not alter voltage limits. Result types describe the canonical
-requested/applied partial configuration, not a full instrument readback.
+voltage-limit high must be at least 0.001 V above low and `load` must be
+`high-z` or between 1 and 10000 inclusive; `load=True` is rejected.
+Partial polarity or autorange changes do not alter voltage limits. Result
+types describe the canonical requested/applied partial configuration, not a
+full instrument readback.
 
 ## Safety Boundary
 

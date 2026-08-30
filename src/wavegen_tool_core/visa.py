@@ -7392,9 +7392,15 @@ def _prepare_output(config: OutputConfig) -> tuple[
         normalized_high = _normalize_finite_number(
             config.voltage_limit_high, "voltage limit high", waveform="Output"
         )
-        if not normalized_low < normalized_high:
+        gap = normalized_high - normalized_low
+        if gap < 0.001 and not math.isclose(
+            gap,
+            0.001,
+            rel_tol=0.0,
+            abs_tol=1e-12,
+        ):
             raise WaveformParameterError(
-                "Output voltage limit low must be less than high."
+                "Output voltage limit high must be at least 0.001 V above low."
             )
     if has_limits_enabled:
         normalized_limits_enabled = _normalize_output_bool(

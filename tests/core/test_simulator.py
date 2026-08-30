@@ -11,6 +11,7 @@ from wavegen_tool_core import (
     FMConfig,
     FSKConfig,
     GatedBurstConfig,
+    OutputConfig,
     PMConfig,
     PWMConfig,
     SIMULATED_33521B_IDN,
@@ -21,6 +22,7 @@ from wavegen_tool_core import (
     SumConfig,
     configure_dc,
     configure_noise,
+    configure_output,
     configure_prbs,
     configure_pulse,
     configure_ramp,
@@ -1321,3 +1323,41 @@ def test_simulator_error_queue_fifo() -> None:
     manager_d = SimulatedResourceManager(state)
     session_d = manager_d.open_resource(SIMULATED_33521B_RESOURCE)
     assert session_d.query("SYSTem:ERRor?") == '+123,"Test after close"'
+
+
+def test_configure_output_ch2_isolation():
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+
+    result = configure_output(
+        factory.resource_name,
+        OutputConfig(
+            load=1000,
+            polarity="inverted",
+            voltage_limit_low=-1,
+            voltage_limit_high=1,
+            voltage_limits_enabled=True,
+            autorange_enabled=False,
+        ),
+        channel=2,
+        resource_manager_factory=factory,
+    )
+
+    assert result.channel == 2
+    assert result.load == "1000"
+    assert state.ch2.output_load == "1000"
+    assert state.ch2.output_polarity == "inverted"
+    assert state.ch2.voltage_limit_low == -1.0
+    assert state.ch2.voltage_limit_high == 1.0
+    assert state.ch2.voltage_limit_enabled is True
+    assert state.ch2.autorange_enabled is False
+    assert state.ch2.output_enabled is False
+    # CH1 unchanged
+    assert state.ch1.output_load == "50"
+    assert state.ch1.output_polarity == "normal"
+    assert state.ch1.voltage_limit_enabled is False
+    # Commands use CH2
+    assert any("OUTPut2" in c for c in result.commands)
+    assert any("SOURce2" in c for c in result.commands)
+    assert all("OUTPut1" not in c for c in result.commands)
+    assert all("SOURce1" not in c for c in result.commands)

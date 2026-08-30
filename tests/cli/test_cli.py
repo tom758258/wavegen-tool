@@ -4293,3 +4293,89 @@ def test_pyvisa_bt_json_error_is_one_object(monkeypatch, capsys):
     assert payload["error"].startswith("unsupported_connection_scope:")
     assert captured.out.count("\n") == 1
     assert captured.err == ""
+
+
+def test_configure_output_dry_run_json_happy_path(capsys):
+    exit_code = main(
+        [
+            "configure-output",
+            "--dry-run",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--load",
+            "1000",
+            "--polarity",
+            "inverted",
+            "--voltage-limit-low",
+            "-1",
+            "--voltage-limit-high",
+            "1",
+            "--voltage-limits",
+            "on",
+            "--autorange",
+            "off",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["load"] == "1000"
+    assert payload["polarity"] == "inverted"
+    assert payload["voltage_limit_low"] == -1.0
+    assert payload["voltage_limit_high"] == 1.0
+    assert payload["voltage_limits_enabled"] is True
+    assert payload["autorange_enabled"] is False
+    assert payload["output_state"] == "off"
+    assert payload["channel"] == 2
+    assert payload["commands"][0] == "OUTPut2 OFF"
+    assert payload["commands"][-1] == "OUTPut2 OFF"
+    assert "OUTPut2 ON" not in payload["commands"]
+
+
+def test_configure_output_dry_run_rejects_less_than_1mv_gap(monkeypatch, capsys):
+    manager = FakeManager()
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "configure-output",
+            "--dry-run",
+            "--model",
+            "keysight-33512b",
+            "--voltage-limit-low",
+            "0",
+            "--voltage-limit-high",
+            "0.0005",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.CLI_USAGE
+    assert manager.opened_resources == []
+    assert "at least 0.001" in payload["error"]
+
+
+def test_configure_output_simulator_high_z_representative(capsys):
+    exit_code = main(
+        [
+            "configure-output",
+            "--simulate",
+            "--model",
+            "keysight-33512b",
+            "--channel",
+            "2",
+            "--load",
+            "high-z",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert payload["load"] == "high-z"
+    assert payload["channel"] == 2
+    assert payload["output_state"] == "off"
