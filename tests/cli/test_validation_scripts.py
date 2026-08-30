@@ -189,6 +189,8 @@ def test_live_plan_only_is_hardware_free_and_capability_driven(
     assert "Connection: usb" in result.stdout
     assert "Backend: system" in result.stdout
     assert "Resource: <redacted-resource>" in result.stdout
+    assert "The runner commands each exercised channel OFF after validation." in result.stdout
+    assert "Best-effort OFF cleanup is attempted after failures." in result.stdout
     assert f"Channels: {', '.join(map(str, expected_channels))}" in result.stdout
     assert "Validation cases:" in result.stdout
     assert "identity" in result.stdout
@@ -253,7 +255,6 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
     assert "Target: keysight-33512b" in result.stdout
     assert "Connection: usb" in result.stdout
     assert "Backend: system" in result.stdout
-    assert "Resource: <redacted-resource>" in result.stdout
     assert "Channels: 1, 2" in result.stdout
     assert "Validation cases:" in result.stdout
     assert "ch1/sine-config" in result.stdout
@@ -261,6 +262,10 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
     assert "Frequency: 1000 Hz" in result.stdout
     assert "Amplitude: 0.1 Vpp" in result.stdout
     assert "Output ON will not be used" in result.stdout
+    assert "Resource: " + USB_RESOURCE in result.stdout
+    assert "Resource: <redacted-resource>" not in result.stdout
+    assert "The runner commands each exercised channel OFF after validation." in result.stdout
+    assert "Best-effort OFF cleanup is attempted after failures." in result.stdout
     assert "No reset, preset or recall is performed" in result.stdout
     assert "Coupling or tracking is not changed automatically" in result.stdout
     assert "Result: CANCELLED" in result.stdout
@@ -280,6 +285,9 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
     assert not (run_root / "private" / "identity").exists()
 
     script_text = LIVE_SCRIPT.read_text(encoding="utf-8")
+    assert 'Write-Host "Resource: $resourceDisplay"' in script_text
+    assert 'Write-Host "  - The runner commands each exercised channel OFF after validation."' in script_text
+    assert 'Write-Host "  - Best-effort OFF cleanup is attempted after failures."' in script_text
     assert 'Read-Host "Type YES to begin Live validation, or Ctrl+C to cancel"' in script_text
     assert '$confirmation -cne "YES"' in script_text
 

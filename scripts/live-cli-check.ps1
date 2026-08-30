@@ -431,11 +431,15 @@ $plannedCases = @(Get-PlannedLiveCases -Channels $channels)
 $report.channel_count = $channelCount
 $report.channels_planned = $channels
 $report.planned_cases = $plannedCases
-$resourceDisplay = Protect-ArtifactText `
-    -Text $Resource `
-    -Resource $Resource `
-    -RepoRoot $repoRoot `
-    -PrivateRoot $run.Private
+$resourceDisplay = if ($PlanOnly) {
+    Protect-ArtifactText `
+        -Text $Resource `
+        -Resource $Resource `
+        -RepoRoot $repoRoot `
+        -PrivateRoot $run.Private
+} else {
+    $Resource
+}
 
 Write-Host ""
 Write-Host "Wavegen Tool Live CLI Validation"
@@ -462,7 +466,8 @@ Write-Host ""
 Write-Host "Safety:"
 Write-Host "  - Output ON will not be used."
 Write-Host "  - Each exercised channel is forced OFF before configuration."
-Write-Host "  - Each exercised channel remains OFF after validation."
+Write-Host "  - The runner commands each exercised channel OFF after validation."
+Write-Host "  - Best-effort OFF cleanup is attempted after failures."
 Write-Host "  - No resource scanning or guessing is performed."
 Write-Host "  - No reset, preset or recall is performed."
 Write-Host "  - Coupling or tracking is not changed automatically."
