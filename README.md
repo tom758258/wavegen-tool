@@ -54,9 +54,10 @@ Keysight or Agilent 33512B and 33521B instruments.
 - Human-readable and JSON CLI output
 
 The identify command rejects GPIB and all other transports outside its explicit
-scope. Live identification and control support is limited to the 33512B and
-33521B. The registered 33510B profile is available only to hardware-free dry-run
-and standalone configure simulation.
+scope. Product Live identification and control support is limited to the 33512B
+and 33521B. The registered 33510B profile is available to hardware-free dry-run
+and standalone configure simulation; the validation runner described below also
+has an explicit candidate-only route that does not promote Product Live support.
 
 For Live identity resolution, these are the only supported manufacturer/model
 pairs. Matching ignores case and ordinary whitespace differences but does not
@@ -356,6 +357,29 @@ uv sync --all-extras --locked --link-mode=copy
 
 The repository contains one `wavegen-tool` distribution with Core, CLI, and
 reserved WebUI import packages.
+
+## CLI Validation Scripts
+
+Run the hardware-free preflight for every registered validation target:
+
+```powershell
+.\scripts\preflight-cli.ps1 -Target all
+```
+
+Review a Live plan without opening VISA or touching hardware:
+
+```powershell
+.\scripts\live-cli-check.ps1 `
+  -Target keysight-33512b `
+  -Connection usb `
+  -Resource "USB0::...::INSTR" `
+  -PlanOnly
+```
+
+Remove `-PlanOnly` to run the representative Live check. The resource is always
+explicit, channels come from Core capabilities, and every exercised output
+remains off. Each run creates private and sanitized shareable artifacts under
+`.tmp_tests`; a validation PASS does not promote Product Live support.
 
 ## Stateful Simulator
 

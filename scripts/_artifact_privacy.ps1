@@ -181,6 +181,22 @@ function ConvertTo-ShareableArtifactValue {
         }
         return $result
     }
+    if (
+        $Value -is [bool] -or
+        $Value -is [byte] -or
+        $Value -is [sbyte] -or
+        $Value -is [int16] -or
+        $Value -is [uint16] -or
+        $Value -is [int32] -or
+        $Value -is [uint32] -or
+        $Value -is [int64] -or
+        $Value -is [uint64] -or
+        $Value -is [single] -or
+        $Value -is [double] -or
+        $Value -is [decimal]
+    ) {
+        return $Value
+    }
     if ($Value -is [pscustomobject]) {
         $result = [ordered]@{}
         foreach ($property in $Value.PSObject.Properties) {

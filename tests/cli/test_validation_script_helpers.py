@@ -304,6 +304,30 @@ def test_structured_json_is_sanitized_and_safe_metadata_is_retained(
     assert resource not in (shareable_root / "summary.md").read_text(encoding="utf-8")
 
 
+def test_shareable_json_retains_numeric_array_values(artifact_root: Path) -> None:
+    private_root = artifact_root / "private"
+    shareable_root = artifact_root / "shareable"
+    private_root.mkdir()
+    shareable_root.mkdir()
+    summary_path = private_root / "summary.md"
+    summary_path.write_text("Synthetic summary", encoding="utf-8")
+    script = (
+        _dot_source(HELPERS_PATH, PRIVACY_PATH)
+        + "$report = [pscustomobject][ordered]@{ channels = @(1, 2) }; "
+        + "$null = New-ShareableArtifactSet -PrivateReport $report "
+        + f"-PrivateSummaryPath {_ps_quote(summary_path)} "
+        + f"-RunRoot {_ps_quote(artifact_root)} "
+        + f"-PrivateRoot {_ps_quote(private_root)} "
+        + f"-ShareableRoot {_ps_quote(shareable_root)} "
+        + f"-RepoRoot {_ps_quote(REPO_ROOT)}"
+    )
+
+    _run_powershell(script)
+
+    report = json.loads((shareable_root / "report.json").read_text(encoding="utf-8"))
+    assert report["channels"] == [1, 2]
+
+
 def test_malformed_json_does_not_raw_copy_to_shareable(artifact_root: Path) -> None:
     private_root = artifact_root / "private"
     shareable_root = artifact_root / "shareable"
