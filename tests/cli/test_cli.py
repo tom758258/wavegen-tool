@@ -512,6 +512,34 @@ def test_identify_validation_live_accepts_matching_33512b(monkeypatch, capsys):
     assert payload["model_supported"] is True
 
 
+def test_identify_validation_live_accepts_candidate_33510b(monkeypatch, capsys):
+    manager = FakeManager(
+        FakeSession("Keysight Technologies,33510B,MY00000000,1.00")
+    )
+    calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(
+        [
+            "identify",
+            "--resource",
+            USB_RESOURCE,
+            "--validation-allow-pending-live-support",
+            "--model",
+            "keysight-33510b",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == ExitCode.SUCCESS
+    assert calls == ["@ivi"]
+    assert manager.session.queries == ["*IDN?"]
+    assert manager.session.writes == []
+    assert payload["model"] == "33510B"
+    assert payload["canonical_model_id"] == "keysight-33510b"
+    assert payload["model_supported"] is True
+
+
 def test_invalid_backend_human_error_does_not_create_manager(monkeypatch, capsys):
     manager = FakeManager()
     calls = install_fake_manager(monkeypatch, manager)

@@ -137,7 +137,18 @@ def test_validation_policy_accepts_product_supported_33512b_identity():
     assert identity.model_supported is True
 
 
-@pytest.mark.parametrize("model", ["33510B", "33522B"])
+def test_validation_policy_accepts_candidate_33510b_identity():
+    identity = resolve_supported_identity(
+        parse_idn("Keysight Technologies,33510B,MY00000000,1.00"),
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+    )
+
+    assert identity.model == "33510B"
+    assert identity.canonical_model_id == "keysight-33510b"
+    assert identity.model_supported is True
+
+
+@pytest.mark.parametrize("model", ["33522B"])
 def test_validation_policy_rejects_unadmitted_or_unknown_models(model):
     identity = parse_idn(
         f"Keysight Technologies,{model},MY00000000,1.00"
