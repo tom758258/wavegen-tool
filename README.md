@@ -108,6 +108,25 @@ Dry-run and simulator results are not real-instrument validation. Live use
 requires an explicit resource and follows the identity, backend, channel, and
 output-safety rules in the [CLI guide](docs/cli/README.md).
 
+## Internal PWM
+
+`configure-pulse` supports optional PWM with Internal source and a fixed Sine
+modulating waveform. Supply `--pwm-frequency` (Hz) and `--pwm-deviation-s`
+(pulse-width deviation in seconds) together; omit both to leave PWM disabled.
+AM and PWM are mutually exclusive. Configuration leaves the selected output off.
+
+```powershell
+uv run wavegen-tool configure-pulse `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000 `
+  --pulse-width-s 0.0001 `
+  --amplitude-vpp 1 `
+  --edge-time-s 0.00000005 `
+  --pwm-frequency 5 `
+  --pwm-deviation-s 0.00002
+```
+
 ## Documentation
 
 - [Core overview](docs/core/README.md)
