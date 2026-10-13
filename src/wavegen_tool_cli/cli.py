@@ -1687,6 +1687,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="system",
         help="VISA backend name validated by Core (default: system).",
     )
+    _add_validation_support_policy_argument(trigger_parser)
     trigger_parser.add_argument(
         "--model",
         choices=_REGISTERED_MODEL_IDS,
@@ -1932,8 +1933,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status",
         "read-errors",
         "output",
+        "trigger",
     }
-    standalone_simulator_model_commands = {"status", "output"}
+    standalone_simulator_model_commands = {"status", "output", "trigger"}
     if (
         args.command in waveform_commands
         and args.dry_run
@@ -1948,8 +1950,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.command == "trigger"
         and not args.simulate
         and args.model is not None
+        and not args.validation_allow_pending_live_support
     ):
-        parser.error("--model requires --simulate")
+        parser.error("--model requires --simulate or --validation-allow-pending-live-support")
     if args.command in validation_only_live_commands:
         if args.simulate and (
             args.validation_allow_pending_live_support
@@ -3499,6 +3502,7 @@ def _run_trigger(args: argparse.Namespace) -> int:
         lambda: send_bus_trigger(
             resource,
             args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
     )

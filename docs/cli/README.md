@@ -650,13 +650,28 @@ These scripts are contributor tools, not normal requirements for every pull
 request. See [Contributing](../CONTRIBUTING.md) for evidence acceptance and
 privacy policy.
 
+`smoke` preserves the representative per-channel Sine sanity check;
+**smoke PASS != all implemented features validated**. `full` uses the shared
+canonical inventory to validate the currently implemented Direct CLI Live
+feature families, with primary CH1 coverage and only necessary CH2 parity.
+
+Full requires Windows PowerShell, the project `.venv/Scripts/python.exe`,
+`-Connection usb`, `-Backend system`, and an explicit resource whose detected
+identity exactly matches `-Target`. Add `-Suite full` to each command below for
+Full admission. Preflight Full, PlanOnly Full, and Real Full must all pass, with
+all required cases PASS, successful cleanup, outputs confirmed safe OFF, a clean
+final error queue, and successfully generated shareable evidence. This qualifies
+as formal admission evidence for that exact model and revision in the reference
+environment; scripts never promote models. 33510B remains validation-pending.
+See [the full inventory and acceptance rules](../CONTRIBUTING.md#real-live).
+
 ### Hardware-free Preflight
 
 ```powershell
 .\scripts\preflight-cli.ps1 -Target all
 ```
 
-`-Target` accepts `all` or one registered model ID. `-Python` and `-OutputRoot`
+`-Suite` accepts `smoke` (default) or `full`. `-Target` accepts `all` or one registered model ID. `-Python` and `-OutputRoot`
 are optional: Python defaults to `.\.venv\Scripts\python.exe` and the output
 root defaults to `.tmp_tests\cli_preflight`. Preflight runs capability,
 dry-run, and simulator checks without a resource or hardware I/O.
@@ -680,6 +695,7 @@ The live runner parameters are:
 
 | Parameter | Behavior |
 | --- | --- |
+| `-Suite` | `smoke` (default) or `full` |
 | `-Target` | Required exact model ID; `all` is rejected |
 | `-Connection` | Required `usb` or `tcpip`, matching the resource prefix |
 | `-Resource` | Required exact operator-supplied resource |
@@ -694,7 +710,8 @@ Remove `-PlanOnly` only when explicit hardware validation is required. Before
 any I/O, the runner prints the exact target, connection, backend, resource,
 channels, cases, representative waveform, and safety plan. Redirected input is
 rejected and only exact uppercase `YES` authorizes the run. The runner does not
-scan, guess, or auto-select a resource and never enables output.
+scan, guess, or auto-select a resource. Smoke never enables output; Full briefly
+enables it only in dedicated output-control cases.
 
 After initial parameter admission, a run creates separate `private/` and
 `shareable/` artifacts. Invalid target, connection, or resource admission exits

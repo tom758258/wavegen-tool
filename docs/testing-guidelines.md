@@ -111,6 +111,32 @@ not use `*RST`. Do not make tests depend on a private lab resource, and never
 commit the real resource, serial, raw IDN, private address, hostname, or local
 path.
 
+## Validation Suite Contracts
+
+Both CLI runners default to `-Suite smoke`; the only other suite is `full`.
+Smoke remains a representative Sine sanity check and never enables output:
+`smoke PASS != all implemented features validated`.
+
+Full preflight and PlanOnly share the Real Full canonical inventory, but remain
+hardware-free (`hardware_touched=false`, `visa_io_performed=false`). Test the
+explicit feature-family set, capability-driven channels, limited CH2 parity,
+reference-environment rejection, privacy, and representative failure paths.
+Do not duplicate waveform parameter boundary permutations in runner tests.
+
+Admission evidence requires preflight Full PASS + PlanOnly Full PASS + Real
+Full PASS, all required cases PASS, cleanup PASS, outputs safe OFF, a clean
+bounded final error queue, and shareable evidence PASS. This covers the exact
+model and revision's implemented Direct CLI Product Live scope only under
+Windows PowerShell, project Python, explicit USB resource, and system VISA.
+Required FAIL/N/A, missing cases, cleanup errors, unconfirmed OFF, dirty or
+unbounded final queue, and shareable generation failure must fail the gate.
+Only dedicated output-control cases may enable output; inject a failure after
+ON and verify best-effort OFF. Keep the List-to-List-to-CW transition intact.
+
+Full PASS is eligible evidence for a separate Product Live policy decision,
+never automatic promotion. 33510B stays validation-pending until an explicit
+Core policy change. Use the existing private/shareable evidence boundary.
+
 ## Test Output Locations
 
 Run pytest from the repository root. Put intentional test and validation

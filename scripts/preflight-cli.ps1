@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("smoke", "full")][string]$Suite = "smoke",
     [string]$Target = "all",
     [string]$Python = ".\.venv\Scripts\python.exe",
     [string]$OutputRoot = ".tmp_tests\cli_preflight"
@@ -114,6 +115,7 @@ function Write-PrivateSummary {
         "# CLI Preflight Summary",
         "",
         "- Result: $($Report.status)",
+        "- Suite: $($Report.suite)",
         "- Validation mode: $($Report.validation_mode)",
         "- Target selection: $($Report.target)",
         "- Hardware touched: false",
@@ -133,6 +135,9 @@ function Write-PrivateSummary {
 
 try {
     $targets = @(Resolve-ValidationTargets -Target $Target)
+    if ($Suite -eq 'full' -and (Get-FullPath -Path $Python -BaseRoot $repoRoot) -ine (Join-Path $repoRoot '.venv\Scripts\python.exe')) {
+        throw 'Full requires the project Python environment (.venv/Scripts/python.exe).'
+    }
     $run = New-ValidationRunDirectory -RepoRoot $repoRoot -BaseRoot $OutputRoot
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
@@ -232,7 +237,39 @@ foreach ($targetProfile in $targets) {
         continue
     }
 
-    foreach ($channel in 1..$channelCount) {
+    if ($Suite -eq 'full') {
+        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount))) {
+            if ($recipe.channel -notin $channelsTested) { [void]$channelsTested.Add($recipe.channel) }
+            $stepIndex = 0
+            foreach ($step in $recipe.steps) {
+                $stepIndex += 1
+                $command = $step.arguments[0]
+                $modes = if ($command.StartsWith('configure-')) { @('dry-run', 'simulate') } else { @('simulate') }
+                foreach ($mode in $modes) {
+                    $name = "${modelId}/$($recipe.name)/step${stepIndex}-$mode"
+                    $reasons = @()
+                    $invocation = $null
+                    try {
+                        $args = @($step.arguments) + @("--$mode", '--model', $modelId, '--json')
+                        if ($command -ne 'trigger') { $args += @('--channel', [string]$recipe.channel) }
+                        $invocation = Invoke-WavegenJson -Name $name -CliArguments $args -ArtifactDirectory (Join-Path $targetDirectory (New-SafeCaseName $name))
+                        if ($invocation.Process.exit_code -ne 0 -or $null -ne $invocation.ParseError) { throw 'Command or JSON parsing failed; see private command diagnostics.' }
+                        $payload = $invocation.Payload
+                        if ($payload.success -ne $true -or $payload.action -cne $command -or $payload.mode -cne $mode) { throw 'Unexpected command result.' }
+                        if ($command -ne 'trigger' -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
+                        if ($mode -eq 'dry-run') {
+                            if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or @($payload.commands).Count -eq 0) { throw 'Invalid hardware-free plan.' }
+                        } elseif ($payload.simulated -ne $true -or $payload.model -cne $capabilityModel) { throw 'Unexpected simulator identity or mode.' }
+                        if ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') { throw 'Configuration did not leave output off.' }
+                    } catch { $reasons += $_.Exception.Message }
+                    Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $(if ($null -ne $invocation) { $invocation.Process } else { $null })
+                }
+            }
+        }
+    }
+
+    $smokeChannels = if ($Suite -eq 'smoke') { @(1..$channelCount) } else { @() }
+    foreach ($channel in $smokeChannels) {
         [void]$channelsTested.Add($channel)
         $commonArguments = @(
             "--model", $modelId,
@@ -329,10 +366,11 @@ foreach ($targetProfile in $targets) {
 }
 
 $summaryCounts = Get-SummaryCounts -Cases $cases
-$status = if ($summaryCounts.failed -eq 0) { "PASS" } else { "FAIL" }
+$status = if ($summaryCounts.failed -eq 0 -and ($Suite -ne "full" -or $summaryCounts.not_applicable -eq 0)) { "PASS" } else { "FAIL" }
 $privateReportPath = Join-Path $run.Private "report.json"
 $privateSummaryPath = Join-Path $run.Private "summary.md"
 $report = [pscustomobject][ordered]@{
+    suite = $Suite
     schema_version = 1
     kind = "cli-preflight"
     status = $status

@@ -96,6 +96,7 @@ The existing parameters are:
 
 | Parameter | Behavior |
 | --- | --- |
+| `-Suite` | `smoke` (default) or `full` |
 | `-Target` | `all` by default, or one of `keysight-33510b`, `keysight-33512b`, `keysight-33521b` |
 | `-Python` | Python executable; defaults to `.\.venv\Scripts\python.exe` |
 | `-OutputRoot` | Artifact root; defaults to `.tmp_tests\cli_preflight` |
@@ -156,12 +157,68 @@ The runner never scans, guesses, infers, or auto-selects a resource. Resource
 discovery is a separate user-invoked Direct CLI diagnostic and is not part of
 contributor validation.
 
-The current live runner exercises exact identity, a baseline error drain, and
-representative per-channel sine configuration/readback bracketed by output-off
-cases, followed by a required final error queue. It never turns output on. A
-passing report proves only the exact target, connection, backend, revision, and
-cases actually exercised. It does not prove every waveform, modulation, burst,
-or sweep feature.
+Both runners accept `-Suite smoke|full`, defaulting to `smoke`. Smoke is a
+representative CLI Live sanity check: exact identity, stale-error drain,
+capability-driven per-channel Sine configuration/readback, output OFF before
+and after each channel, and a clean final error queue. Smoke never uses Output
+ON. **smoke PASS != all implemented features validated**.
+
+Full admission is limited to Windows PowerShell, the project's
+`.venv/Scripts/python.exe`, an explicit operator-supplied USB resource, and
+`-Backend system`. Other connection/backend combinations fail closed for Full;
+Smoke retains its existing connection/backend behavior. Detected `*IDN?` must
+exactly match `-Target`. Neither suite scans, guesses, resets, recalls a setup,
+or automatically changes coupling/tracking.
+
+Full uses one shared canonical inventory for preflight, PlanOnly, and Real
+Live. CH1 covers all eight static waveforms; AM (normal and DSSC), FM, PM, FSK,
+BPSK, PWM, Sum; Immediate/Bus/Timer/External Counted Burst and Gated Burst;
+Sine Linear/Logarithmic/Bus/Timer and Square/Ramp/Triangle sweeps; the consecutive
+Sine -> Square -> Ramp -> Triangle List transition and Sine CW recovery;
+Bus-triggered List with public `trigger`; output configuration and dedicated
+output control. Bus Burst and Bus Sweep also execute public `trigger`.
+
+Channel count comes from Core capabilities. Dual-channel models add only CH2
+status, Sine, AM, Immediate Counted Burst, Sine Sweep, the List transition,
+output configuration, and output control. Single-channel models never plan CH2.
+The dedicated output-control case configures Sine at 1 kHz, 0.1 Vpp, 0 V offset,
+and a 50-ohm load setting, confirms OFF, briefly enables ON and confirms it,
+then disables output and confirms OFF. No other case enables output.
+
+Each Full case records command success, available public status readback,
+bounded case-local error-queue diagnostics, and selected-channel OFF cleanup.
+Modulation/Burst/Sweep/List details not exposed by public status are admitted
+through CLI success, instrument acceptance, clean case errors, and safe
+cleanup; this is not a measurement of analog performance or external triggering.
+External/Gated cases validate configuration without an external signal.
+Any required FAIL, N/A, missing result, cleanup failure, unconfirmed OFF, dirty
+final queue, failure to reach code 0 within bounded reads, or shareable
+artifact failure makes Full fail. Failures attempt best-effort OFF.
+
+Use `-Suite full` consistently for the admission sequence:
+
+```text
+preflight full PASS
++ PlanOnly full PASS
++ Real Live full PASS
++ all required cases PASS
++ cleanup PASS
++ outputs safe OFF
++ final error queue clean
++ shareable evidence PASS
+```
+
+Together these constitute formal admission evidence for the exact model at
+that revision, covering the currently implemented Direct CLI Product Live
+feature scope in the reference environment. Preflight and PlanOnly alone are
+not Live evidence. Preflight uses dry-run/simulator recipes without hardware;
+standalone simulator processes do not prove live transitions. PlanOnly lists
+the same intended inventory and explicitly reports `hardware_touched=false`
+and `visa_io_performed=false` without constructing VISA or issuing live SCPI.
+
+Scripts never change Product Live policy. Promotion still requires a separate,
+explicit Core policy change; 33510B remains validation-pending. Evidence stays
+in the existing local `private/` and sanitized `shareable/` artifacts.
 
 ## Artifact Privacy
 
@@ -239,7 +296,8 @@ evidence. Preserve the shareable output from such a run for diagnosis.
 
 ## Product Live Decisions
 
-Passing hardware validation is candidate evidence for the exercised scope:
+Passing Full admission validation provides evidence eligible for a subsequent
+Product Live decision for the exact model and revision:
 
 ```text
 passing validation != automatic Product Live promotion

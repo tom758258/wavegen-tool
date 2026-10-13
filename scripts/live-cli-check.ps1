@@ -1,5 +1,6 @@
 [CmdletBinding()]
 param(
+    [ValidateSet("smoke", "full")][string]$Suite = "smoke",
     [Parameter(Mandatory = $true)]
     [string]$Target,
 
@@ -124,6 +125,9 @@ function Test-CloseNumber {
 function Get-PlannedLiveCases {
     param([Parameter(Mandatory = $true)][int[]]$Channels)
 
+    if ($Suite -eq 'full') {
+        return @('identity', 'baseline-error-drain') + @($Channels | ForEach-Object { "ch$_/initial-safe-off" }) + @((Get-FullValidationInventory -Channels $Channels).name) + @($Channels | ForEach-Object { "ch$_/final-safe-off" }) + @('final-error-queue')
+    }
     $planned = [System.Collections.ArrayList]::new()
     [void]$planned.Add("identity")
     [void]$planned.Add("baseline-error-drain")
@@ -168,6 +172,7 @@ function Write-PrivateSummary {
         "# Live CLI Validation Summary",
         "",
         "- Result: $($Report.status)",
+        "- Suite: $($Report.suite)",
         "- Validation mode: $($Report.validation_mode)",
         "- Expected model: $($Report.expected_model)",
         "- Connection: $($Report.connection)",
@@ -236,6 +241,12 @@ function Add-RemainingChannelCases {
         [Parameter(Mandatory = $true)][string]$Reason
     )
 
+    if ($Suite -eq 'full') {
+        foreach ($recipe in @(Get-FullValidationInventory -Channels $Channels)) {
+            Add-LiveCase -Cases $Cases -Name $recipe.name -Status 'N/A' -FailureReasons $Reason
+        }
+        return
+    }
     foreach ($channel in $Channels) {
         foreach ($suffix in @("output-off-before", "sine-config", "sine-readback", "output-off-after")) {
             Add-LiveCase `
@@ -243,6 +254,116 @@ function Add-RemainingChannelCases {
                 -Name "ch${channel}/${suffix}" `
                 -Status "N/A" `
                 -FailureReasons $Reason
+        }
+    }
+}
+
+function Invoke-FullCommand {
+    param([string]$Name, [string[]]$Arguments, [int]$Channel = 0)
+
+    $args = @($Arguments) + $liveCommon
+    if ($Channel -gt 0) { $args += @('--channel', [string]$Channel) }
+    $invocation = Invoke-WavegenJson -Name $Name -CliArguments $args -ArtifactDirectory (Join-Path $run.Private (New-SafeCaseName $Name))
+    if ($invocation.Process.exit_code -ne 0) { throw "$Name exited with code $($invocation.Process.exit_code); see command diagnostics." }
+    if ($null -ne $invocation.ParseError) { throw "$Name returned invalid JSON." }
+    $payload = $invocation.Payload
+    if ($payload.success -ne $true -or $payload.action -cne $Arguments[0] -or $payload.model -cne $targetCapabilityModel) { throw "$Name returned an unsuccessful or mismatched result." }
+    if ($Channel -gt 0 -and [int]$payload.channel -ne $Channel) { throw "$Name returned a different channel." }
+    return $payload
+}
+
+function Assert-FullReadback {
+    param($Payload, [hashtable]$Expected)
+    foreach ($key in $Expected.Keys) {
+        if ($key -notin $Payload.PSObject.Properties.Name -or $null -eq $Payload.$key) { throw "Missing readback: $key." }
+        $value = $Expected[$key]
+        if ($key -eq 'function') {
+            $aliases = @{ SIN = @('SIN', 'SINUSOID'); SQU = @('SQU', 'SQUARE'); RAMP = @('RAMP'); TRI = @('TRI', 'TRIANGLE'); PULS = @('PULS', 'PULSE'); DC = @('DC'); NOIS = @('NOIS', 'NOISE'); PRBS = @('PRBS') }
+            if ([string]$Payload.$key -cnotin $aliases[$value]) { throw "Unexpected readback: $key." }
+        } elseif ($value -is [string]) {
+            if ([string]$Payload.$key -cne $value) { throw "Unexpected readback: $key." }
+        } elseif (-not (Test-CloseNumber -Actual ([double]$Payload.$key) -Expected ([double]$value) -AbsoluteTolerance 0.000001 -RelativeTolerance 0.0001)) {
+            throw "Readback outside tolerance: $key."
+        }
+    }
+}
+
+function Assert-FullErrorQueue {
+    param([string]$Name)
+    $payload = Invoke-FullCommand -Name $Name -Arguments @('read-errors', '--max-reads', '20')
+    if ($payload.has_errors -ne $false -or $payload.empty_confirmed -ne $true -or $payload.limit_reached -ne $false) {
+        throw "$Name was dirty or did not reach code 0 within bounded reads."
+    }
+}
+
+function Set-FullSafeOff {
+    param([string]$Name, [int]$Channel)
+    $payload = Invoke-FullCommand -Name "$Name-command" -Arguments @('output', '--state', 'off') -Channel $Channel
+    Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+    $payload = Invoke-FullCommand -Name "$Name-status" -Arguments @('status') -Channel $Channel
+    Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+}
+
+function Invoke-FullLiveCases {
+    param([int[]]$Channels, [bool]$CanRun)
+
+    try {
+        foreach ($channel in $Channels) {
+            $name = "ch${channel}/initial-safe-off"
+            $reasons = @()
+            try { Set-FullSafeOff -Name $name -Channel $channel; Assert-FullErrorQueue -Name "$name-errors" }
+            catch { $reasons += $_.Exception.Message; $CanRun = $false }
+            Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
+        }
+        foreach ($recipe in @(Get-FullValidationInventory -Channels $Channels)) {
+            if (-not $CanRun) {
+                Add-LiveCase -Cases $cases -Name $recipe.name -Status 'N/A' -FailureReasons 'A required prerequisite or prior case failed.'
+                continue
+            }
+            $channel = $recipe.channel
+            if ($channel -notin $channelsTested) { [void]$channelsTested.Add($channel) }
+            $reasons = @()
+            try {
+                Set-FullSafeOff -Name "$($recipe.name)/before" -Channel $channel
+                Assert-FullErrorQueue -Name "$($recipe.name)/before-errors"
+                $index = 0
+                foreach ($step in $recipe.steps) {
+                    $index += 1
+                    $name = "$($recipe.name)/step$index"
+                    $command = $step.arguments[0]
+                    if ($command -eq 'output' -and $step.arguments[2] -eq 'on' -and $recipe.family -cne 'output-control') { throw 'Output ON is restricted to the dedicated case.' }
+                    $commandChannel = if ($command -eq 'trigger') { 0 } else { $channel }
+                    $null = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
+                    $expected = @{ output_state = 'off' }
+                    foreach ($key in $step.readback.Keys) { $expected[$key] = $step.readback[$key] }
+                    $payload = Invoke-FullCommand -Name "$name-readback" -Arguments @('status') -Channel $channel
+                    Assert-FullReadback -Payload $payload -Expected $expected
+                    foreach ($other in @($Channels | Where-Object { $_ -ne $channel })) {
+                        $payload = Invoke-FullCommand -Name "$name-other-ch$other" -Arguments @('status') -Channel $other
+                        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+                    }
+                    Assert-FullErrorQueue -Name "$name-errors"
+                }
+            } catch { $reasons += $_.Exception.Message }
+            finally {
+                # Drain even after command/readback failure to retain case-local errors.
+                try { Assert-FullErrorQueue -Name "$($recipe.name)/case-errors" }
+                catch { $reasons += $_.Exception.Message }
+                try { Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel }
+                catch { $reasons += "Cleanup: $($_.Exception.Message)" }
+                try { Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors" }
+                catch { $reasons += $_.Exception.Message }
+            }
+            Add-LiveCase -Cases $cases -Name $recipe.name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
+            if ($reasons.Count) { $CanRun = $false }
+        }
+    } finally {
+        foreach ($channel in $Channels) {
+            $name = "ch${channel}/final-safe-off"
+            $reasons = @()
+            try { Set-FullSafeOff -Name $name -Channel $channel }
+            catch { $reasons += $_.Exception.Message }
+            Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         }
     }
 }
@@ -272,6 +393,12 @@ try {
             $backendName = "system"
         }
     }
+    if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop' -or $connectionName -cne 'usb' -or $backendName -cne 'system')) {
+        throw 'Full requires Windows PowerShell, Connection usb, and Backend system.'
+    }
+    if ($Suite -eq 'full' -and (Get-FullPath -Path $Python -BaseRoot $repoRoot) -ine (Join-Path $repoRoot '.venv\Scripts\python.exe')) {
+        throw 'Full requires the project Python environment (.venv/Scripts/python.exe).'
+    }
     $run = New-ValidationRunDirectory -RepoRoot $repoRoot -BaseRoot $OutputRoot
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
@@ -286,12 +413,14 @@ $targetCapabilityModel = [string]$targetProfile.model
 $privateReportPath = Join-Path $run.Private "report.json"
 $privateSummaryPath = Join-Path $run.Private "summary.md"
 $report = [pscustomobject][ordered]@{
+    suite = $Suite
     schema_version = 1
     kind = "cli-live-check"
     status = "FAIL"
     target = $expectedModel
     expected_model = $expectedModel
     target_capability_model = $targetCapabilityModel
+    reference_environment = if ($Suite -eq 'full') { 'Windows PowerShell; project Python; explicit USB resource; system VISA' } else { $null }
     connection = $connectionName
     backend = $backendName
     resource = $Resource
@@ -331,6 +460,7 @@ try {
             "-ExecutionPolicy", "Bypass",
             "-File", (Join-Path $PSScriptRoot "preflight-cli.ps1"),
             "-Target", $expectedModel,
+            "-Suite", $Suite,
             "-Python", $Python,
             "-OutputRoot", (Join-Path $OutputRoot "_preflight")
         ) `
@@ -431,6 +561,7 @@ $plannedCases = @(Get-PlannedLiveCases -Channels $channels)
 $report.channel_count = $channelCount
 $report.channels_planned = $channels
 $report.planned_cases = $plannedCases
+if ($Suite -eq "full") { $report | Add-Member -NotePropertyName full_inventory -NotePropertyValue @(Get-FullValidationInventory -Channels $channels) }
 $resourceDisplay = if ($PlanOnly) {
     Protect-ArtifactText `
         -Text $Resource `
@@ -445,6 +576,8 @@ Write-Host ""
 Write-Host "Wavegen Tool Live CLI Validation"
 Write-Host ""
 Write-Host "Target: $expectedModel"
+Write-Host "Suite: $Suite"
+if ($Suite -eq "full") { Write-Host "Reference environment: $($report.reference_environment)" }
 Write-Host "Connection: $connectionName"
 Write-Host "Backend: $backendName"
 Write-Host "Resource: $resourceDisplay"
@@ -464,7 +597,11 @@ Write-Host "  Phase: 0 deg"
 Write-Host "  Load: 50 ohm"
 Write-Host ""
 Write-Host "Safety:"
-Write-Host "  - Output ON will not be used."
+if ($Suite -eq 'full') {
+    Write-Host "  - Only dedicated output-control cases briefly use Output ON in Real Full."
+} else {
+    Write-Host "  - Output ON will not be used."
+}
 Write-Host "  - Each exercised channel is forced OFF before configuration."
 Write-Host "  - The runner commands each exercised channel OFF after validation."
 Write-Host "  - Best-effort OFF cleanup is attempted after failures."
@@ -576,6 +713,13 @@ if ($identityReasons.Count -eq 0) {
         -Process $(if ($null -ne $identityInvocation) { $identityInvocation.Process } else { $null })
     Add-LiveCase -Cases $cases -Name "baseline-error-drain" -Status "N/A" -FailureReasons "Identity did not pass."
     Add-RemainingChannelCases -Cases $cases -Channels $channels -Reason "Identity did not pass."
+    if ($Suite -eq 'full') {
+        foreach ($channel in $channels) {
+            foreach ($stage in @('initial-safe-off', 'final-safe-off')) {
+                Add-LiveCase -Cases $cases -Name "ch${channel}/$stage" -Status 'N/A' -FailureReasons 'Identity did not pass; writes are not admitted.'
+            }
+        }
+    }
     Add-LiveCase -Cases $cases -Name "final-error-queue" -Status "N/A" -FailureReasons "Identity did not pass."
 }
 
@@ -609,11 +753,15 @@ if ($identityPassed) {
             -Status FAIL `
             -FailureReasons @($baselineReasons) `
             -Process $(if ($null -ne $baselineInvocation) { $baselineInvocation.Process } else { $null })
-        Add-RemainingChannelCases -Cases $cases -Channels $channels -Reason "Baseline error drain did not pass."
+        if ($Suite -eq "smoke") { Add-RemainingChannelCases -Cases $cases -Channels $channels -Reason "Baseline error drain did not pass." }
         $stopChannels = $true
     }
 
-    if (-not $stopChannels) {
+    if ($Suite -eq 'full') {
+        try { Invoke-FullLiveCases -Channels $channels -CanRun (-not $stopChannels) }
+        catch { Add-LiveCase -Cases $cases -Name 'full-runner' -Status FAIL -FailureReasons $_.Exception.Message }
+    }
+    if (-not $stopChannels -and $Suite -eq 'smoke') {
         for ($channelIndex = 0; $channelIndex -lt $channels.Count; $channelIndex += 1) {
             $channel = $channels[$channelIndex]
             [void]$channelsTested.Add($channel)
@@ -809,7 +957,9 @@ if ($identityPassed) {
 $report.channels_tested = @($channelsTested)
 $report.cases = @($cases)
 $report.summary_counts = Get-SummaryCounts -Cases $cases
-$report.status = if ($report.summary_counts.failed -eq 0) { "PASS" } else { "FAIL" }
+$report.status = if ($Suite -eq 'full') {
+    if (Test-FullValidationPass -Cases @($cases) -RequiredNames $plannedCases) { 'PASS' } else { 'FAIL' }
+} elseif ($report.summary_counts.failed -eq 0) { 'PASS' } else { 'FAIL' }
 $published = Publish-LiveArtifacts `
     -Report $report `
     -Run $run `

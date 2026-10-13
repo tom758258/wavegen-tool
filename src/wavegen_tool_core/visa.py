@@ -7119,6 +7119,8 @@ def send_bus_trigger(
     resource: str,
     backend: str | None = None,
     *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> BusTriggerResult:
     """Send one instrument-wide IEEE-488.2 bus trigger without waiting."""
@@ -7133,6 +7135,8 @@ def send_bus_trigger(
         resource,
         backend,
         write_trigger,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
         resource_manager_factory=resource_manager_factory,
     )
     return BusTriggerResult(
@@ -7468,8 +7472,6 @@ def configure_output(
     def prepare_configuration(
         capabilities: WavegenCapabilities,
     ) -> tuple[tuple[object, ...], tuple[str, ...]]:
-        # Validate channel against capabilities before building plan
-        _validate_channel(channel, capabilities, None)
         values = _prepare_output(config)
         return values[:-1], values[-1]
 

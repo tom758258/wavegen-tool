@@ -84,6 +84,7 @@ def test_preflight_all_uses_capability_driven_channel_coverage(
     target_results = {
         item["expected_model"]: item for item in report["target_results"]
     }
+    assert report["suite"] == "smoke"
     assert report["status"] == "PASS"
     assert report["targets"] == [
         "keysight-33510b",
@@ -177,6 +178,7 @@ def test_live_plan_only_is_hardware_free_and_capability_driven(
     assert result.returncode == 0, result.stdout + result.stderr
     run_root = _only_run(artifact_root)
     report = _read_report(run_root)
+    assert report["suite"] == "smoke"
     assert report["status"] == "PASS"
     assert report["validation_mode"] == "live-plan-only"
     assert report["hardware_touched"] is False
@@ -343,3 +345,256 @@ def test_live_usage_failures_are_rejected_before_hardware(
     assert result.returncode == 2
     assert expected_error in result.stderr
     assert list(artifact_root.iterdir()) == []
+
+
+@pytest.mark.parametrize("script", [PREFLIGHT_SCRIPT, LIVE_SCRIPT])
+def test_invalid_suite_fails_before_artifacts(script, artifact_root):
+    arguments = ["-Target", "keysight-33521b", "-Suite", "unknown"]
+    if script == LIVE_SCRIPT:
+        arguments += ["-Connection", "usb", "-Resource", USB_RESOURCE, "-PlanOnly"]
+    result = _run_script(script, artifact_root, *arguments)
+    assert result.returncode != 0
+    assert not list(artifact_root.iterdir())
+
+
+def test_explicit_smoke(artifact_root):
+    result = _run_script(
+        LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b", "-Suite", "smoke",
+        "-Connection", "usb", "-Resource", USB_RESOURCE, "-PlanOnly",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = _read_report(_only_run(artifact_root))
+    assert report["suite"] == "smoke"
+    assert "ch1/sine-config" in report["planned_cases"]
+    assert "Output ON will not be used" in result.stdout
+
+
+@pytest.mark.parametrize("model,channels", [
+    ("33521b", [1]), ("33512b", [1, 2]), ("33510b", [1, 2]),
+])
+def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, model, channels):
+    # Any unexpected attempt to construct VISA fails the subprocess and leaves a marker.
+    guard = artifact_root / "guard"
+    guard.mkdir()
+    marker = guard / "visa-attempt"
+    (guard / "sitecustomize.py").write_text(
+        "import pyvisa\nfrom pathlib import Path\n"
+        "def forbidden(*args, **kwargs):\n"
+        f"    Path({str(marker)!r}).touch()\n"
+        "    raise AssertionError('VISA forbidden in PlanOnly')\n"
+        "pyvisa.ResourceManager = forbidden\n", encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(guard))
+    result = _run_script(
+        LIVE_SCRIPT, artifact_root, "-Target", f"keysight-{model}", "-Suite", "full",
+        "-Connection", "usb", "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists()
+    run = _only_run(artifact_root)
+    report = _read_report(run)
+    assert report["suite"] == "full"
+    assert report["status"] == "PASS"
+    assert report["expected_model"] == f"keysight-{model}"
+    assert report["hardware_touched"] is False
+    assert report["visa_io_performed"] is False
+    assert report["channels_planned"] == channels
+    assert report["channels_tested"] == []
+    assert "Windows PowerShell" in report["reference_environment"]
+    assert "Only dedicated output-control cases" in result.stdout
+    inventory = report["full_inventory"]
+    expected_families = {
+        "static", "modulation", "burst", "sweep", "list-sweep",
+        "output-config", "output-control", "bus-trigger",
+    }
+    assert {case["family"] for case in inventory} - {"inspection"} == expected_families
+    assert {case["channel"] for case in inventory} == set(channels)
+    assert all(case["required"] for case in inventory)
+    assert {case["name"] for case in inventory} <= set(report["planned_cases"])
+    secondary = [case for case in inventory if case["channel"] == 2]
+    assert len(secondary) == (8 if 2 in channels else 0)
+    assert len(secondary) < len([case for case in inventory if case["channel"] == 1])
+    transition = next(case for case in inventory if case["name"] == "ch1/list-transition-cw-recovery")
+    assert [step["arguments"][0] for step in transition["steps"]] == [
+        "configure-sine-list-sweep", "configure-square-list-sweep",
+        "configure-ramp-list-sweep", "configure-triangle-list-sweep", "configure-sine",
+    ]
+    for case in inventory:
+        for step in case["steps"]:
+            if step["arguments"][:3] == ["output", "--state", "on"]:
+                assert case["family"] == "output-control"
+    text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
+    for private in (USB_RESOURCE, "SYNTHETIC123", str(REPO_ROOT), str(run)):
+        assert private not in text
+    assert USB_RESOURCE not in result.stdout
+    assert _read_report(run, "shareable")["promotes_live_support"] is False
+    preflight = next((artifact_root / "_preflight").glob("run_*/private/report.json"))
+    readiness = json.loads(preflight.read_text(encoding="utf-8"))
+    assert readiness["suite"] == "full" and readiness["status"] == "PASS"
+    assert readiness["hardware_touched"] is False
+    assert readiness["visa_io_performed"] is False
+
+
+@pytest.mark.parametrize("connection,backend,resource", [
+    ("tcpip", "system", "TCPIP0::synthetic.invalid::inst0::INSTR"),
+    ("usb", "@py", USB_RESOURCE),
+])
+def test_full_reference_environment_fails_closed(artifact_root, connection, backend, resource):
+    result = _run_script(
+        LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b", "-Suite", "full",
+        "-Connection", connection, "-Backend", backend, "-Resource", resource, "-PlanOnly",
+    )
+    assert result.returncode == 2
+    assert "Full requires" in result.stderr
+    assert not list(artifact_root.iterdir())
+
+
+def _run_powershell_test(artifact_root, body):
+    if POWERSHELL is None:
+        pytest.skip("Windows PowerShell is unavailable")
+    harness = artifact_root / "harness.ps1"
+    harness.write_text(
+        "$ErrorActionPreference = 'Stop'\n"
+        ". ./scripts/_validation_helpers.ps1\n"
+        "$tokens = $null; $errors = $null\n"
+        "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+        "(Join-Path (Get-Location) 'scripts/live-cli-check.ps1'), [ref]$tokens, [ref]$errors)\n"
+        "if ($errors.Count) { throw 'Parse errors' }\n"
+        "foreach ($node in $ast.EndBlock.Statements) {\n"
+        "  if ($node -is [System.Management.Automation.Language.FunctionDefinitionAst]) {\n"
+        "    . ([scriptblock]::Create($node.Extent.Text))\n"
+        "  }\n}\n" + body,
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(harness)],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout.split("RESULT:", 1)[1])
+
+
+@pytest.mark.parametrize("failure", ["none", "command", "cleanup", "case-dirty", "dirty", "limit", "na"])
+def test_full_failure_gate_and_best_effort_off(artifact_root, failure):
+    result = _run_powershell_test(artifact_root, r'''
+$failure = 'FAILURE'
+$Suite = 'full'
+$cases = [System.Collections.ArrayList]::new()
+$channelsTested = [System.Collections.ArrayList]::new()
+$targetCapabilityModel = '33512B'
+$liveCommon = @('--json')
+$run = [pscustomobject]@{ Private = (Get-Location).Path }
+$script:state = 'off'
+$script:offCalls = 0
+$script:onCalls = 0
+$script:onlyOutput = @(Get-FullValidationInventory -Channels @(2) | Where-Object { $_.family -eq 'output-control' })
+function Get-FullValidationInventory { param($Channels); return $script:onlyOutput }
+function Invoke-WavegenJson {
+    param($Name, $CliArguments, $ArtifactDirectory)
+    $command = $CliArguments[0]
+    if ($command -ne 'read-errors' -and '--channel' -in $CliArguments) {
+        $index = [array]::IndexOf($CliArguments, '--channel')
+        if ($CliArguments[$index + 1] -ne '2') { throw 'Wrong channel used!' }
+    }
+    if ($command -eq 'output') {
+        $script:state = $CliArguments[2]
+        if ($script:state -eq 'off') { $script:offCalls++ } else { $script:onCalls++ }
+        if ($failure -eq 'command' -and $script:state -eq 'on') { throw 'Injected failure after enabling output' }
+        if ($failure -eq 'cleanup' -and $Name -like '*cleanup-command') { throw 'Injected cleanup failure' }
+    }
+    $payload = [pscustomobject]@{
+        success = $true; action = $command; model = '33512B'; channel = 2
+        output_state = $script:state; function = 'SIN'; frequency_hz = 1000
+        amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'
+        has_errors = (($failure -eq 'dirty' -and $Name -eq 'final-error-queue') -or ($failure -eq 'case-dirty' -and $Name -like '*step2-errors'))
+        empty_confirmed = -not ($failure -eq 'limit' -and $Name -eq 'final-error-queue')
+        limit_reached = ($failure -eq 'limit' -and $Name -eq 'final-error-queue')
+    }
+    return [pscustomobject]@{ Process = @{ exit_code = 0 }; ParseError = $null; Payload = $payload }
+}
+Invoke-FullLiveCases -Channels @(2) -CanRun ($failure -ne 'na')
+$finalReasons = @()
+try { Assert-FullErrorQueue -Name 'final-error-queue' } catch { $finalReasons += $_.Exception.Message }
+Add-LiveCase -Cases $cases -Name 'final-error-queue' -Status $(if ($finalReasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $finalReasons
+$pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch2/initial-safe-off', 'ch2/output-control', 'ch2/final-safe-off', 'final-error-queue')
+Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $script:offCalls; on_calls = $script:onCalls; cases = @($cases) } | ConvertTo-Json -Depth 10 -Compress))
+'''.replace("FAILURE", failure))
+    assert result["pass"] is (failure == "none")
+    assert result["state"] == "off"
+    assert result["off_calls"] >= 2
+    assert result["on_calls"] == (0 if failure == "na" else 1)
+    statuses = {case["name"]: case["status"] for case in result["cases"]}
+    if failure in {"command", "cleanup", "case-dirty"}:
+        assert statuses["ch2/output-control"] == "FAIL"
+    if failure == "na":
+        assert statuses["ch2/output-control"] == "N/A"
+    if failure in {"dirty", "limit"}:
+        assert statuses["final-error-queue"] == "FAIL"
+
+
+def test_trigger_validation_guard_keeps_pending_model_out_of_product(monkeypatch, capsys):
+    from wavegen_tool_cli.cli import main
+    from wavegen_tool_core import visa
+    from wavegen_tool_core.simulator import Simulated33521BState, SimulatedResourceManager
+
+    writes = []
+    def factory(backend):
+        manager = SimulatedResourceManager(Simulated33521BState(model_id="keysight-33510b"))
+        original_open = manager.open_resource
+        def open_resource(resource):
+            assert resource == USB_RESOURCE
+            session = original_open(manager.state.resource_name)
+            original_write = session.write
+            def write(command):
+                writes.append(command)
+                return original_write(command)
+            session.write = write
+            return session
+        manager.open_resource = open_resource
+        return manager
+    monkeypatch.setattr(visa, "create_resource_manager", factory)
+    common = ["trigger", "--resource", USB_RESOURCE, "--json"]
+    assert main(common) != 0
+    assert writes == []
+    capsys.readouterr()
+    assert main(common + ["--validation-allow-pending-live-support", "--model", "keysight-33512b"]) != 0
+    assert writes == []
+    capsys.readouterr()
+    assert main(common + ["--validation-allow-pending-live-support", "--model", "keysight-33510b"]) == 0
+    assert writes == ["*TRG"]
+    assert json.loads(capsys.readouterr().out)["model"] == "33510B"
+
+
+def test_full_readback_accepts_instrument_function_spellings(artifact_root):
+    result = _run_powershell_test(artifact_root, r'''
+foreach ($pair in @(@('SIN', 'SINUSOID'), @('SQU', 'SQUARE'), @('PULS', 'PULSE'), @('NOIS', 'NOISE'), @('TRI', 'TRIANGLE'))) {
+    foreach ($spelling in $pair) {
+        Assert-FullReadback -Payload ([pscustomobject]@{ function = $spelling }) -Expected @{ function = $pair[0] }
+    }
+}
+$rejected = $false
+try { Assert-FullReadback -Payload ([pscustomobject]@{ function = 'RAMP' }) -Expected @{ function = 'SQU' } } catch { $rejected = $true }
+Write-Output ('RESULT:' + (@{ rejected = $rejected } | ConvertTo-Json -Compress))
+''')
+    assert result['rejected'] is True
+
+
+@pytest.mark.parametrize("model,accepted", [("keysight-33512b", True), ("keysight-33521b", False)])
+def test_full_output_config_channel_uses_detected_capabilities(monkeypatch, capsys, model, accepted):
+    from wavegen_tool_cli.cli import main
+    from wavegen_tool_core import visa
+    from wavegen_tool_core.simulator import Simulated33521BState, SimulatedResourceManager
+
+    manager = SimulatedResourceManager(Simulated33521BState(model_id=model))
+    original_open = manager.open_resource
+    manager.open_resource = lambda resource: original_open(manager.state.resource_name)
+    monkeypatch.setattr(visa, "create_resource_manager", lambda backend: manager)
+    result = main([
+        "configure-output", "--resource", USB_RESOURCE, "--channel", "2",
+        "--load", "50", "--json", "--validation-allow-pending-live-support", "--model", model,
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert (result == 0) is accepted
+    assert payload["success"] is accepted
+    if accepted:
+        assert payload["channel"] == 2 and payload["model"] == "33512B"

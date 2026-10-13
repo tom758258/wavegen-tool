@@ -274,3 +274,112 @@ function New-ValidationRunDirectory {
         Shareable = $shareable
     }
 }
+
+function Get-FullValidationInventory {
+    param([Parameter(Mandatory = $true)][int[]]$Channels)
+
+    # Recipes contain public CLI arguments only; Core owns admission and SCPI.
+    $voltage = @('--amplitude-vpp', '0.1', '--offset-v', '0', '--load', '50')
+    $sine = @('configure-sine', '--frequency-hz', '1000') + $voltage
+    $pulse = @('configure-pulse', '--frequency-hz', '1000', '--pulse-width-s', '0.0001', '--edge-time-s', '0.00000005') + $voltage
+    $recipes = [System.Collections.ArrayList]::new()
+    function Add-Recipe {
+        param($Name, $Family, $Steps, [bool]$Parity = $false)
+        [void]$recipes.Add([pscustomobject]@{
+            name = $Name; family = $Family; steps = @($Steps); parity = $Parity
+        })
+    }
+    function New-Step {
+        param([string[]]$Arguments, [hashtable]$Readback = @{})
+        return [pscustomobject]@{ arguments = $Arguments; readback = $Readback }
+    }
+    Add-Recipe 'status' 'inspection' @((New-Step @('status'))) $true
+    $functions = @{ sine = 'SIN'; square = 'SQU'; ramp = 'RAMP'; triangle = 'TRI'; pulse = 'PULS'; dc = 'DC'; noise = 'NOIS'; prbs = 'PRBS' }
+    foreach ($wave in @('sine', 'square', 'ramp', 'triangle', 'pulse', 'dc', 'noise', 'prbs')) {
+        $args = @("configure-$wave") + $voltage
+        $readback = @{ function = $functions[$wave]; offset_v = 0; load = '50' }
+        if ($wave -eq 'dc') {
+            $args = @('configure-dc', '--voltage-v', '0', '--load', '50')
+        } else {
+            $readback.amplitude = 0.1
+            $readback.amplitude_unit = 'VPP'
+            if ($wave -eq 'noise') {
+                $args += @('--bandwidth-hz', '10000'); $readback.bandwidth_hz = 10000
+            } elseif ($wave -eq 'prbs') {
+                $args += @('--bit-rate-bps', '10000'); $readback.bit_rate_bps = 10000
+            } else {
+                $args += @('--frequency-hz', '1000'); $readback.frequency_hz = 1000
+                if ($wave -eq 'pulse') { $args = $pulse }
+            }
+        }
+        Add-Recipe "static-$wave" 'static' @((New-Step $args $readback)) ($wave -eq 'sine')
+    }
+    $modes = [ordered]@{
+        am = @('--am-frequency', '10', '--am-depth', '20')
+        'am-dssc' = @('--am-frequency', '10', '--am-depth', '20', '--am-type', 'dssc')
+        fm = @('--fm-frequency', '10', '--fm-deviation', '100')
+        pm = @('--pm-frequency', '10', '--pm-deviation-deg', '30')
+        fsk = @('--fsk-hop-frequency', '2000', '--fsk-rate', '10')
+        bpsk = @('--bpsk-phase-shift-deg', '90', '--bpsk-rate', '10')
+        pwm = @('--pwm-frequency', '10', '--pwm-deviation-s', '0.00002')
+        sum = @('--sum-frequency', '10', '--sum-amplitude-percent', '10')
+    }
+    foreach ($mode in $modes.Keys) {
+        $carrier = if ($mode -eq 'pwm') { $pulse } else { $sine }
+        Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modes[$mode]) @{ function = $(if ($mode -eq 'pwm') { 'PULS' } else { 'SIN' }); frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' })) ($mode -eq 'am')
+    }
+    foreach ($source in @('immediate', 'bus', 'timer', 'external')) {
+        $args = $sine + @('--burst-count', '3', '--burst-trigger-source', $source)
+        if ($source -eq 'immediate') { $args += @('--burst-period-s', '0.1') }
+        if ($source -eq 'timer') { $args += @('--burst-trigger-timer-s', '0.1') }
+        $steps = @((New-Step $args @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }))
+        if ($source -eq 'bus') { $steps += New-Step @('trigger') }
+        Add-Recipe "burst-$source" 'burst' $steps ($source -eq 'immediate')
+    }
+    Add-Recipe 'burst-gated' 'burst' @((New-Step ($sine + @('--gated-burst')) @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }))
+    foreach ($variant in @('sine-linear', 'sine-logarithmic', 'sine-bus', 'sine-timer', 'square-linear', 'ramp-linear', 'triangle-linear')) {
+        $wave, $option = $variant.Split('-')
+        $spacing = if ($option -eq 'logarithmic') { 'logarithmic' } else { 'linear' }
+        $args = @("configure-$wave-sweep", '--start-frequency-hz', '1000', '--stop-frequency-hz', '2000', '--spacing', $spacing, '--sweep-time-s', '0.1') + $voltage
+        if ($option -in @('bus', 'timer')) { $args += @('--trigger-source', $option) }
+        if ($option -eq 'timer') { $args += @('--trigger-timer-s', '0.2') }
+        $steps = @((New-Step $args @{ function = $functions[$wave]; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }))
+        if ($option -eq 'bus') { $steps += New-Step @('trigger') }
+        Add-Recipe "sweep-$variant" 'sweep' $steps ($variant -eq 'sine-linear')
+    }
+    $steps = @()
+    foreach ($wave in @('sine', 'square', 'ramp', 'triangle')) {
+        $steps += New-Step (@("configure-$wave-list-sweep", '--frequencies-hz', '1000,1500,2000', '--dwell-s', '0.01') + $voltage) @{ function = $functions[$wave]; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+    }
+    $steps += New-Step $sine @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+    Add-Recipe 'list-transition-cw-recovery' 'list-sweep' $steps $true
+    Add-Recipe 'list-bus-trigger' 'bus-trigger' @(
+        (New-Step (@('configure-sine-list-sweep', '--frequencies-hz', '1000,1500,2000', '--trigger-source', 'bus') + $voltage)),
+        (New-Step @('trigger'))
+    )
+    Add-Recipe 'configure-output' 'output-config' @((New-Step @('configure-output', '--load', '50', '--polarity', 'normal', '--voltage-limit-low', '-1', '--voltage-limit-high', '1', '--voltage-limits', 'on', '--autorange', 'on') @{ load = '50' })) $true
+    Add-Recipe 'output-control' 'output-control' @(
+        (New-Step $sine @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }),
+        (New-Step @('output', '--state', 'on') @{ output_state = 'on' }),
+        (New-Step @('output', '--state', 'off') @{ output_state = 'off' })
+    ) $true
+    foreach ($channel in $Channels) {
+        foreach ($recipe in $recipes) {
+            if ($channel -ne 1 -and -not $recipe.parity) { continue }
+            [pscustomobject]@{
+                name = "ch${channel}/$($recipe.name)"; family = $recipe.family
+                channel = $channel; required = $true; steps = $recipe.steps
+            }
+        }
+    }
+}
+
+function Test-FullValidationPass {
+    param([object[]]$Cases, [string[]]$RequiredNames)
+    if (@($Cases | Where-Object { $_.status -ne 'PASS' }).Count -gt 0) { return $false }
+    foreach ($name in $RequiredNames) {
+        $matching = @($Cases | Where-Object { $_.name -ceq $name })
+        if ($matching.Count -ne 1 -or $matching[0].status -cne 'PASS') { return $false }
+    }
+    return $true
+}
