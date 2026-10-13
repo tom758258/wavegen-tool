@@ -575,6 +575,50 @@ def _run_powershell_test(artifact_root, body):
     return json.loads(result.stdout.split("RESULT:", 1)[1])
 
 
+def test_full_publish_provenance_failure_retains_shareable_evidence(artifact_root, fake_git):
+    # Main and child preflight start clean; only the final publication sees dirty Git.
+    harness = artifact_root / "publish-provenance.ps1"
+    script_path = str(LIVE_SCRIPT).replace("'", "''")
+    harness.write_text(
+        "param([string]$Python, [string]$OutputRoot)\n"
+        "function global:git {\n"
+        "    $global:LASTEXITCODE = 0\n"
+        "    if ($args[2] -eq 'rev-parse') { 'a' * 40 }\n"
+        "    elseif ($args[2] -eq 'status' -and (Get-PSCallStack).FunctionName -contains 'Publish-LiveArtifacts') {\n"
+        "        ' M tracked-source.py'\n"
+        "    }\n"
+        "}\n"
+        f"& '{script_path}' -Target keysight-33521b -Suite full -Connection usb "
+        f"-Backend system -Resource '{USB_RESOURCE}' -PlanOnly -Python $Python -OutputRoot $OutputRoot\n"
+        "exit $LASTEXITCODE\n",
+        encoding="utf-8",
+    )
+    result = _run_script(harness, artifact_root)
+    assert result.returncode == 1, result.stdout + result.stderr
+    run = _only_run(artifact_root)
+    for visibility in ("private", "shareable"):
+        report = _read_report(run, visibility)
+        assert report["status"] == "FAIL"
+        assert report["git_clean"] is False
+        assert report["git_head"] == "a" * 40
+        assert "artifact_error" not in report
+        failures = [case for case in report["cases"] if case["status"] == "FAIL"]
+        assert len(failures) == 1 and failures[0]["name"] == "git-provenance"
+        assert failures[0]["failure_reasons"] == ["Full requires a clean Git working tree."]
+        assert report["summary_counts"] == {
+            "passed": len(report["cases"]) - 1, "failed": 1,
+            "not_applicable": 0, "total": len(report["cases"]),
+        }
+        assert len(report["planned_cases"]) == 38
+        assert "git-provenance" not in report["planned_cases"]
+    summary = run / "shareable" / "summary.md"
+    assert "Full requires a clean Git working tree." in summary.read_text(encoding="utf-8")
+    assert "Result: FAIL" in result.stdout
+    assert str(run / "shareable" / "report.json") in result.stdout
+    assert str(summary) in result.stdout
+    assert "unavailable" not in result.stdout.lower()
+
+
 def test_full_git_revision_must_remain_unchanged(artifact_root, fake_git):
     result = _run_powershell_test(artifact_root, r'''
 $head = Assert-FullGitRevision -ProjectRoot (Get-Location).Path -ExpectedHead ('a' * 40)

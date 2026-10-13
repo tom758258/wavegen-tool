@@ -202,13 +202,15 @@ function Publish-LiveArtifacts {
         [AllowEmptyCollection()][string[]]$ExtraSensitiveValues = @()
     )
 
-    $gitProvenancePassed = $true
     if ($Report.suite -eq 'full' -and $Report.status -eq 'PASS') {
         try { $null = Assert-FullGitRevision -ProjectRoot $repoRoot -ExpectedHead $Report.git_head } catch {
-            $gitProvenancePassed = $false
             $Report.status = 'FAIL'
             $Report.git_clean = $false
-            Write-CaseStatus -Status FAIL -Context '[live][cli]' -Name 'git-provenance' -FailureReasons $_.Exception.Message
+            $reportCases = [System.Collections.ArrayList]::new()
+            $reportCases.AddRange(@($Report.cases))
+            Add-LiveCase -Cases $reportCases -Name 'git-provenance' -Status FAIL -FailureReasons $_.Exception.Message
+            $Report.cases = @($reportCases)
+            $Report.summary_counts = Get-SummaryCounts -Cases $reportCases
         }
     }
     Write-JsonReport -LiteralPath $PrivateReportPath -Report $Report
@@ -223,7 +225,7 @@ function Publish-LiveArtifacts {
             -RepoRoot $repoRoot `
             -Resource $Resource `
             -ExtraSensitiveValues $ExtraSensitiveValues
-        return $gitProvenancePassed
+        return $true
     } catch {
         $Report.status = "FAIL"
         $Report | Add-Member `
@@ -634,8 +636,8 @@ if ($PlanOnly) {
         -Run $run `
         -PrivateReportPath $privateReportPath `
         -PrivateSummaryPath $privateSummaryPath
-    if (-not $published) {
-        Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $false
+    if (-not $published -or $report.status -ne 'PASS') {
+        Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $published
         exit 1
     }
     Write-CompletionSummary -Result PLANNED -Run $run
