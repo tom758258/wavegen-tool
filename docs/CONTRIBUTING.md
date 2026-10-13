@@ -163,6 +163,13 @@ capability-driven per-channel Sine configuration/readback, output OFF before
 and after each channel, and a clean final error queue. Smoke never uses Output
 ON. **smoke PASS != all implemented features validated**.
 
+Full requires a readable Git HEAD and a clean working tree before creating
+artifacts. Reports record that checked `git_head` and `git_clean=true`; a
+changed HEAD or dirty tree before publishing PASS evidence fails the gate.
+Scripts never stash, reset, or clean the working tree. Smoke has no clean-tree
+requirement. Standalone Full preflight also requires Windows PowerShell Desktop
+on Windows and project Python; it has no connection/backend parameters.
+
 Full admission is limited to Windows PowerShell, the project's
 `.venv/Scripts/python.exe`, an explicit operator-supplied USB resource, and
 `-Backend system`. Other connection/backend combinations fail closed for Full;
@@ -176,7 +183,10 @@ BPSK, PWM, Sum; Immediate/Bus/Timer/External Counted Burst and Gated Burst;
 Sine Linear/Logarithmic/Bus/Timer and Square/Ramp/Triangle sweeps; the consecutive
 Sine -> Square -> Ramp -> Triangle List transition and Sine CW recovery;
 Bus-triggered List with public `trigger`; output configuration and dedicated
-output control. Bus Burst and Bus Sweep also execute public `trigger`.
+output control. Bus Burst and Bus Sweep also execute public `trigger`. Static
+Pulse uses independent 40 ns leading and 60 ns trailing edges; PWM uses a
+shared 50 ns edge. Both use 1 kHz, 100 us width, 0.1 Vpp, 0 V offset, and 50 ohms.
+The inventory remains 33 CH1 recipes and eight CH2 parity recipes.
 
 Channel count comes from Core capabilities. Dual-channel models add only CH2
 status, Sine, AM, Immediate Counted Burst, Sine Sweep, the List transition,

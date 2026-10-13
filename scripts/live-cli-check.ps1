@@ -202,6 +202,15 @@ function Publish-LiveArtifacts {
         [AllowEmptyCollection()][string[]]$ExtraSensitiveValues = @()
     )
 
+    $gitProvenancePassed = $true
+    if ($Report.suite -eq 'full' -and $Report.status -eq 'PASS') {
+        try { $null = Assert-FullGitRevision -ProjectRoot $repoRoot -ExpectedHead $Report.git_head } catch {
+            $gitProvenancePassed = $false
+            $Report.status = 'FAIL'
+            $Report.git_clean = $false
+            Write-CaseStatus -Status FAIL -Context '[live][cli]' -Name 'git-provenance' -FailureReasons $_.Exception.Message
+        }
+    }
     Write-JsonReport -LiteralPath $PrivateReportPath -Report $Report
     Write-PrivateSummary -Path $PrivateSummaryPath -Report $Report
     try {
@@ -214,7 +223,7 @@ function Publish-LiveArtifacts {
             -RepoRoot $repoRoot `
             -Resource $Resource `
             -ExtraSensitiveValues $ExtraSensitiveValues
-        return $true
+        return $gitProvenancePassed
     } catch {
         $Report.status = "FAIL"
         $Report | Add-Member `
@@ -399,6 +408,7 @@ try {
     if ($Suite -eq 'full' -and (Get-FullPath -Path $Python -BaseRoot $repoRoot) -ine (Join-Path $repoRoot '.venv\Scripts\python.exe')) {
         throw 'Full requires the project Python environment (.venv/Scripts/python.exe).'
     }
+    if ($Suite -eq 'full') { $gitHead = Assert-FullGitRevision -ProjectRoot $repoRoot }
     $run = New-ValidationRunDirectory -RepoRoot $repoRoot -BaseRoot $OutputRoot
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
@@ -428,7 +438,7 @@ $report = [pscustomobject][ordered]@{
     channels_planned = @()
     channels_tested = @()
     package_version = Get-PackageVersion -ProjectRoot $repoRoot
-    git_head = Get-GitHead -ProjectRoot $repoRoot
+    git_head = if ($Suite -eq 'full') { $gitHead } else { Get-GitHead -ProjectRoot $repoRoot }
     generated_at = (Get-Date).ToUniversalTime().ToString("o")
     validation_mode = if ($PlanOnly) { "live-plan-only" } else { "live" }
     hardware_touched = $false
@@ -446,6 +456,7 @@ $report = [pscustomobject][ordered]@{
     }
 }
 
+if ($Suite -eq 'full') { $report | Add-Member -NotePropertyName git_clean -NotePropertyValue $true }
 $powershellPath = (Get-Process -Id $PID).Path
 $preflightDirectory = Join-Path $run.Private "preflight"
 New-Item -ItemType Directory -Force -Path $preflightDirectory | Out-Null

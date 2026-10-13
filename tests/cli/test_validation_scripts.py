@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,31 @@ def artifact_root() -> Path:
     root.mkdir(parents=True)
     try:
         yield root
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture
+def fake_git(monkeypatch):
+    root = REPO_ROOT / ".tmp_tests" / f"fake_git_{uuid.uuid4().hex}"
+    root.mkdir(parents=True)
+    head = "a" * 40
+
+    def configure(*, dirty=False, head_exit=0, status_exit=0):
+        (root / "git.cmd").write_text(
+            '@echo off\nif "%~3"=="rev-parse" (\n'
+            f'  echo {head}\n  exit /b {head_exit}\n)\n'
+            'if "%~3"=="status" (\n'
+            + ('  echo  M tracked-source.py\n' if dirty else '')
+            + f'  exit /b {status_exit}\n)\nexit /b 1\n',
+            encoding="utf-8",
+        )
+        return head
+
+    configure()
+    monkeypatch.setenv("PATH", str(root) + os.pathsep + os.environ["PATH"])
+    try:
+        yield configure
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -357,7 +383,8 @@ def test_invalid_suite_fails_before_artifacts(script, artifact_root):
     assert not list(artifact_root.iterdir())
 
 
-def test_explicit_smoke(artifact_root):
+def test_explicit_smoke(artifact_root, fake_git):
+    fake_git(dirty=True)
     result = _run_script(
         LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b", "-Suite", "smoke",
         "-Connection", "usb", "-Resource", USB_RESOURCE, "-PlanOnly",
@@ -372,7 +399,7 @@ def test_explicit_smoke(artifact_root):
 @pytest.mark.parametrize("model,channels", [
     ("33521b", [1]), ("33512b", [1, 2]), ("33510b", [1, 2]),
 ])
-def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, model, channels):
+def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, model, channels):
     # Any unexpected attempt to construct VISA fails the subprocess and leaves a marker.
     guard = artifact_root / "guard"
     guard.mkdir()
@@ -395,6 +422,8 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, model, chan
     report = _read_report(run)
     assert report["suite"] == "full"
     assert report["status"] == "PASS"
+    assert report["git_head"] == "a" * 40
+    assert report["git_clean"] is True
     assert report["expected_model"] == f"keysight-{model}"
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
@@ -403,17 +432,40 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, model, chan
     assert "Windows PowerShell" in report["reference_environment"]
     assert "Only dedicated output-control cases" in result.stdout
     inventory = report["full_inventory"]
-    expected_families = {
-        "static", "modulation", "burst", "sweep", "list-sweep",
-        "output-config", "output-control", "bus-trigger",
+    expected_primary = {
+        "status",
+        "static-sine", "static-square", "static-ramp", "static-triangle",
+        "static-pulse", "static-dc", "static-noise", "static-prbs",
+        "modulation-am", "modulation-am-dssc", "modulation-fm", "modulation-pm",
+        "modulation-fsk", "modulation-bpsk", "modulation-pwm", "modulation-sum",
+        "burst-immediate", "burst-bus", "burst-timer", "burst-external", "burst-gated",
+        "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus", "sweep-sine-timer",
+        "sweep-square-linear", "sweep-ramp-linear", "sweep-triangle-linear",
+        "list-transition-cw-recovery", "list-bus-trigger", "configure-output", "output-control",
     }
-    assert {case["family"] for case in inventory} - {"inspection"} == expected_families
+    expected_parity = {
+        "status", "static-sine", "modulation-am", "burst-immediate",
+        "sweep-sine-linear", "list-transition-cw-recovery", "configure-output", "output-control",
+    }
+    primary = [case for case in inventory if case["channel"] == 1]
+    secondary = [case for case in inventory if case["channel"] == 2]
+    assert {case["name"] for case in primary} == {f"ch1/{name}" for name in expected_primary}
+    assert len(primary) == 33
+    assert {case["name"] for case in secondary} == (
+        {f"ch2/{name}" for name in expected_parity} if 2 in channels else set()
+    )
+    assert len(secondary) == (8 if 2 in channels else 0)
+    assert len(report["planned_cases"]) == (48 if 2 in channels else 38)
+    pulse = next(case for case in primary if case["name"] == "ch1/static-pulse")["steps"][0]["arguments"]
+    assert pulse[pulse.index("--leading-edge-s") + 1] == "0.00000004"
+    assert pulse[pulse.index("--trailing-edge-s") + 1] == "0.00000006"
+    assert "--edge-time-s" not in pulse
+    pwm = next(case for case in primary if case["name"] == "ch1/modulation-pwm")["steps"][0]["arguments"]
+    assert pwm[pwm.index("--edge-time-s") + 1] == "0.00000005"
+    assert "--leading-edge-s" not in pwm and "--trailing-edge-s" not in pwm
     assert {case["channel"] for case in inventory} == set(channels)
     assert all(case["required"] for case in inventory)
     assert {case["name"] for case in inventory} <= set(report["planned_cases"])
-    secondary = [case for case in inventory if case["channel"] == 2]
-    assert len(secondary) == (8 if 2 in channels else 0)
-    assert len(secondary) < len([case for case in inventory if case["channel"] == 1])
     transition = next(case for case in inventory if case["name"] == "ch1/list-transition-cw-recovery")
     assert [step["arguments"][0] for step in transition["steps"]] == [
         "configure-sine-list-sweep", "configure-square-list-sweep",
@@ -433,6 +485,8 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, model, chan
     assert readiness["suite"] == "full" and readiness["status"] == "PASS"
     assert readiness["hardware_touched"] is False
     assert readiness["visa_io_performed"] is False
+    assert readiness["git_head"] == report["git_head"]
+    assert readiness["git_clean"] is True
 
 
 @pytest.mark.parametrize("connection,backend,resource", [
@@ -447,6 +501,53 @@ def test_full_reference_environment_fails_closed(artifact_root, connection, back
     assert result.returncode == 2
     assert "Full requires" in result.stderr
     assert not list(artifact_root.iterdir())
+
+
+@pytest.mark.parametrize("script", [PREFLIGHT_SCRIPT, LIVE_SCRIPT])
+@pytest.mark.parametrize("failure", ["dirty", "head-unavailable", "status-failed"])
+def test_full_git_provenance_rejects_before_artifacts(artifact_root, fake_git, script, failure):
+    fake_git(
+        dirty=failure == "dirty",
+        head_exit=1 if failure == "head-unavailable" else 0,
+        status_exit=1 if failure == "status-failed" else 0,
+    )
+    arguments = ["-Target", "keysight-33521b", "-Suite", "full"]
+    if script == LIVE_SCRIPT:
+        # Omit PlanOnly: rejection must also happen before interactive/live execution.
+        arguments += ["-Connection", "usb", "-Backend", "system", "-Resource", USB_RESOURCE]
+    result = _run_script(script, artifact_root, *arguments)
+    assert result.returncode == 2
+    assert "Full requires" in result.stderr and "Git" in result.stderr
+    assert not list(artifact_root.iterdir())
+    assert "Type YES" not in result.stdout
+
+
+@pytest.mark.parametrize("suite", ["full", "smoke"])
+@pytest.mark.parametrize("environment", ["non-windows", "core"])
+def test_preflight_reference_environment_is_full_only(artifact_root, monkeypatch, suite, environment):
+    if POWERSHELL is None:
+        pytest.skip("Windows PowerShell is unavailable")
+    if environment == "non-windows":
+        monkeypatch.setenv("OS", "SyntheticNonWindows")
+        result = _run_script(PREFLIGHT_SCRIPT, artifact_root, "-Target", "keysight-33521b", "-Suite", suite)
+    else:
+        def quote(value):
+            return "'" + str(value).replace("'", "''") + "'"
+
+        command = "$PSVersionTable.PSEdition = 'Core'; & " + quote(PREFLIGHT_SCRIPT)
+        command += f" -Target keysight-33521b -Suite {suite} -Python " + quote(sys.executable)
+        command += " -OutputRoot " + quote(artifact_root) + "; exit $LASTEXITCODE"
+        result = subprocess.run(
+            [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+        )
+    if suite == "full":
+        assert result.returncode == 2
+        assert "Full requires Windows PowerShell Desktop on Windows" in result.stderr
+        assert not list(artifact_root.iterdir())
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _read_report(_only_run(artifact_root))["status"] == "PASS"
 
 
 def _run_powershell_test(artifact_root, body):
@@ -472,6 +573,18 @@ def _run_powershell_test(artifact_root, body):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(result.stdout.split("RESULT:", 1)[1])
+
+
+def test_full_git_revision_must_remain_unchanged(artifact_root, fake_git):
+    result = _run_powershell_test(artifact_root, r'''
+$head = Assert-FullGitRevision -ProjectRoot (Get-Location).Path -ExpectedHead ('a' * 40)
+$changedRejected = $false
+try { $null = Assert-FullGitRevision -ProjectRoot (Get-Location).Path -ExpectedHead ('b' * 40) } catch {
+    $changedRejected = $_.Exception.Message -like '*HEAD*unchanged*'
+}
+Write-Output ('RESULT:' + (@{ head = $head; changed_rejected = $changedRejected } | ConvertTo-Json -Compress))
+''')
+    assert result == {"head": "a" * 40, "changed_rejected": True}
 
 
 @pytest.mark.parametrize("failure", ["none", "command", "cleanup", "case-dirty", "dirty", "limit", "na"])

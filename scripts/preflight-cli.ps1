@@ -135,9 +135,13 @@ function Write-PrivateSummary {
 
 try {
     $targets = @(Resolve-ValidationTargets -Target $Target)
+    if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop')) {
+        throw 'Full requires Windows PowerShell Desktop on Windows.'
+    }
     if ($Suite -eq 'full' -and (Get-FullPath -Path $Python -BaseRoot $repoRoot) -ine (Join-Path $repoRoot '.venv\Scripts\python.exe')) {
         throw 'Full requires the project Python environment (.venv/Scripts/python.exe).'
     }
+    if ($Suite -eq 'full') { $gitHead = Assert-FullGitRevision -ProjectRoot $repoRoot }
     $run = New-ValidationRunDirectory -RepoRoot $repoRoot -BaseRoot $OutputRoot
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)
@@ -365,6 +369,13 @@ foreach ($targetProfile in $targets) {
     Write-Host ""
 }
 
+$gitClean = $true
+if ($Suite -eq 'full') {
+    try { $null = Assert-FullGitRevision -ProjectRoot $repoRoot -ExpectedHead $gitHead } catch {
+        $gitClean = $false
+        Add-ValidationCase -Cases $cases -Name 'git-provenance' -Status FAIL -FailureReasons $_.Exception.Message
+    }
+}
 $summaryCounts = Get-SummaryCounts -Cases $cases
 $status = if ($summaryCounts.failed -eq 0 -and ($Suite -ne "full" -or $summaryCounts.not_applicable -eq 0)) { "PASS" } else { "FAIL" }
 $privateReportPath = Join-Path $run.Private "report.json"
@@ -378,7 +389,7 @@ $report = [pscustomobject][ordered]@{
     targets = $targetIds
     target_results = @($targetResults)
     package_version = Get-PackageVersion -ProjectRoot $repoRoot
-    git_head = Get-GitHead -ProjectRoot $repoRoot
+    git_head = if ($Suite -eq 'full') { $gitHead } else { Get-GitHead -ProjectRoot $repoRoot }
     generated_at = (Get-Date).ToUniversalTime().ToString("o")
     validation_mode = "no-hardware-cli-preflight"
     hardware_touched = $false
@@ -394,6 +405,7 @@ $report = [pscustomobject][ordered]@{
         shareable_summary = Join-Path $run.Shareable "summary.md"
     }
 }
+if ($Suite -eq 'full') { $report | Add-Member -NotePropertyName git_clean -NotePropertyValue $gitClean }
 Write-JsonReport -LiteralPath $privateReportPath -Report $report
 Write-PrivateSummary -Path $privateSummaryPath -Report $report
 

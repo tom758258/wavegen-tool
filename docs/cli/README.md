@@ -655,6 +655,11 @@ privacy policy.
 canonical inventory to validate the currently implemented Direct CLI Live
 feature families, with primary CH1 coverage and only necessary CH2 parity.
 
+Full requires a readable Git HEAD and a clean working tree before artifacts
+are created, and records `git_head` and `git_clean=true`. Smoke has no clean-tree
+requirement. Full preflight also requires Windows PowerShell Desktop on Windows
+and the project Python environment.
+
 Full requires Windows PowerShell, the project `.venv/Scripts/python.exe`,
 `-Connection usb`, `-Backend system`, and an explicit resource whose detected
 identity exactly matches `-Target`. Add `-Suite full` to each command below for

@@ -104,6 +104,31 @@ function Get-GitHead {
     return $null
 }
 
+function Assert-FullGitRevision {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProjectRoot,
+        [string]$ExpectedHead
+    )
+
+    $head = Get-GitHead -ProjectRoot $ProjectRoot
+    if ([string]::IsNullOrWhiteSpace($head)) {
+        throw 'Full requires a readable Git HEAD.'
+    }
+    try {
+        $status = @(& git -C $ProjectRoot status --porcelain 2>$null)
+        if ($LASTEXITCODE -ne 0) { throw 'Git status failed.' }
+    } catch {
+        throw 'Full requires a successful Git working-tree status check.'
+    }
+    if ($status.Count -ne 0) {
+        throw 'Full requires a clean Git working tree.'
+    }
+    if ($ExpectedHead -and $head -cne $ExpectedHead) {
+        throw 'Full requires the Git HEAD to remain unchanged during validation.'
+    }
+    return $head
+}
+
 function Write-Utf8NoBomText {
     param(
         [Parameter(Mandatory = $true)][string]$LiteralPath,
@@ -281,7 +306,8 @@ function Get-FullValidationInventory {
     # Recipes contain public CLI arguments only; Core owns admission and SCPI.
     $voltage = @('--amplitude-vpp', '0.1', '--offset-v', '0', '--load', '50')
     $sine = @('configure-sine', '--frequency-hz', '1000') + $voltage
-    $pulse = @('configure-pulse', '--frequency-hz', '1000', '--pulse-width-s', '0.0001', '--edge-time-s', '0.00000005') + $voltage
+    $pulseSharedEdge = @('configure-pulse', '--frequency-hz', '1000', '--pulse-width-s', '0.0001', '--edge-time-s', '0.00000005') + $voltage
+    $pulseIndependentEdges = @('configure-pulse', '--frequency-hz', '1000', '--pulse-width-s', '0.0001', '--leading-edge-s', '0.00000004', '--trailing-edge-s', '0.00000006') + $voltage
     $recipes = [System.Collections.ArrayList]::new()
     function Add-Recipe {
         param($Name, $Family, $Steps, [bool]$Parity = $false)
@@ -309,7 +335,7 @@ function Get-FullValidationInventory {
                 $args += @('--bit-rate-bps', '10000'); $readback.bit_rate_bps = 10000
             } else {
                 $args += @('--frequency-hz', '1000'); $readback.frequency_hz = 1000
-                if ($wave -eq 'pulse') { $args = $pulse }
+                if ($wave -eq 'pulse') { $args = $pulseIndependentEdges }
             }
         }
         Add-Recipe "static-$wave" 'static' @((New-Step $args $readback)) ($wave -eq 'sine')
@@ -325,7 +351,7 @@ function Get-FullValidationInventory {
         sum = @('--sum-frequency', '10', '--sum-amplitude-percent', '10')
     }
     foreach ($mode in $modes.Keys) {
-        $carrier = if ($mode -eq 'pwm') { $pulse } else { $sine }
+        $carrier = if ($mode -eq 'pwm') { $pulseSharedEdge } else { $sine }
         Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modes[$mode]) @{ function = $(if ($mode -eq 'pwm') { 'PULS' } else { 'SIN' }); frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' })) ($mode -eq 'am')
     }
     foreach ($source in @('immediate', 'bus', 'timer', 'external')) {

@@ -119,8 +119,11 @@ Smoke remains a representative Sine sanity check and never enables output:
 
 Full preflight and PlanOnly share the Real Full canonical inventory, but remain
 hardware-free (`hardware_touched=false`, `visa_io_performed=false`). Test the
-explicit feature-family set, capability-driven channels, limited CH2 parity,
-reference-environment rejection, privacy, and representative failure paths.
+exact 33-recipe CH1 set and eight-recipe CH2 parity set, capability-driven
+channels, reference-environment and dirty-Git rejection, privacy, and
+representative failure paths. Static Pulse covers independent edges while PWM
+covers shared edges. Full reports bind to a checked clean Git HEAD; Smoke
+remains usable with a dirty working tree.
 Do not duplicate waveform parameter boundary permutations in runner tests.
 
 Admission evidence requires preflight Full PASS + PlanOnly Full PASS + Real
