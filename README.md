@@ -71,10 +71,25 @@ This installs the `wavegen-tool` entry point and the `wavegen_tool_core`,
 `wavegen_tool_cli`, and `wavegen_tool_webui` import packages from the single
 root distribution.
 
-Live use with the default `--backend system` also requires a System/IVI VISA
-runtime that PyVISA can load. Wavegen Tool does not bundle a vendor or system
-VISA runtime. Installing one does not by itself expand the Product Live model,
-transport, or backend scope.
+`pyvisa` is a required dependency; `pyvisa-py` is not installed by normal
+project installation. Developers who need `--backend @py` must install it
+manually after syncing the environment:
+
+```powershell
+uv pip install pyvisa-py
+```
+
+`uv sync` performs an exact sync and may remove manually installed packages,
+so sync first, then install `pyvisa-py`.
+
+Live use with the default `--backend system` requires a system-provided VISA
+runtime, such as Keysight IO Libraries Suite, that PyVISA can load. Wavegen Tool
+does not bundle a VISA runtime. The `system` path calls
+`pyvisa.ResourceManager()` and follows PyVISA's own default backend resolution;
+it does not guarantee selection of `@ivi`. Wavegen Tool adds no backend
+fallback. Installing a runtime or backend does not expand the Product Live
+model, transport, or backend scope: `@py` remains admitted for TCPIP/LAN only,
+`@py` with USB is rejected, and `@bt` has no Product Live scope.
 
 ## Quick Start
 

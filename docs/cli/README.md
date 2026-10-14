@@ -24,6 +24,24 @@ uv run wavegen-tool <command> --help
 Python 3.10 or newer is required. The installed console entry point is also
 named `wavegen-tool`.
 
+Normal installation requires `pyvisa` and does not install `pyvisa-py`.
+Developers using `--backend @py` must install it manually after `uv sync`:
+
+```powershell
+uv pip install pyvisa-py
+```
+
+`uv sync` performs an exact sync and may remove manually installed packages;
+sync the environment first, then install `pyvisa-py`.
+
+The default `--backend system` requires a system-provided VISA runtime, such as
+Keysight IO Libraries Suite. It calls `pyvisa.ResourceManager()` using PyVISA's
+own default backend resolution, which does not guarantee selection of `@ivi`.
+Explicit `--backend @py` calls `pyvisa.ResourceManager("@py")`. Wavegen adds no
+backend fallback. Product Live still admits `system` with USB or TCPIP/LAN and
+`@py` with TCPIP/LAN; `@py` with USB is rejected, and `@bt` has no Product Live
+scope.
+
 ## Safe Quick Start
 
 Inspect a registered profile offline:

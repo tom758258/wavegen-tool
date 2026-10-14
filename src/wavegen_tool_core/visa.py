@@ -1207,10 +1207,12 @@ def normalize_serial_termination(value: str) -> str | None:
 
 
 def create_resource_manager(pyvisa_library: str) -> VisaResourceManager:
-    """Create the explicitly selected PyVISA ResourceManager without fallback."""
+    """Use PyVISA's default for System VISA, without Wavegen-owned fallback."""
 
     import pyvisa
 
+    if pyvisa_library == "@ivi":
+        return pyvisa.ResourceManager()
     return pyvisa.ResourceManager(pyvisa_library)
 
 

@@ -1,5 +1,7 @@
 from inspect import Parameter, signature
+from unittest.mock import Mock
 
+import pyvisa
 from pyvisa.constants import RENLineOperation
 import pytest
 
@@ -290,6 +292,40 @@ class RecordingFactory:
     def __call__(self, pyvisa_library):
         self.calls.append(pyvisa_library)
         return self.manager
+
+
+@pytest.mark.parametrize(
+    ("library", "expected_args"),
+    [("@ivi", ()), ("@py", ("@py",)), ("@bt", ("@bt",))],
+)
+def test_create_resource_manager_uses_requested_pyvisa_arguments(
+    monkeypatch, library, expected_args
+):
+    manager = FakeManager()
+    resource_manager = Mock(return_value=manager)
+    monkeypatch.setattr(pyvisa, "ResourceManager", resource_manager)
+
+    assert visa_module.create_resource_manager(library) is manager
+
+    resource_manager.assert_called_once_with(*expected_args)
+
+
+@pytest.mark.parametrize("operation", [identify_instrument, list_resources])
+def test_missing_pyvisa_py_backend_uses_existing_error_without_fallback(monkeypatch, operation):
+    load_error = ValueError("Wrapper not found: No package named pyvisa_py")
+    resource_manager = Mock(side_effect=load_error)
+    monkeypatch.setattr(pyvisa, "ResourceManager", resource_manager)
+
+    with pytest.raises(ResourceManagerError) as error:
+        if operation is identify_instrument:
+            operation(TCPIP_RESOURCE, "@py")
+        else:
+            operation("@py")
+
+    resource_manager.assert_called_once_with("@py")
+    assert error.value.backend == "@py"
+    assert str(error.value) == "Could not create the requested VISA ResourceManager."
+    assert error.value.__cause__ is load_error
 
 
 @pytest.mark.parametrize(
