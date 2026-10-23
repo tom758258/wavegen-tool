@@ -9,6 +9,7 @@ from importlib.metadata import version
 from wavegen_tool_cli.worker_protocol import (
     WORKER_COMPATIBILITY_POLICY,
     WORKER_SCHEMA_VERSION,
+    worker_features,
 )
 
 TOOL_ID = "wavegen"
@@ -32,6 +33,8 @@ def build_tool_manifest(*, tool_version: str | None = None) -> dict[str, object]
             "compatibility_policy": WORKER_COMPATIBILITY_POLICY,
             "schema_versions": [WORKER_SCHEMA_VERSION],
         },
+        "execution": {"model": "multi_job", "context_binding": "per_command"},
+        "features": worker_features(),
     }
 
 

@@ -25,6 +25,7 @@ from wavegen_tool_core.visa import (
 )
 
 __all__ = [
+    "SUPPORTED_WORKER_COMMANDS",
     "ValidatedWorkerCommand",
     "WorkerRequestValidationError",
     "validate_worker_command_request",
@@ -58,7 +59,7 @@ _ALLOWED_CONTEXT_FIELDS = frozenset(
 )
 _REQUEST_MODES = frozenset({"live", "simulate", "dry_run"})
 _WORKER_MODES = frozenset({"live", "simulate"})
-_SUPPORTED_COMMANDS = frozenset(
+SUPPORTED_WORKER_COMMANDS = frozenset(
     {
         "identify",
         "status",
@@ -390,7 +391,7 @@ def validate_worker_command_request(
         )
     context, request_mode = _validate_context(raw_context, worker_mode)
 
-    if command not in _SUPPORTED_COMMANDS:
+    if command not in SUPPORTED_WORKER_COMMANDS:
         raise WorkerRequestValidationError(
             "unsupported_command", f"Unsupported Worker command: {command}."
         )

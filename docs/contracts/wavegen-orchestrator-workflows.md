@@ -1,8 +1,10 @@
 # Wavegen Orchestrator Workflows
 
-Schema version: `2`
+Worker schema version: `3`
 
-Compatibility policy: `v2-only`
+Manifest and lifecycle-client schema version: `2`
+
+Compatibility policy: `v3-only`
 
 This document extends the
 [Common Orchestrator Workflows](common-orchestrator-workflows.md) with
@@ -14,17 +16,33 @@ handling.
 1. Start `wavegen-tool worker` in `live` or `simulate` mode.
 2. Read JSONL until `ready`, then retain its `run_id`, `control_port`, and
    loopback URLs.
-3. Use `wait-ready` or `worker-status` when readiness must be confirmed through
-   HTTP.
+3. Confirm Common control readiness through valid HTTP status with
+   `worker_state="running"` and `fatal_error=null`, matching runtime features,
+   identity, and URLs. Wavegen `wait-ready` additionally waits for an idle
+   command slot, so it continues waiting while the Worker is busy.
 4. Submit one command with `send-command` or `POST /command`.
 5. Treat HTTP 202 as queue admission only. Match `worker_job_id` in a terminal
    event or `GET /status` `last_job` before using the result.
 6. Submit explicit output-off when the workflow requires it, then request
    cooperative `worker-stop`.
-7. Read the final `summary` and require a normal process exit.
+7. Read `summary`, retain subsequent error or cleanup evidence, drain stdout
+   through EOF, and observe actual process exit. Summary alone does not prove
+   successful shutdown.
 
 The Worker has one active job slot. Orchestrators must handle `busy` and
 `stopping` rejections without assuming a command ran.
+
+Manifest uses schema 2, declares Worker `v3-only` with `schema_versions=[3]`,
+`execution.model="multi_job"`, `execution.context_binding="per_command"`, and
+`common.async_jobs` contract version 1. The 16 domain commands are explicitly
+`async_job` in the Worker contract; no Manifest commands table is duplicated.
+Runtime features are fixed and match this declaration. No cancellation or
+streaming is adopted.
+
+The four lifecycle clients keep outer JSON schema 2 and retain the complete
+Worker v3 HTTP object under `worker_response`. Outer client errors and request
+diagnostics retain their existing meanings; Worker and Client versions must
+be interpreted separately. Stop clients accept Common HTTP 200 or 202.
 
 ## Request Context
 
@@ -70,7 +88,7 @@ model while leaving output off:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "command": "configure-sine",
   "arguments": {
     "channel": 2,
@@ -125,8 +143,18 @@ short example omits that stream-processing code.
 
 Wavegen Worker results are retained in memory and emitted in terminal events;
 there is no per-job artifact contract. A successful accepted response is not a
-successful job. Require `job_finished`, or a matching succeeded `last_job`,
-before consuming result fields.
+successful job. Require a complete `job_finished`, or a matching complete
+terminal `last_job`, before classifying completion. Check `state`, `ok`, and Common Error; completion
+does not imply success. The fixed terminal timestamp and original Core result
+agree across both channels. Preserve domain diagnostics in
+`error.details.domain_error`. A terminal can precede the HTTP accepted response;
+correlate the complete run/job identity without resending the command.
+
+Job completion, Worker shutdown, and workflow completion are separate. A
+successful job leaves this multi-job Worker serving; a later Worker or cleanup
+failure does not erase that terminal but can fail shutdown or the workflow.
+An ordinary failed job need not fail Worker summary. Missing terminal or
+shutdown evidence must not be inferred as success or awaited indefinitely.
 
 `GET /status` is lifecycle-only and performs no instrument I/O. To read
 instrument state, submit the Worker `status` command. `POST /stop` does not
