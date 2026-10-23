@@ -945,7 +945,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             return
         command = payload.get("command") if isinstance(payload, Mapping) else None
         job_id = payload.get("job_id") if isinstance(payload, Mapping) else None
-        if not isinstance(command, str):
+        if not isinstance(command, str) or not command.strip():
             command = None
         if not isinstance(job_id, str):
             job_id = None
