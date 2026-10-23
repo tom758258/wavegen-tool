@@ -1,8 +1,10 @@
 # Wavegen Worker Contract
 
-Schema version: `2`
+Worker schema version: `3`
 
-Compatibility policy: `v2-only`
+Manifest and lifecycle-client schema version: `2`
+
+Compatibility policy: `v3-only`
 
 This contract defines Wavegen-specific command admission and command semantics.
 It is used with the [Common Worker Protocol](common-worker-protocol.md), the
@@ -20,7 +22,7 @@ does not create per-job artifacts.
 `POST /command` requests are JSON objects with exactly these allowed top-level
 fields:
 
-- `schema_version`: required exact integer `2`.
+- `schema_version`: required exact integer token `3`.
 - `command`: required non-empty string.
 - `arguments`: optional object; omitted means `{}`.
 - `job_id`: optional string.
@@ -61,6 +63,13 @@ For simulator and dry-run requests, `planning_model_id` may select 33510B,
 does not expand Product Live support. Unknown context fields are rejected.
 
 ## Supported Commands
+
+All 16 domain commands accepted by `POST /command` are `async_job` commands
+under `common.async_jobs` contract version 1. Manifest declares
+`execution.model="multi_job"` and `execution.context_binding="per_command"`,
+with this feature and no duplicate commands table. Cancellation and streaming
+are not implemented or declared. `GET /status` and `POST /stop` are Common
+lifecycle HTTP endpoints, not domain async jobs.
 
 Supported commands are:
 
@@ -210,7 +219,7 @@ bound state's model-aware resource and Core simulator factory. State is not
 reset when a manager or session closes.
 
 A later simulate request with a different planning model is rejected before
-queueing with HTTP `400` and `error="invalid_context"`. A request already
+queueing with HTTP `400` and `error.code="invalid_context"`. A request already
 rejected as busy or stopping does not bind or mutate simulator state.
 
 A live Worker retains only its explicit resource and backend. Each command
@@ -228,7 +237,7 @@ Selected-channel results retain Core's canonical integer `channel` field.
 command, perform VISA I/O, or access simulator state. Instrument status must
 be requested with `POST /command` and `command="status"`.
 
-`POST /command` performs P1 admission and returns HTTP `202` only after the
+`POST /command` performs request admission and returns HTTP `202` only after the
 single active slot has been reserved. The background runner performs the
 domain command. Admission errors return HTTP `400`; busy and stopping
 requests return HTTP `409`.
@@ -240,8 +249,11 @@ the background Core operation. Such failures are terminal failed jobs after
 HTTP 202, not HTTP 400 admission failures. Supplying an expected guard does not
 make it the detected model or change Product policy.
 
-`POST /stop` accepts an empty body or `{}` and is idempotent while the server
-is reachable. It requests cooperative shutdown, allows an accepted job to
+`POST /stop` accepts an empty body, `{}`, or an object containing only optional
+integer-token `schema_version: 3` and string `reason`. It rejects invalid bodies
+with HTTP 400 and a validation Common Error. Success retains HTTP 202 with
+`status="accepted"`, `run_id`, schema 3, and `error=null`. It is idempotent while the
+server is reachable. It requests cooperative shutdown, allows an accepted job to
 finish, then stops the runner and HTTP server. It does not reconnect, query
 the instrument, execute `set_output`, or modify simulator output state.
 Output off remains an explicit command and should be submitted before a
@@ -250,12 +262,34 @@ normal live shutdown.
 ## JSONL Events
 
 Worker stdout contains only compact JSONL event objects. Events are
-`ready`, `job_accepted`, `job_started`, `job_finished`, `job_failed`,
-`stop_requested`, `error`, and `summary`. Every event uses schema version `2`,
+`ready`, `job_accepted`, `job_started`, `job_finished`,
+`stop_requested`, `error`, and `summary`. Every event uses schema version `3`,
 service `wavegen-tool`, the Worker `run_id`, and an UTC timestamp. The `ready`
 event includes the actual control port and loopback URLs. `summary` includes
-the exit code and accepted, succeeded, and failed counters. Human diagnostics
-are written to stderr.
+`ok`, `fatal_error`, the intended exit code, and accepted, succeeded, and failed
+counters. Fatal Worker error events use `scope="worker"` and `fatal=true`.
+Human diagnostics are written to stderr.
+
+Both successful and failed jobs emit exactly one `job_finished` on normal,
+controllable paths, with `state`, `ok`, `result`, and `error`. Domain failures
+use an execution Common Error and retain the original diagnostics in
+`error.details.domain_error`; unexpected runner errors use category `worker`.
+The terminal and `last_job` retain the same fixed `timestamp_utc`, identity,
+state, result, and error. `active_job` has a queued/running state timestamp.
+Only the latest terminal is retained; no job history or cancellation is added.
+
+Ready and HTTP status declare the fixed runtime feature
+`common.async_jobs: {"contract_version": 1}` and the same URLs and `run_id`.
+HTTP status adds Common `worker_state` and `fatal_error` alongside Wavegen's
+`ready/busy/stopping/error` diagnostic `status`. Busy remains Common
+`worker_state="running"` with `fatal_error=null`: control readiness does not
+mean a command slot is available. Status remains memory-only.
+
+Command responses follow the Common v3 envelope including `kind`,
+`worker_job_id`, and Common `error`. Rejections retain `reason` as a diagnostic;
+validation, admission, and request-handler errors use their respective Common
+categories and HTTP 400, 409, and 500. Accepted responses have
+`kind="async_job"` and `error=null`; HTTP 202 confirms admission only.
 
 ## Lifecycle Clients
 
@@ -265,18 +299,23 @@ and `worker-stop`. They require a numeric `--port` and connect only to
 remote connection options.
 
 `send-command` validates only its local JSON syntax and object shape, submits
-one schema-2 request to `POST /command`, and exits after the Worker accepts or
+one schema-3 request to `POST /command`, and exits after the Worker accepts or
 rejects it. It does not wait for job completion or retry a busy Worker.
 `worker-status` reads the memory-only `GET /status` response. It returns exit
 code `0` for `ready`, `busy`, and `stopping`, and exit code `3` for `error` or
 client/runtime failures.
 
-`wait-ready` polls `GET /status` until `ready` or its bounded deadline. It may
-retry connection failures and `busy`, but stops immediately for `stopping`,
+`wait-ready` polls `GET /status` until the Wavegen diagnostic is `ready`
+(and Common state is running without a fatal error) or its bounded deadline.
+It may retry connection failures and `busy`, but stops immediately for `stopping`,
 `error`, or an invalid response. `worker-stop` submits `{}` to `POST /stop`
 and does not wait for process exit or execute automatic output off.
 
 With `--json`, each client emits exactly one compact schema-2 JSON object.
+The complete Worker v3 response is retained under `worker_response`. Existing
+convenience fields remain available; Worker fields cannot replace Client
+`ok`, string `error`, `message`, exit code, or request diagnostics.
+`worker-stop` accepts both Common HTTP 200 and 202 acknowledgements.
 Client-created results include `ok`, `exit_code` when unsuccessful, and the
 available `client_command`, `method`, `url`, `endpoint`, `timeout_ms`,
 `elapsed_ms`, `request_sent`, `reachable`, `http_status`, and `error_phase`

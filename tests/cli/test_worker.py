@@ -35,11 +35,13 @@ def _request(
     method: str,
     path: str,
     payload: object | None = None,
+    *,
+    raw_body: str | None = None,
 ) -> tuple[int, dict[str, object]]:
     connection = http.client.HTTPConnection(
         "127.0.0.1", runtime.control_port, timeout=1.0
     )
-    body = None if payload is None else json.dumps(payload)
+    body = raw_body if raw_body is not None else (None if payload is None else json.dumps(payload))
     try:
         connection.request(
             method,
@@ -77,7 +79,7 @@ def _payload(
     elif expected_model_id is not None:
         context["expected_model_id"] = expected_model_id
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "command": command,
         "arguments": {} if arguments is None else arguments,
         "job_id": job_id,
@@ -403,6 +405,24 @@ def test_worker_status_and_invalid_request_are_memory_only(monkeypatch):
     runtime = WorkerRuntime(_worker_config())
     runtime.start()
     try:
+        valid = json.dumps(_payload("status"))
+        invalid_requests = [
+            valid.replace('"schema_version": 3', '"schema_version": ' + token)
+            for token in ('"3"', 'true', '3.0', '3e0', '2')
+        ] + [
+            "{", "null", "[]",
+            json.dumps(_payload("status") | {"unknown": True}),
+            json.dumps(_payload("status") | {"context": {"mode": "simulate"}}),
+            json.dumps(_payload("status") | {"context": {"mode": "simulate", "planning_model_id": MODEL_ID, "extra": 1}}),
+        ]
+        for raw in invalid_requests:
+            code, invalid = _request(runtime, "POST", "/command", raw_body=raw)
+            assert code == 400
+            assert invalid["schema_version"] == 3 and invalid["run_id"] == runtime.run_id
+            assert invalid["status"] == "error" and invalid["worker_job_id"] is None
+            assert invalid["error"]["category"] == "validation"
+            assert runtime.status_payload()["active_job"] is None
+            assert runtime.simulator_state is None
         bind_code, bind_accepted = _request(
             runtime,
             "POST",
@@ -417,6 +437,7 @@ def test_worker_status_and_invalid_request_are_memory_only(monkeypatch):
         assert status_code == 200
         assert status["status"] == "ready"
         assert status["active_job"] is None
+        assert status["worker_state"] == "running" and status["fatal_error"] is None
 
         executed: list[str] = []
         monkeypatch.setattr(
@@ -431,7 +452,7 @@ def test_worker_status_and_invalid_request_are_memory_only(monkeypatch):
             {"schema_version": 1, "command": "status", "context": {"mode": "simulate"}},
         )
         assert invalid_code == 400
-        assert invalid["error"] == "invalid_request"
+        assert invalid["error"]["code"] == "invalid_request"
         assert invalid["run_id"] == runtime.run_id
         assert executed == []
         assert runtime.simulator_state.error_queue == ['-100,"fixture"']
@@ -466,6 +487,12 @@ def test_worker_background_runner_rejects_busy_jobs(monkeypatch):
         assert second["job_id"] == "second"
         assert second["run_id"] == runtime.run_id
         assert second["reason"] == "busy"
+        assert second["kind"] == "async_job" and second["worker_job_id"] is None
+        assert second["error"]["category"] == "admission"
+        busy_status = _request(runtime, "GET", "/status")[1]
+        assert busy_status["worker_state"] == "running" and busy_status["fatal_error"] is None
+        assert busy_status["active_job"]["state"] == "running"
+        assert busy_status["active_job"]["timestamp_utc"]
         release.set()
         last_job = _wait_for_job(runtime, first["worker_job_id"], "succeeded")
         assert last_job["job_id"] == "first"
@@ -802,8 +829,8 @@ def test_worker_live_matching_33510_guard_does_not_bypass_product_policy(
         failed = _wait_for_job(runtime, accepted["worker_job_id"], "failed")
         assert failed["context"]["expected_model_id"] == "keysight-33510b"
         assert failed["error"]["code"] == "unsupported_instrument"
-        assert failed["error"]["identity"]["model"] == "33510B"
-        assert failed["error"]["identity"]["model_supported"] is False
+        assert failed["error"]["details"]["domain_error"]["identity"]["model"] == "33510B"
+        assert failed["error"]["details"]["domain_error"]["identity"]["model_supported"] is False
     finally:
         runtime.request_stop()
         assert runtime.wait(timeout=2.0)
@@ -930,7 +957,7 @@ def test_bound_simulator_rejects_model_switch_as_invalid_context():
             _payload("status", model_id="keysight-33521b"),
         )
         assert switch_code == 400
-        assert switch["error"] == "invalid_context"
+        assert switch["error"]["code"] == "invalid_context"
         assert runtime.simulator_state is not None
         assert runtime.simulator_state.model_id == "keysight-33512b"
     finally:
@@ -938,7 +965,8 @@ def test_bound_simulator_rejects_model_switch_as_invalid_context():
         assert runtime.wait(timeout=2.0)
 
 
-def test_worker_job_failure_returns_ready_and_recovers(monkeypatch):
+@pytest.mark.parametrize("failure", [WavegenError("representative failure"), RuntimeError("fixture")])
+def test_worker_job_failure_returns_ready_and_recovers(monkeypatch, capsys, failure):
     runtime = WorkerRuntime(_worker_config())
     calls = 0
 
@@ -946,7 +974,9 @@ def test_worker_job_failure_returns_ready_and_recovers(monkeypatch):
         nonlocal calls
         calls += 1
         if calls == 1:
-            raise WavegenError("representative failure")
+            if isinstance(failure, WavegenError):
+                failure.cleanup_errors = ("fixture cleanup failure",)
+            raise failure
         return {"ok": True}
 
     monkeypatch.setattr(runtime, "_execute_command", fail_once)
@@ -957,10 +987,16 @@ def test_worker_job_failure_returns_ready_and_recovers(monkeypatch):
         )
         assert failed_code == 202
         failed_job = _wait_for_job(runtime, failed["worker_job_id"], "failed")
-        assert failed_job["error"] == {
-            "code": "wavegen_error",
-            "message": "representative failure",
-        }
+        assert failed_job["ok"] is False
+        assert failed_job["result"] is None
+        error = failed_job["error"]
+        assert error["category"] == ("execution" if isinstance(failure, WavegenError) else "worker")
+        assert error["code"] == ("wavegen_error" if isinstance(failure, WavegenError) else "internal_error")
+        if isinstance(failure, WavegenError):
+            assert error["details"]["domain_error"] == {
+                "code": "wavegen_error", "message": "representative failure",
+                "cleanup_errors": ["fixture cleanup failure"],
+            }
         status = _request(runtime, "GET", "/status")[1]
         assert status["status"] == "ready"
         assert status["fatal_error"] is None
@@ -971,9 +1007,19 @@ def test_worker_job_failure_returns_ready_and_recovers(monkeypatch):
         assert succeeded_code == 202
         succeeded_job = _wait_for_job(runtime, succeeded["worker_job_id"], "succeeded")
         assert succeeded_job["result"] == {"ok": True}
+        assert succeeded_job["ok"] is True and succeeded_job["error"] is None
     finally:
         runtime.request_stop()
         assert runtime.wait(timeout=2.0)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    terminals = [event for event in events if event["event"] == "job_finished"]
+    assert len(terminals) == 2
+    for terminal, snapshot in zip(terminals, (failed_job, succeeded_job)):
+        for key in ("worker_job_id", "job_id", "command", "timestamp_utc", "state", "ok", "result", "error"):
+            assert terminal[key] == snapshot[key]
+    summary = events[-1]
+    assert summary["ok"] is True and summary["fatal_error"] is None
+    assert (summary["accepted_jobs"], summary["succeeded_jobs"], summary["failed_jobs"]) == (2, 1, 1)
 
 
 def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
@@ -996,7 +1042,20 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
         )
         assert command_code == 202
         assert started.wait(timeout=1.0)
-        stop_code, stop = _request(runtime, "POST", "/stop")
+        for raw in ('null', '{', '{"schema_version":3e0}'):
+            code, invalid = _request(runtime, "POST", "/stop", raw_body=raw)
+            assert code == 400 and invalid["error"]["category"] == "validation"
+            assert runtime.status_payload()["worker_state"] == "running"
+        for body in ([], True, {"schema_version": 2}, {"schema_version": True}, {"schema_version": "3"}, {"schema_version": 3.0}, {"reason": None}, {"extra": 1}):
+            code, invalid = _request(runtime, "POST", "/stop", body)
+            assert code == 400
+            assert invalid["run_id"] == runtime.run_id
+            assert invalid["error"]["category"] == "validation"
+            assert runtime.status_payload()["worker_state"] == "running"
+        for body in (None, {}, {"schema_version": 3}, {"reason": "test"}, {"schema_version": 3, "reason": "test"}):
+            stop_code, stop = _request(runtime, "POST", "/stop", body)
+            assert stop_code == 202
+            assert stop == {"schema_version": 3, "run_id": runtime.run_id, "status": "accepted", "error": None}
         assert stop_code == 202
         assert stop["run_id"] == runtime.run_id
         assert _request(runtime, "GET", "/status")[1]["status"] == "stopping"
@@ -1036,6 +1095,9 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
     assert event_names[-1] == "summary"
     assert {event["run_id"] for event in events} == {runtime.run_id}
     assert events[-1]["exit_code"] == 0
+    assert events[-1]["ok"] is True and events[-1]["fatal_error"] is None
+    assert event_names.count("stop_requested") == 1
+    assert event_names.count("job_finished") == 1
 
 
 def test_worker_serialization_keeps_core_channel_field_in_worker_results():
@@ -1057,10 +1119,27 @@ def test_worker_successful_job_is_memory_first_without_filesystem_artifacts(
 ):
     monkeypatch.chdir(tmp_path)
     runtime = WorkerRuntime(_worker_config())
+    terminal_emitted = threading.Event()
+    emit = runtime._emit_event
+    send = worker_module._WorkerRequestHandler._send_json
+
+    def observe_terminal(event, **fields):
+        emit(event, **fields)
+        if event == "job_finished":
+            terminal_emitted.set()
+
+    def delay_acceptance(handler, status, payload):
+        if handler.path == "/command" and status == 202:
+            assert terminal_emitted.wait(timeout=2.0)
+        send(handler, status, payload)
+
+    monkeypatch.setattr(runtime, "_emit_event", observe_terminal)
+    monkeypatch.setattr(worker_module._WorkerRequestHandler, "_send_json", delay_acceptance)
     runtime.start()
     try:
         code, accepted = _request(runtime, "POST", "/command", _payload("status"))
         assert code == 202
+        assert terminal_emitted.is_set()  # terminal precedes the HTTP accepted response
         assert "artifact_path" not in accepted
 
         last_job = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")
@@ -1068,6 +1147,7 @@ def test_worker_successful_job_is_memory_first_without_filesystem_artifacts(
 
         status = _request(runtime, "GET", "/status")[1]
         assert status["last_job"]["result"] == last_job["result"]
+        assert status["last_job"]["timestamp_utc"] == last_job["timestamp_utc"]
         assert "artifact_path" not in status["last_job"]
     finally:
         runtime.request_stop()
@@ -1085,5 +1165,61 @@ def test_worker_successful_job_is_memory_first_without_filesystem_artifacts(
         and event["worker_job_id"] == accepted["worker_job_id"]
     )
     assert isinstance(finished["result"], dict)
+    assert finished["state"] == "succeeded" and finished["ok"] is True
+    assert finished["error"] is None
+    for key in ("worker_job_id", "job_id", "command", "timestamp_utc", "state", "ok", "result", "error"):
+        assert finished[key] == last_job[key]
 
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "method_name", "error_code"),
+    [("/status", "status_payload", "status_failed"),
+     ("/command", "admit", "command_failed"),
+     ("/stop", "request_stop", "stop_failed")],
+)
+def test_worker_handler_failure_uses_common_error(monkeypatch, endpoint, method_name, error_code):
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+
+    def fail(*args):
+        raise RuntimeError("fixture handler failure")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(runtime, method_name, fail)
+            code, payload = _request(
+                runtime, "GET" if endpoint == "/status" else "POST", endpoint,
+                _payload("status") if endpoint == "/command" else {},
+            )
+        assert code == 500
+        assert payload["schema_version"] == 3 and payload["run_id"] == runtime.run_id
+        assert payload["status"] == "error"
+        assert payload["error"]["category"] == "worker"
+        assert payload["error"]["code"] == error_code
+        assert payload["error"]["message"] and payload["error"]["details"] == {}
+        assert runtime.status_payload()["active_job"] is None
+        assert runtime.simulator_state is None
+        if endpoint == "/command":
+            assert payload["kind"] == "async_job" and payload["worker_job_id"] is None
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
+def test_worker_fatal_startup_preserves_error_summary_and_exit(monkeypatch, capsys):
+    def fail_bind(*args):
+        raise OSError("fixture bind failure")
+
+    monkeypatch.setattr(worker_module, "_WorkerHTTPServer", fail_bind)
+    assert worker_module.run_worker(_worker_config()) == 3
+    captured = capsys.readouterr()
+    assert "fixture bind failure" in captured.err
+    error, summary = [json.loads(line) for line in captured.out.splitlines()]
+    assert error["event"] == "error" and error["scope"] == "worker" and error["fatal"] is True
+    assert error["error"]["category"] == "worker"
+    assert summary["event"] == "summary" and summary["ok"] is False
+    assert summary["exit_code"] == 3 and summary["fatal_error"] == error["error"]
+    assert error["run_id"] == summary["run_id"]
+    assert error["schema_version"] == summary["schema_version"] == 3

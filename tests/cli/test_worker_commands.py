@@ -17,7 +17,7 @@ def _payload(
     context: dict[str, object] | None = None,
 ) -> dict[str, object]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "command": command,
         "arguments": {} if arguments is None else arguments,
         "job_id": "job-1",
@@ -237,7 +237,7 @@ def test_supported_command_matrix_preserves_envelope_and_adds_defaults(
     )
 
     assert isinstance(result, ValidatedWorkerCommand)
-    assert result.schema_version == 2
+    assert result.schema_version == 3
     assert result.command == command
     if command not in {"identify", "read-errors"}:
         expected_arguments = {**expected_arguments, "channel": 1}
@@ -253,8 +253,8 @@ def test_supported_command_matrix_preserves_envelope_and_adds_defaults(
         ([], "invalid_request"),
         ({"command": "status", "context": {"mode": "live"}}, "invalid_request"),
         (_payload("status") | {"schema_version": True}, "invalid_request"),
-        (_payload("status") | {"schema_version": "2"}, "invalid_request"),
-        (_payload("status") | {"schema_version": 2.0}, "invalid_request"),
+        (_payload("status") | {"schema_version": "3"}, "invalid_request"),
+        (_payload("status") | {"schema_version": 3.0}, "invalid_request"),
         (_payload("status") | {"schema_version": 1}, "invalid_request"),
         (_payload("status") | {"extra": True}, "invalid_request"),
         (_payload("status") | {"arguments": []}, "invalid_request"),
@@ -721,7 +721,7 @@ def test_live_without_expected_model_defers_model_dependent_validation():
 
 
 def test_worker_command_set_is_not_expanded():
-    assert worker_commands._SUPPORTED_COMMANDS == {
+    assert worker_commands.SUPPORTED_WORKER_COMMANDS == {
         "identify",
         "status",
         "read-errors",

@@ -56,8 +56,11 @@ from wavegen_tool_core.transport import normalize_resource
 from wavegen_tool_cli.worker_protocol import (
     WORKER_SCHEMA_VERSION,
     WORKER_SERVICE_NAME,
+    common_error,
+    worker_features,
 )
 from wavegen_tool_cli.worker_commands import (
+    SUPPORTED_WORKER_COMMANDS,
     ValidatedWorkerCommand,
     WorkerRequestValidationError,
     validate_worker_command_request,
@@ -211,6 +214,7 @@ class WorkerRuntime:
                 command_url=self.command_url,
                 status_url=self.status_url,
                 stop_url=self.stop_url,
+                features=worker_features(),
             )
             self._runner_thread.start()
         except Exception:
@@ -322,6 +326,11 @@ class WorkerRuntime:
                 "service": WORKER_SERVICE_NAME,
                 "run_id": self.run_id,
                 "status": self._service_status,
+                "worker_state": (
+                    "failed" if self._fatal_error is not None
+                    else "stopping" if self._stop_requested else "running"
+                ),
+                "features": worker_features(),
                 "active_job": _job_payload(self._active_job),
                 "last_job": _job_payload(self._last_job),
                 "fatal_error": self._fatal_error,
@@ -386,39 +395,22 @@ class WorkerRuntime:
                 try:
                     result = self._execute_command(job)
                 except WavegenError as exc:
-                    error = _wavegen_error_payload(exc)
-                    self._finish_job(job, result=None, error=error)
-                    self._emit_event(
-                        "job_failed",
-                        worker_job_id=job.worker_job_id,
-                        job_id=job.job_id,
-                        command=job.command,
-                        error=error,
+                    domain_error = _wavegen_error_payload(exc)
+                    error = common_error(
+                        "execution", exc.code, str(exc) or "Wavegen command failed.",
+                        details={"domain_error": domain_error},
                     )
+                    self._finish_job(job, result=None, error=error)
                 except Exception:
                     traceback.print_exc(file=sys.stderr)
-                    error = {
-                        "code": "internal_error",
-                        "message": "unexpected internal failure.",
-                    }
-                    self._finish_job(job, result=None, error=error)
-                    self._emit_event(
-                        "job_failed",
-                        worker_job_id=job.worker_job_id,
-                        job_id=job.job_id,
-                        command=job.command,
-                        error=error,
+                    error = common_error(
+                        "worker", "internal_error", "unexpected internal failure."
                     )
+                    self._finish_job(job, result=None, error=error)
                 else:
                     serialized = _json_safe(result)
                     self._finish_job(job, result=serialized, error=None)
-                    self._emit_event(
-                        "job_finished",
-                        worker_job_id=job.worker_job_id,
-                        job_id=job.job_id,
-                        command=job.command,
-                        result=serialized,
-                    )
+                self._emit_event("job_finished", **_job_payload(job))
         except Exception as exc:  # pragma: no cover - runner lifecycle failure
             self._set_fatal(exc)
         finally:
@@ -835,15 +827,14 @@ class WorkerRuntime:
     def _set_fatal(self, exc: BaseException, *, emit_summary: bool = False) -> None:
         traceback.print_exception(exc, file=sys.stderr)
         with self._condition:
-            self._fatal_error = {
-                "code": "internal_error",
-                "message": "unexpected internal failure.",
-            }
+            self._fatal_error = common_error(
+                "worker", "internal_error", "unexpected internal failure."
+            )
             self._service_status = "error"
             self._stop_requested = True
             self._exit_code = 3
             self._condition.notify_all()
-        self._emit_event("error", error=self._fatal_error)
+        self._emit_event("error", scope="worker", fatal=True, error=self._fatal_error)
         if emit_summary:
             self._emit_summary()
 
@@ -856,6 +847,7 @@ class WorkerRuntime:
             self._exit_code = exit_code
             payload = {
                 "ok": self._fatal_error is None,
+                "fatal_error": self._fatal_error,
                 "exit_code": exit_code,
                 "accepted_jobs": self._accepted_jobs,
                 "succeeded_jobs": self._succeeded_jobs,
@@ -893,17 +885,27 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path != "/status":
-            self._send_json(404, {"schema_version": WORKER_SCHEMA_VERSION, "status": "error", "error": "not_found"})
+            self._send_json(404, self._error_envelope("not_found", "Unknown HTTP endpoint."))
             return
-        self._send_json(200, self.server.runtime.status_payload())
+        try:
+            payload = self.server.runtime.status_payload()
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            self._send_json(500, self._error_envelope("status_failed", "Status request failed."))
+            return
+        self._send_json(200, payload)
 
     def do_POST(self) -> None:
         if self.path == "/command":
             self._handle_command()
         elif self.path == "/stop":
-            self._handle_stop()
+            try:
+                self._handle_stop()
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+                self._send_json(500, self._error_envelope("stop_failed", "Stop request failed."))
         else:
-            self._send_json(404, {"schema_version": WORKER_SCHEMA_VERSION, "status": "error", "error": "not_found"})
+            self._send_json(404, self._error_envelope("not_found", "Unknown HTTP endpoint."))
 
     def send_error(
         self,
@@ -914,13 +916,18 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         del explain
         self._send_json(
             code,
-            {
-                "schema_version": WORKER_SCHEMA_VERSION,
-                "status": "error",
-                "error": "http_error",
-                "message": message or "HTTP request failed.",
-            },
+            self._error_envelope("http_error", message or "HTTP request failed."),
         )
+
+    def _error_envelope(
+        self, code: str, message: str, *, category: str = "worker"
+    ) -> dict[str, object]:
+        return {
+            "schema_version": WORKER_SCHEMA_VERSION,
+            "run_id": self.server.runtime.run_id,
+            "status": "error",
+            "error": common_error(category, code, message),
+        }
 
     def _handle_command(self) -> None:
         payload, parse_error = self._read_json()
@@ -948,6 +955,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                 worker_mode=self.server.runtime.config.mode,
                 allow_output_writes=self.server.runtime.config.allow_output_writes,
             )
+            reason, job = self.server.runtime.admit(validated)
         except WorkerRequestValidationError as exc:
             self._send_json(
                 400,
@@ -960,8 +968,16 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                 ),
             )
             return
-
-        reason, job = self.server.runtime.admit(validated)
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            self._send_json(
+                500,
+                _request_error(
+                    command, job_id, "command_failed", "Command request failed.",
+                    run_id=self.server.runtime.run_id, category="worker",
+                ),
+            )
+            return
         if reason == "simulator_model_mismatch":
             self._send_json(
                 400,
@@ -983,6 +999,9 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                     "command": validated.command,
                     "job_id": validated.job_id,
                     "reason": reason,
+                    "kind": "async_job",
+                    "worker_job_id": None,
+                    "error": common_error("admission", reason, f"Worker is {reason}."),
                     "run_id": self.server.runtime.run_id,
                 },
             )
@@ -995,6 +1014,8 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                 "command": job.command,
                 "job_id": job.job_id,
                 "worker_job_id": job.worker_job_id,
+                "kind": "async_job",
+                "error": None,
                 "run_id": self.server.runtime.run_id,
             },
         )
@@ -1002,16 +1023,26 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
     def _handle_stop(self) -> None:
         body, parse_error = self._read_json(allow_empty=True)
         if parse_error is not None:
-            self._send_json(400, _request_error(None, None, "invalid_request", parse_error))
+            self._send_json(400, self._error_envelope(
+                "invalid_request", parse_error, category="validation"
+            ))
             return
-        if body not in (None, {}):
+        if (
+            not isinstance(body, dict)
+            or set(body) - {"schema_version", "reason"}
+            or ("schema_version" in body and (
+                type(body["schema_version"]) is not int
+                or body["schema_version"] != WORKER_SCHEMA_VERSION
+            ))
+            or ("reason" in body and not isinstance(body["reason"], str))
+        ):
             self._send_json(
                 400,
-                _request_error(
-                    None,
-                    None,
+                self._error_envelope(
                     "invalid_request",
-                    "POST /stop accepts an empty body or an empty object.",
+                    "POST /stop accepts an empty body or an object with optional "
+                    "schema_version: 3 and reason: string only.",
+                    category="validation",
                 ),
             )
             return
@@ -1022,6 +1053,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                 "schema_version": WORKER_SCHEMA_VERSION,
                 "status": "accepted",
                 "run_id": self.server.runtime.run_id,
+                "error": None,
             },
         )
 
@@ -1032,7 +1064,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             return None, "Content-Length must be an integer."
         raw = self.rfile.read(length)
         if not raw.strip() and allow_empty:
-            return None, None
+            return {}, None
         if not raw.strip():
             return None, "Request body must be a JSON value."
         try:
@@ -1078,18 +1110,19 @@ def _request_error(
     code: str,
     message: str,
     *,
-    run_id: str | None = None,
+    run_id: str,
+    category: str = "validation",
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": WORKER_SCHEMA_VERSION,
         "status": "error",
         "command": command,
         "job_id": job_id,
-        "error": code,
-        "message": message,
+        "kind": "async_job" if command in SUPPORTED_WORKER_COMMANDS else None,
+        "worker_job_id": None,
+        "error": common_error(category, code, message),
+        "run_id": run_id,
     }
-    if run_id is not None:
-        payload["run_id"] = run_id
     return payload
 
 
@@ -1102,6 +1135,8 @@ def _job_payload(job: JobRecord | None) -> dict[str, object] | None:
         "command": job.command,
         "context": dict(job.context),
         "state": job.state,
+        "timestamp_utc": job.finished_at or job.started_at or job.accepted_at,
+        **({"ok": job.error is None} if job.finished_at is not None else {}),
         "accepted_at": job.accepted_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,

@@ -10,9 +10,11 @@ EXPECTED_MANIFEST = {
     "tool_id": "wavegen",
     "tool_version": "9.9.9",
     "worker_protocol": {
-        "compatibility_policy": "v2-only",
-        "schema_versions": [2],
+        "compatibility_policy": "v3-only",
+        "schema_versions": [3],
     },
+    "execution": {"model": "multi_job", "context_binding": "per_command"},
+    "features": {"common.async_jobs": {"contract_version": 1}},
 }
 
 

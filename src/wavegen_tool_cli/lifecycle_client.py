@@ -8,7 +8,11 @@ import json
 import sys
 import time
 from typing import Any
-from wavegen_tool_cli.worker_protocol import WORKER_SCHEMA_VERSION, WORKER_SERVICE_NAME
+from wavegen_tool_cli.worker_protocol import (
+    WORKER_SCHEMA_VERSION,
+    WORKER_SERVICE_NAME,
+    worker_features,
+)
 
 
 _SUCCESS = 0
@@ -16,6 +20,12 @@ _CLI_USAGE = 2
 _RUNTIME_ERROR = 3
 _HOST = "127.0.0.1"
 _STATUSES = frozenset({"ready", "busy", "stopping", "error"})
+LIFECYCLE_CLIENT_SCHEMA_VERSION = 2
+_CLIENT_FIELDS = frozenset({
+    "schema_version", "ok", "error", "message", "exit_code", "worker_response",
+    "client_command", "method", "url", "endpoint", "timeout_ms", "elapsed_ms",
+    "request_sent", "reachable", "http_status", "error_phase",
+})
 
 
 @dataclass(frozen=True)
@@ -147,8 +157,8 @@ def run_worker_status(args: Any) -> int:
                 args.timeout_ms,
                 outcome,
                 payload=outcome.payload,
-                error=outcome.payload.get("error") or "worker_error",
-                message=outcome.payload.get("message") or "Worker reported an error.",
+                error="worker_error",
+                message="Worker reported an error.",
                 phase="worker_status",
             )
         else:
@@ -243,14 +253,12 @@ def run_wait_ready(args: Any) -> int:
                         args.timeout_ms,
                         outcome,
                         payload=outcome.payload,
-                        error=(outcome.payload.get("error") if status == "error" else "stopping")
-                        or "worker_error",
+                        error="worker_error" if status == "error" else "stopping",
                         message=(
-                            outcome.payload.get("message")
+                            "Worker reported an error."
                             if status == "error"
                             else "Worker is stopping."
-                        )
-                        or "Worker reported an error.",
+                        ),
                         phase="worker_status",
                     ),
                     "",
@@ -279,7 +287,7 @@ def run_worker_stop(args: Any) -> int:
             error=outcome.error,
             message=outcome.message or "Worker response was invalid.",
         )
-    elif outcome.status != 202:
+    elif outcome.status not in {200, 202}:
         result = _http_error(
             "worker-stop", "POST", endpoint, url, args.timeout_ms, outcome
         )
@@ -356,6 +364,14 @@ def _request_json(
             f"Worker response schema_version must be exact integer {WORKER_SCHEMA_VERSION}.",
             started,
         )
+    if not _nonempty(payload.get("run_id")):
+        return _invalid_response(status, request_sent, "Worker response must contain a run_id.", started)
+    if status >= 400:
+        expected_status = "rejected" if status in {409, 429} else "error"
+        if payload.get("status") != expected_status or not _valid_error(payload.get("error")):
+            return _invalid_response(status, request_sent, "Worker error response is invalid.", started)
+        if endpoint == "/command" and not _valid_command_fields(payload, accepted=False):
+            return _invalid_response(status, request_sent, "Worker command response is invalid.", started)
     return _HTTPOutcome(
         status,
         payload,
@@ -413,6 +429,8 @@ def _validate_send(
         return "Worker accepted response must contain a worker_job_id."
     if not _nonempty(payload.get("run_id")):
         return "Worker accepted response must contain a run_id."
+    if not _valid_command_fields(payload, accepted=True):
+        return "Worker accepted response must identify an async job with error=null."
     return None
 
 
@@ -423,8 +441,33 @@ def _validate_status(payload: dict[str, object] | None) -> str | None:
         return f"Worker status response must identify service={WORKER_SERVICE_NAME}."
     if not _nonempty(payload.get("run_id")):
         return "Worker status response must contain a run_id."
-    if payload.get("status") not in _STATUSES:
+    if not isinstance(payload.get("status"), str) or payload["status"] not in _STATUSES:
         return "Worker status response contains an invalid status."
+    state = payload.get("worker_state")
+    if state not in ("starting", "running", "stopping", "failed"):
+        return "Worker status response contains an invalid worker_state."
+    if "fatal_error" not in payload or (
+        payload["fatal_error"] is not None and not _valid_error(payload["fatal_error"])
+    ):
+        return "Worker status response contains an invalid fatal_error."
+    if (state == "failed") != (payload["fatal_error"] is not None):
+        return "Worker state and fatal_error disagree."
+    expected_state = {"ready": "running", "busy": "running", "stopping": "stopping", "error": "failed"}
+    if state != expected_state[payload["status"]]:
+        return "Worker state and Wavegen status disagree."
+    features = payload.get("features")
+    if (
+        features != worker_features()
+        or type(features["common.async_jobs"]["contract_version"]) is not int
+    ):
+        return "Worker status response contains invalid runtime features."
+    if not all(_nonempty(payload.get(key)) for key in (
+        "timestamp_utc", "status_url", "command_url", "stop_url"
+    )):
+        return "Worker status response is missing its timestamp or control URLs."
+    for key, terminal in (("active_job", False), ("last_job", True)):
+        if key not in payload or not _valid_job_snapshot(payload[key], terminal=terminal):
+            return f"Worker status response contains an invalid {key}."
     return None
 
 
@@ -435,7 +478,56 @@ def _validate_stop(payload: dict[str, object] | None) -> str | None:
         return "Worker stop response must have status=accepted."
     if not _nonempty(payload.get("run_id")):
         return "Worker stop response must contain a run_id."
+    if "error" not in payload or payload["error"] is not None:
+        return "Worker stop response must contain error=null."
     return None
+
+
+def _valid_error(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("category") in ("validation", "admission", "execution", "worker")
+        and _nonempty(value.get("code"))
+        and _nonempty(value.get("message"))
+        and isinstance(value.get("details"), dict)
+    )
+
+
+def _valid_command_fields(payload: dict[str, object], *, accepted: bool) -> bool:
+    if not (
+        "command" in payload and isinstance(payload["command"], (str, type(None)))
+        and "job_id" in payload and isinstance(payload["job_id"], (str, type(None)))
+        and "kind" in payload and payload["kind"] in ("async_job", None)
+        and "worker_job_id" in payload
+    ):
+        return False
+    if accepted:
+        return (
+            payload["kind"] == "async_job" and _nonempty(payload["worker_job_id"])
+            and "error" in payload and payload["error"] is None
+        )
+    return payload["worker_job_id"] is None
+
+
+def _valid_job_snapshot(value: object, *, terminal: bool) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, dict):
+        return False
+    if not (
+        _nonempty(value.get("worker_job_id")) and _nonempty(value.get("command"))
+        and "job_id" in value and isinstance(value["job_id"], (str, type(None)))
+        and _nonempty(value.get("timestamp_utc"))
+    ):
+        return False
+    if not terminal:
+        return value.get("state") in ("queued", "running")
+    if "result" not in value or "error" not in value or type(value.get("ok")) is not bool:
+        return False
+    return (
+        value.get("state") == "succeeded" and value["ok"] and value["error"] is None
+        or value.get("state") == "failed" and not value["ok"] and _valid_error(value["error"])
+    )
 
 
 def _success_result(
@@ -449,7 +541,7 @@ def _success_result(
     elapsed_ms: int | None = None,
 ) -> dict[str, object]:
     return _result(
-        outcome.payload,
+        _worker_fields(outcome.payload),
         client_command,
         method,
         endpoint,
@@ -478,13 +570,13 @@ def _error_result(
     exit_code: int = _RUNTIME_ERROR,
     elapsed_ms: int | None = None,
 ) -> dict[str, object]:
-    result = dict(payload or {})
+    result = _worker_fields(payload)
     if command is not None:
         result.setdefault("command", command)
     if job_id is not None:
         result.setdefault("job_id", job_id)
-    result.setdefault("error", error)
-    result.setdefault("message", message)
+    result["error"] = error
+    result["message"] = message
     return _result(
         result,
         client_command,
@@ -512,8 +604,9 @@ def _http_error(
     job_id: str | None = None,
 ) -> dict[str, object]:
     payload = dict(outcome.payload or {})
-    error = payload.get("error") or payload.get("reason") or "http_status"
-    message = payload.get("message") or (
+    worker_error = payload.get("error")
+    error = worker_error.get("code") if isinstance(worker_error, dict) else "http_status"
+    message = worker_error.get("message") if isinstance(worker_error, dict) else (
         f"Worker returned HTTP status {outcome.status}."
         if outcome.status is not None
         else "Worker request failed."
@@ -591,7 +684,9 @@ def _result(
     elapsed_ms: int | None = None,
 ) -> dict[str, object]:
     result = dict(payload or {})
-    result["schema_version"] = WORKER_SCHEMA_VERSION
+    result["schema_version"] = LIFECYCLE_CLIENT_SCHEMA_VERSION
+    if outcome.payload is not None:
+        result["worker_response"] = outcome.payload
     result["ok"] = ok
     if exit_code is not None:
         result["exit_code"] = exit_code
@@ -610,6 +705,12 @@ def _result(
         }
     )
     return result
+
+
+def _worker_fields(payload: dict[str, object] | None) -> dict[str, object]:
+    """Keep existing convenience fields without importing Worker-owned diagnostics."""
+
+    return {key: value for key, value in (payload or {}).items() if key not in _CLIENT_FIELDS}
 
 
 def _emit(args: Any, payload: dict[str, object], success_text: str) -> int:

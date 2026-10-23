@@ -1,8 +1,10 @@
 # Wavegen CLI JSON / JSONL Contract
 
-Schema version: `2`
+Worker schema version: `3`
 
-Compatibility policy: `v2-only`
+Manifest, capabilities, and lifecycle-client schema version: `2`
+
+Compatibility policy: `v3-only`
 
 This document defines Wavegen-specific machine output. It extends the
 [Common CLI JSON / JSONL Contract](common-cli-jsonl-contract.md) and separates
@@ -17,7 +19,7 @@ command-specific `success` and `error` fields and do not add a top-level
 use their existing schema-version-2 event objects. These are current Direct
 CLI contracts, not aliases for Worker events.
 
-Worker stdout is JSONL. Every non-empty stdout line is one schema-version-2
+Worker stdout is JSONL. Every non-empty stdout line is one schema-version-3
 event object. The lifecycle clients `send-command`, `worker-status`,
 `wait-ready`, and `worker-stop` emit one schema-version-2 JSON object with
 `--json`.
@@ -78,14 +80,26 @@ command. Worker commands are defined only by the
 ## Worker JSONL Events
 
 Worker events are `ready`, `job_accepted`, `job_started`, `job_finished`,
-`job_failed`, `stop_requested`, `error`, and `summary`. Each event contains
-exact integer `schema_version: 2`, `service: "wavegen-tool"`, `run_id`, and a
-UTC timestamp.
+`stop_requested`, `error`, and `summary`. Each event contains
+exact integer-token `schema_version: 3`, `service: "wavegen-tool"`, `run_id`,
+and a UTC timestamp.
+
+All 16 Worker domain commands are async jobs. Every normal, controllable
+termination emits `job_finished` with `state`, boolean `ok`, and required
+`result` and `error`. The terminal timestamp is fixed and shared with the
+HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and
+`error=null`; failure uses `state="failed"`, `ok=false`, and a Common Error.
+No cancellation or streaming feature is declared.
 
 Terminal successful job results contain the Core result serialized as JSON.
 Selected-channel results retain Core's canonical integer `channel`. Failed
-jobs contain a structured error with a stable `code` and `message`, plus
-available backend, transport, identity, output-state, or cleanup context.
+jobs contain a Common Error; original backend, transport, identity,
+output-state, or cleanup diagnostics remain in `error.details.domain_error`.
+Fatal Worker errors use `scope="worker"`, `fatal=true`, and category `worker`.
+Summary includes `ok`, `fatal_error`, intended `exit_code`, and job counters.
+A job failure does not itself fail the multi-job Worker summary. Consumers
+continue through EOF and actual process exit, retaining any later cleanup
+failure evidence even after a successful summary.
 
 The Worker is memory-first: accepted responses and events do not promise a
 per-job artifact path. Observe completion through terminal JSONL events or
@@ -93,14 +107,20 @@ per-job artifact path. Observe completion through terminal JSONL events or
 
 ## Lifecycle Client JSON
 
-`send-command` submits one schema-2 Worker request and reports HTTP admission.
+`send-command` submits one schema-3 Worker request and reports HTTP admission.
 `ok: true` means the Worker accepted the request; it does not mean background
 execution succeeded. `worker-status` reads memory-only lifecycle state.
-`wait-ready` polls until the Worker becomes ready or fails its bounded wait.
+`wait-ready` polls until the Wavegen command slot is idle or fails its
+bounded wait.
+A busy Worker can remain Common control-plane ready; this CLI keeps waiting.
 `worker-stop` requests cooperative stop without executing a domain command.
 
-Lifecycle-client JSON merges the validated Worker response with diagnostics
-including `client_command`, `method`, `url`, `endpoint`, `timeout_ms`,
+Lifecycle-client JSON retains the raw Worker v3 object under
+`worker_response`, with existing convenience fields at the outer schema-2
+level. Client `ok`, string `error`, `message`, `exit_code`, and diagnostics
+retain their independent meanings. Worker fields cannot overwrite them.
+The diagnostics include
+`client_command`, `method`, `url`, `endpoint`, `timeout_ms`,
 `elapsed_ms`, `request_sent`, `reachable`, `http_status`, and `error_phase`.
 Failures also include `ok: false` and `exit_code`.
 
