@@ -620,10 +620,16 @@ An accepted command returns HTTP 202 and runs asynchronously. Malformed or
 inadmissible requests return HTTP 400; busy or stopping admission returns HTTP
 409. The Worker does not create per-job artifacts.
 
-Worker machine stdout is schema-version-2 JSONL only. Events for one process
-share a `run_id` and include lifecycle events such as `ready`, `job_accepted`,
-`job_started`, `job_finished`, `job_failed`, `stop_requested`, `error`, and
-`summary`. Human diagnostics are not a machine API.
+Worker HTTP requests/responses and machine stdout JSONL use schema version 3.
+Events for one process share a `run_id` and include lifecycle events such as
+`ready`, `job_accepted`, `job_started`, `job_finished`, `stop_requested`,
+`error`, and `summary`.
+`job_finished` is the common terminal event for both successful and failed
+async jobs. Human diagnostics are not a machine API.
+
+Common `worker_state="running"` with `fatal_error=null` means the control
+interface is ready, even while a job is busy; it does not imply an idle command
+slot.
 
 ### Worker Lifecycle Clients
 
@@ -644,16 +650,18 @@ accepts `--arguments-json` (default `{}`), `--job-id`, `--timeout-ms` (default
 - `worker-status` reads memory-only lifecycle status; it is not instrument
   status. It accepts required `--port`, optional `--timeout-ms` (default 1000),
   and optional `--json`.
-- `wait-ready` polls until ready or a bounded deadline. It adds
-  `--wait-timeout-ms` (default 30000) and `--poll-ms` (default 200) to
+- `wait-ready` polls until the command slot is idle or a bounded deadline,
+  continuing to wait while a job is busy despite Common control readiness.
+  It adds `--wait-timeout-ms` (default 30000) and `--poll-ms` (default 200) to
   `--port`, `--timeout-ms`, and `--json`.
 - `worker-stop` requests cooperative stop. It does not wait for process exit
   and does not turn output off automatically. It accepts `--port`,
   `--timeout-ms`, and `--json`.
 
 With `--json`, each lifecycle client emits one compact schema-version-2 JSON
-object. An accepted `send-command` result confirms admission, not job
-completion; use lifecycle status to observe the result.
+object. The original Worker v3 HTTP response is retained under
+`worker_response`. An accepted `send-command` result confirms admission, not
+job completion; use lifecycle status to observe the result.
 
 For normal live shutdown, submit explicit output-off before stopping. Use the
 [Wavegen CLI JSON / JSONL contract](../contracts/wavegen-cli-jsonl-contract.md),

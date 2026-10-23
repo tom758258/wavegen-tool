@@ -406,23 +406,46 @@ def test_worker_status_and_invalid_request_are_memory_only(monkeypatch):
     runtime.start()
     try:
         valid = json.dumps(_payload("status"))
-        invalid_requests = [
+        invalid_status_requests = [
             valid.replace('"schema_version": 3', '"schema_version": ' + token)
             for token in ('"3"', 'true', '3.0', '3e0', '2')
         ] + [
-            "{", "null", "[]",
             json.dumps(_payload("status") | {"unknown": True}),
             json.dumps(_payload("status") | {"context": {"mode": "simulate"}}),
             json.dumps(_payload("status") | {"context": {"mode": "simulate", "planning_model_id": MODEL_ID, "extra": 1}}),
         ]
-        for raw in invalid_requests:
-            code, invalid = _request(runtime, "POST", "/command", raw_body=raw)
-            assert code == 400
-            assert invalid["schema_version"] == 3 and invalid["run_id"] == runtime.run_id
-            assert invalid["status"] == "error" and invalid["worker_job_id"] is None
-            assert invalid["error"]["category"] == "validation"
-            assert runtime.status_payload()["active_job"] is None
-            assert runtime.simulator_state is None
+        invalid_requests = [
+            (raw, "status", "async_job", "job-1") for raw in invalid_status_requests
+        ] + [(raw, None, None, None) for raw in ("{", "null", "[]")] + [
+            (json.dumps(_payload(command)), response_command, None, "job-1")
+            for command, response_command in (
+                ("", None), ("   ", None), (123, None),
+                ("unsupported-command", "unsupported-command"),
+                (" unsupported-command ", " unsupported-command "),
+            )
+        ] + [
+            (json.dumps({k: v for k, v in _payload("status").items() if k != "command"}),
+             None, None, "job-1"),
+        ]
+        executed: list[str] = []
+        with monkeypatch.context() as guard:
+            guard.setattr(runtime, "_execute_command", lambda job: executed.append(job.command))
+            for raw, command, kind, job_id in invalid_requests:
+                code, invalid = _request(runtime, "POST", "/command", raw_body=raw)
+                assert code == 400
+                assert invalid["schema_version"] == 3 and invalid["run_id"] == runtime.run_id
+                assert invalid["status"] == "error" and invalid["worker_job_id"] is None
+                assert invalid["command"] == command
+                assert invalid["kind"] == kind
+                assert invalid["job_id"] == job_id
+                assert invalid["error"]["category"] == "validation"
+                assert isinstance(invalid["error"]["code"], str) and invalid["error"]["code"]
+                assert isinstance(invalid["error"]["message"], str) and invalid["error"]["message"]
+                assert isinstance(invalid["error"]["details"], dict)
+                status = runtime.status_payload()
+                assert status["active_job"] is None and status["last_job"] is None
+                assert runtime.simulator_state is None
+                assert executed == []
         bind_code, bind_accepted = _request(
             runtime,
             "POST",
@@ -439,7 +462,6 @@ def test_worker_status_and_invalid_request_are_memory_only(monkeypatch):
         assert status["active_job"] is None
         assert status["worker_state"] == "running" and status["fatal_error"] is None
 
-        executed: list[str] = []
         monkeypatch.setattr(
             runtime,
             "_execute_command",
