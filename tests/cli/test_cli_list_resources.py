@@ -221,11 +221,15 @@ def test_raw_listing_json_is_one_object(monkeypatch, capsys):
                 "resource": ASRL_RESOURCE,
                 "manufacturer": None,
                 "model": None,
+                "model_id": None,
+                "model_support_status": None,
             },
             {
                 "resource": TCPIP_RESOURCE,
                 "manufacturer": None,
                 "model": None,
+                "model_id": None,
+                "model_support_status": None,
             },
         ],
         "error": None,
@@ -252,6 +256,7 @@ def test_live_only_human_shows_parsed_identity_and_resource(monkeypatch, capsys)
         "Live VISA resources:\n"
         "Backend: @py\n"
         "- Unknown instrument\n"
+        "  Model support: UNIDENTIFIED\n"
         f"  Resource: {TCPIP_RESOURCE}\n"
     )
     assert captured.err == ""
@@ -281,6 +286,7 @@ def test_live_only_human_shows_any_parsed_model_without_serial_firmware_or_raw_i
         "Live VISA resources:\n"
         "Backend: system\n"
         "- Keysight Technologies 34465A\n"
+        "  Model support: UNSUPPORTED\n"
         f"  Resource: {USB_RESOURCE}\n"
     )
     assert "SECRET-SERIAL" not in captured.out
@@ -355,6 +361,8 @@ def test_live_only_json_filters_empty_response(monkeypatch, capsys):
                 "resource": TCPIP_RESOURCE,
                 "manufacturer": "Agilent Technologies",
                 "model": "33521B",
+                "model_id": "keysight-33521b",
+                "model_support_status": "product_live_model",
             }
         ],
         "error": None,
@@ -364,6 +372,61 @@ def test_live_only_json_filters_empty_response(monkeypatch, capsys):
     assert "SERIAL" not in captured.out
     assert "FIRMWARE" not in captured.out
     assert "Agilent Technologies,33521B,SERIAL,FIRMWARE" not in captured.out
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_status"),
+    [
+        ("33521B", "PRODUCT_LIVE_MODEL"),
+        ("33512B", "PRODUCT_LIVE_MODEL"),
+        ("33510B", "REGISTERED_ONLY"),
+    ],
+)
+def test_live_only_human_labels_registered_models(
+    monkeypatch, capsys, model, expected_status
+):
+    session = FakeSession(response=f"Keysight Technologies,{model},SERIAL,FIRMWARE")
+    manager = FakeManager(
+        (USB_RESOURCE,),
+        sessions_by_resource={USB_RESOURCE: session},
+    )
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["list-resources", "--live-only"])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert f"- Keysight Technologies {model}\n" in captured.out
+    assert f"  Model support: {expected_status}\n" in captured.out
+    assert "SERIAL" not in captured.out
+    assert "FIRMWARE" not in captured.out
+    assert session.queries == ["*IDN?"]
+
+
+def test_live_only_json_marks_registered_but_not_product_live(monkeypatch, capsys):
+    session = FakeSession(response="Keysight Technologies,33510B,SERIAL,FIRMWARE")
+    manager = FakeManager(
+        (USB_RESOURCE,),
+        sessions_by_resource={USB_RESOURCE: session},
+    )
+    install_fake_manager(monkeypatch, manager)
+
+    exit_code = main(["list-resources", "--live-only", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == ExitCode.SUCCESS
+    assert json.loads(captured.out)["resources"] == [
+        {
+            "resource": USB_RESOURCE,
+            "manufacturer": "Keysight Technologies",
+            "model": "33510B",
+            "model_id": "keysight-33510b",
+            "model_support_status": "registered_only",
+        }
+    ]
+    assert captured.out.count("\n") == 1
+    assert "SERIAL" not in captured.out
+    assert "FIRMWARE" not in captured.out
 
 
 def test_live_only_empty_human_and_json_output(monkeypatch, capsys):

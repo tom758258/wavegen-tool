@@ -40,6 +40,13 @@ Result families add fields appropriate to the command:
   `schema_version: 2`, the requested/registered model identity, and Core
   capabilities. Its structured invalid-model response uses `event: "error"`,
   `ok: false`, and exit code 2.
+- `list-resources` returns backend and resource entries. Every entry retains
+  `resource`, `manufacturer`, and `model`, with additive `model_id` and
+  `model_support_status`. Raw listings set the new fields to `null` because
+  they do not query IDN. Live listings use `product_live_model`,
+  `registered_only`, `unsupported`, or `unidentified`; a
+  `product_live_model` label does not admit the backend, transport, or
+  command for live control. The list excludes serial, firmware, and raw IDN.
 - `identify` returns backend, transport, reported identity fields,
   `canonical_model_id`, and `model_supported`.
 - `status` returns selected `channel`, identity context, output state,
