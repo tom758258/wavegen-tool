@@ -3779,6 +3779,8 @@ def _resource_list_success_payload(result: Any) -> dict[str, object]:
                 "resource": entry.resource,
                 "manufacturer": entry.manufacturer,
                 "model": entry.model,
+                "model_id": entry.model_id,
+                "model_support_status": entry.model_support_status,
             }
             for entry in result.resources
         ],
@@ -4864,7 +4866,13 @@ def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
             if entry.manufacturer is not None and entry.model is not None
             else "Unknown instrument"
         )
-        lines.extend((f"- {identity}", f"  Resource: {entry.resource}"))
+        lines.extend(
+            (
+                f"- {identity}",
+                f"  Model support: {entry.model_support_status.upper()}",
+                f"  Resource: {entry.resource}",
+            )
+        )
     return "\n".join(lines)
 
 
