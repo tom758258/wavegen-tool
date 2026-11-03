@@ -147,3 +147,26 @@ def resolve_supported_identity(
         canonical_model_id=model_info.model_id,
         model_supported=True,
     )
+
+
+def classify_discovered_identity(
+    identity: InstrumentIdentity,
+) -> tuple[str | None, str]:
+    """Classify a parsed IDN without granting permission for live control."""
+
+    manufacturer_matches = normalize_manufacturer(identity.manufacturer) in (
+        normalize_manufacturer(manufacturer)
+        for manufacturer in RECOGNIZED_MANUFACTURERS
+    )
+    if manufacturer_matches:
+        for model_info in _MODEL_REGISTRY.values():
+            if normalize_model(identity.model) == normalize_model(
+                model_info.canonical_model
+            ):
+                status = (
+                    "product_live_model"
+                    if model_info.model_id in _LIVE_SUPPORTED_MODEL_IDS
+                    else "registered_only"
+                )
+                return model_info.model_id, status
+    return None, "unsupported"

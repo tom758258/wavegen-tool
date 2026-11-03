@@ -42,6 +42,7 @@ from wavegen_tool_core.identity import (
     InstrumentIdentity,
     ModelInfo,
     SUPPORT_POLICY_MODE_PRODUCT,
+    classify_discovered_identity,
     model_info_for_model_id,
     parse_idn,
     registered_model_ids,
@@ -1141,6 +1142,8 @@ class ResourceListEntry:
     resource: str
     manufacturer: str | None = None
     model: str | None = None
+    model_id: str | None = None
+    model_support_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1348,13 +1351,23 @@ def _filter_live_resources(
                 try:
                     identity = parse_idn(response)
                 except MalformedIdnError:
-                    live_resources.append(ResourceListEntry(resource=resource))
+                    live_resources.append(
+                        ResourceListEntry(
+                            resource=resource,
+                            model_support_status="unidentified",
+                        )
+                    )
                 else:
+                    model_id, model_support_status = classify_discovered_identity(
+                        identity
+                    )
                     live_resources.append(
                         ResourceListEntry(
                             resource=resource,
                             manufacturer=identity.manufacturer,
                             model=identity.model,
+                            model_id=model_id,
+                            model_support_status=model_support_status,
                         )
                     )
         except Exception:

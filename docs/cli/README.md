@@ -191,9 +191,19 @@ checks USB, TCPIP/LAN, and configured ASRL candidates; `@py` checks TCPIP/LAN;
 `@bt` has no eligible live-only connection scope. ASRL discovery does not make
 ASRL an admitted identify/control transport.
 
-Listing or receiving an IDN response does not establish Product Live support.
-The Core identify/control matrix remains `system` with USB or TCPIP/LAN and
-`@py` with TCPIP/LAN. There is no backend fallback.
+With `--live-only`, each reported responder is labeled by its model support
+status: `PRODUCT_LIVE_MODEL` (model admitted by Product policy),
+`REGISTERED_ONLY` (registered but not Product Live), `UNSUPPORTED`
+(unregistered manufacturer/model combination), or `UNIDENTIFIED`
+(nonempty but unparseable IDN). Unsupported and unidentified responders remain
+listed. JSON entries also provide `model_id` and `model_support_status`;
+raw listing uses `null` for these fields because it performs no IDN query.
+No serial number, firmware, or raw IDN is included in list output.
+
+Listing or receiving an IDN response does not establish usable Product Live
+control over the selected backend/transport. The Core identify/control matrix
+remains `system` with USB or TCPIP/LAN and `@py` with TCPIP/LAN. There is
+no backend fallback.
 
 ## Instrument Inspection
 
