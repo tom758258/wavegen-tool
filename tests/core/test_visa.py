@@ -465,9 +465,25 @@ def test_system_live_only_verifies_usb_tcpip_and_asrl_and_skips_other_transports
     assert usb_session.control_ren_calls == [RENLineOperation.address_gtl]
     assert manager.close_calls == 1
     assert result.resources == (
-        ResourceListEntry(ASRL_RESOURCE, "Agilent Technologies", "33521B"),
-        ResourceListEntry(TCPIP_RESOURCE, "Vendor", "Model"),
-        ResourceListEntry(USB_RESOURCE, "not", "a"),
+        ResourceListEntry(
+            ASRL_RESOURCE,
+            "Agilent Technologies",
+            "33521B",
+            model_id="keysight-33521b",
+            model_support_status="product_live_model",
+        ),
+        ResourceListEntry(
+            TCPIP_RESOURCE,
+            "Vendor",
+            "Model",
+            model_support_status="unsupported",
+        ),
+        ResourceListEntry(
+            USB_RESOURCE,
+            "not",
+            "a",
+            model_support_status="unsupported",
+        ),
     )
 
 
@@ -490,7 +506,10 @@ def test_pyvisa_py_live_only_verifies_tcpip_and_skips_usb():
     assert tcpip_session.queries == [IDN_QUERY]
     assert tcpip_session.control_ren_calls == []
     assert tcpip_session.close_calls == 1
-    assert result.resources == (ResourceListEntry(TCPIP_RESOURCE),)
+    assert result.resources == (ResourceListEntry(
+            TCPIP_RESOURCE,
+            model_support_status="unidentified",
+        ),)
 
 
 def test_system_usb_live_only_cleanup_orders_gtl_before_session_and_manager_close():
@@ -598,6 +617,8 @@ def test_simulator_live_only_does_not_attempt_gtl():
             SIMULATED_33521B_RESOURCE,
             "KEYSIGHT TECHNOLOGIES",
             "33521B",
+            model_id="keysight-33521b",
+            model_support_status="product_live_model",
         ),
     )
     assert manager.closed
@@ -624,8 +645,13 @@ def test_live_only_keeps_parsed_identity_for_any_instrument_and_unknown_for_malf
     )
 
     assert result.resources == (
-        ResourceListEntry(unsupported, "Keysight Technologies", "34465A"),
-        ResourceListEntry(malformed),
+        ResourceListEntry(
+            unsupported,
+            "Keysight Technologies",
+            "34465A",
+            model_support_status="unsupported",
+        ),
+        ResourceListEntry(malformed, model_support_status="unidentified"),
     )
     assert unsupported_session.queries == [IDN_QUERY]
     assert malformed_session.queries == [IDN_QUERY]
@@ -721,7 +747,12 @@ def test_asrl_query_timeout_is_filtered_closed_and_next_candidate_continues():
     assert timeout_session.close_calls == 1
     assert live_session.queries == [IDN_QUERY]
     assert result.resources == (
-        ResourceListEntry(TCPIP_RESOURCE, "Vendor", "Model"),
+        ResourceListEntry(
+            TCPIP_RESOURCE,
+            "Vendor",
+            "Model",
+            model_support_status="unsupported",
+        ),
     )
 
 
@@ -745,7 +776,12 @@ def test_asrl_open_failure_is_filtered_without_retry_and_next_candidate_continue
     ]
     assert live_session.queries == [IDN_QUERY]
     assert live_session.close_calls == 1
-    assert result.resources == (ResourceListEntry(live_asrl, "Vendor", "Model"),)
+    assert result.resources == (ResourceListEntry(
+            live_asrl,
+            "Vendor",
+            "Model",
+            model_support_status="unsupported",
+        ),)
 
 
 def test_live_only_filters_failures_and_empty_responses_without_retry():
@@ -790,7 +826,7 @@ def test_live_only_filters_failures_and_empty_responses_without_retry():
     assert empty_session.close_calls == 1
     assert live_session.close_calls == 1
     assert manager.close_calls == 1
-    assert result.resources == (ResourceListEntry(live),)
+    assert result.resources == (ResourceListEntry(live, model_support_status="unidentified"),)
 
 
 def test_live_only_session_cleanup_failure_raises_after_manager_cleanup():
