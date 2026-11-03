@@ -506,10 +506,9 @@ def test_pyvisa_py_live_only_verifies_tcpip_and_skips_usb():
     assert tcpip_session.queries == [IDN_QUERY]
     assert tcpip_session.control_ren_calls == []
     assert tcpip_session.close_calls == 1
-    assert result.resources == (ResourceListEntry(
-            TCPIP_RESOURCE,
-            model_support_status="unidentified",
-        ),)
+    assert result.resources == (
+        ResourceListEntry(TCPIP_RESOURCE, model_support_status="unidentified"),
+    )
 
 
 def test_system_usb_live_only_cleanup_orders_gtl_before_session_and_manager_close():
@@ -776,12 +775,14 @@ def test_asrl_open_failure_is_filtered_without_retry_and_next_candidate_continue
     ]
     assert live_session.queries == [IDN_QUERY]
     assert live_session.close_calls == 1
-    assert result.resources == (ResourceListEntry(
+    assert result.resources == (
+        ResourceListEntry(
             live_asrl,
             "Vendor",
             "Model",
             model_support_status="unsupported",
-        ),)
+        ),
+    )
 
 
 def test_live_only_filters_failures_and_empty_responses_without_retry():
@@ -826,7 +827,9 @@ def test_live_only_filters_failures_and_empty_responses_without_retry():
     assert empty_session.close_calls == 1
     assert live_session.close_calls == 1
     assert manager.close_calls == 1
-    assert result.resources == (ResourceListEntry(live, model_support_status="unidentified"),)
+    assert result.resources == (
+        ResourceListEntry(live, model_support_status="unidentified"),
+    )
 
 
 def test_live_only_session_cleanup_failure_raises_after_manager_cleanup():
