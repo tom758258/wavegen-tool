@@ -185,6 +185,7 @@ def test_unsupported_models_are_not_matched_by_family_or_substring(model):
     with pytest.raises(UnsupportedInstrumentError):
         resolve_supported_identity(identity)
 
+
 @pytest.mark.parametrize(
     ("manufacturer", "model", "expected_id", "expected_status"),
     [
