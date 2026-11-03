@@ -4,6 +4,7 @@ from wavegen_tool_core.errors import MalformedIdnError, UnsupportedInstrumentErr
 from wavegen_tool_core.identity import (
     CANONICAL_MODEL_ID,
     SUPPORT_POLICY_MODE_VALIDATION,
+    classify_discovered_identity,
     model_info_for_model_id,
     parse_idn,
     resolve_supported_identity,
@@ -183,3 +184,24 @@ def test_unsupported_models_are_not_matched_by_family_or_substring(model):
 
     with pytest.raises(UnsupportedInstrumentError):
         resolve_supported_identity(identity)
+
+@pytest.mark.parametrize(
+    ("manufacturer", "model", "expected_id", "expected_status"),
+    [
+        ("Keysight Technologies", "33521B", "keysight-33521b", "product_live_model"),
+        ("Agilent Technologies", "33512B", "keysight-33512b", "product_live_model"),
+        ("Keysight Technologies", "33510B", "keysight-33510b", "registered_only"),
+        ("Keysight Technologies", "34465A", None, "unsupported"),
+        ("Other Manufacturer", "33521B", None, "unsupported"),
+        ("Keysight Technologies", "X33521B", None, "unsupported"),
+        (" keysight   technologies ", " 33521b ", "keysight-33521b", "product_live_model"),
+    ],
+)
+def test_discovery_classifies_exact_registered_models_without_admitting_control(
+    manufacturer, model, expected_id, expected_status
+):
+    identity = parse_idn(f"{manufacturer},{model},EXAMPLE-SERIAL,1.00")
+
+    model_id, status = classify_discovered_identity(identity)
+
+    assert (model_id, status) == (expected_id, expected_status)
