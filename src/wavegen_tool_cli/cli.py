@@ -4866,10 +4866,11 @@ def _human_resource_list_success(result: Any, *, live_only: bool) -> str:
             if entry.manufacturer is not None and entry.model is not None
             else "Unknown instrument"
         )
+        support_status = (entry.model_support_status or "unidentified").upper()
         lines.extend(
             (
                 f"- {identity}",
-                f"  Model support: {entry.model_support_status.upper()}",
+                f"  Model support: {support_status}",
                 f"  Resource: {entry.resource}",
             )
         )
