@@ -67,9 +67,11 @@ planning, simple and surgical changes, and text-file hygiene.
   queries, and waveform configuration must not enable output implicitly;
   output-on must remain explicit. Do not use `*RST`, preset, setup recall, or
   other broad state-changing operations by default.
-- Real hardware access is explicit and opt-in. One-shot live access requires a
-  user-supplied `--resource`; an environment variable may be used only as a
-  shell convenience. Do not infer, guess, or scan for resources; only explicit
+- Real hardware access is explicit and opt-in. One-shot Direct CLI live access
+  requires either a user-supplied `--resource` or the operator-set
+  `WAVEGEN_TOOL_RESOURCE` environment variable; `--resource` takes precedence.
+  Worker Live and live validation scripts still require explicit resource
+  arguments. Do not infer, guess, or scan for resources; only explicit
   discovery commands may open enumerated resources. Never commit real
   resources, serial numbers, private IDN data, or private lab addresses.
 

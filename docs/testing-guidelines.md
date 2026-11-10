@@ -56,8 +56,8 @@ Documentation checks should verify stable, user-relevant facts:
 - model, feature, Worker, connection, and backend claims match current Core,
   CLI, contracts, and validation scripts;
 - warnings distinguish dry-run, simulator, PlanOnly, and real hardware;
-- live examples require an explicit resource and do not imply scanning or
-  auto-selection;
+- live examples use an operator-selected explicit resource or, for Direct CLI,
+  the operator-set `WAVEGEN_TOOL_RESOURCE`; none imply scanning or auto-selection;
 - tracked text contains no real resource, serial, raw IDN, private address,
   private hostname, or personal filesystem path;
 - evidence wording distinguishes planned cases from cases actually exercised.
@@ -101,8 +101,10 @@ the intended operator scope, but it must not open VISA, perform hardware I/O,
 or send live SCPI.
 
 Real validation must be explicit, opt-in, bounded, interactive where the runner
-requires confirmation, and use an operator-supplied resource. Normal control
-and validation must never infer, guess, scan, or auto-select a resource.
+requires confirmation, and use an operator-supplied resource. Direct CLI Live
+may use an operator-set `WAVEGEN_TOOL_RESOURCE` when `--resource` is absent;
+Worker Live and validation scripts retain explicit resource arguments. Normal
+control and validation must never infer, guess, scan, or auto-select a resource.
 Resource enumeration is allowed only when a user explicitly invokes the
 dedicated discovery diagnostic; it is not unattended live admission.
 

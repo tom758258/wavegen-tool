@@ -79,7 +79,8 @@ Both paths are hardware-free. Neither is real-instrument validation.
 ### Live
 
 Without `--dry-run` or `--simulate`, Direct CLI instrument inspection and
-control commands require one explicit `--resource`. Core validates the
+control commands use an explicit `--resource` when provided; otherwise they
+use the operator-set `WAVEGEN_TOOL_RESOURCE` environment variable. Core validates the
 applicable backend, transport, identity, capabilities, and safety conditions
 before performing the operation. Offline introspection and the explicit
 resource-listing diagnostic do not require a selected resource.
@@ -89,8 +90,22 @@ detected physical identity is authoritative. The validation runner supplies an
 expected-model guard through its private validation route; the guard can reject
 a mismatch but cannot override detected identity.
 
-Normal live control never scans, guesses, infers, or auto-selects a resource.
+Normal live control never scans, guesses, or auto-selects a resource.
+The environment variable must be set by the operator to one exact resource.
 Discovery happens only when the user explicitly invokes `list-resources`.
+
+For example, in PowerShell (replace the placeholder with your instrument's
+VISA resource):
+
+```powershell
+$env:WAVEGEN_TOOL_RESOURCE = "USB0::...::INSTR"
+uv run wavegen-tool identify --json
+```
+
+A command's `--resource` takes precedence over `WAVEGEN_TOOL_RESOURCE`.
+If neither specifies a usable resource, Direct CLI live use fails without
+opening a VISA connection. Worker Live and validation scripts still require
+an explicit resource argument.
 
 ### Dry-run
 
@@ -124,7 +139,7 @@ Options appear only on commands that support them:
 | Option | Meaning |
 | --- | --- |
 | `--channel {1,2}` | Selected channel; default `1` |
-| `--resource RESOURCE` | Explicit USB or TCPIP/LAN VISA resource for live use |
+| `--resource RESOURCE` | Explicit USB or TCPIP/LAN VISA resource; overrides `WAVEGEN_TOOL_RESOURCE` in Direct CLI live use |
 | `--backend BACKEND` | Core-validated VISA backend; default `system` |
 | `--simulate` | Use the in-memory simulator |
 | `--dry-run` | Preview validated SCPI without VISA I/O |
@@ -214,7 +229,7 @@ model:
 
 ```powershell
 uv run wavegen-tool identify `
-  --resource "<EXPLICIT_VISA_RESOURCE>" `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
   --backend system `
   --json
 ```
@@ -230,7 +245,7 @@ state without changing the instrument:
 
 ```powershell
 uv run wavegen-tool status `
-  --resource "<EXPLICIT_VISA_RESOURCE>" `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
   --channel 1 `
   --json
 ```
@@ -244,7 +259,7 @@ session:
 
 ```powershell
 uv run wavegen-tool read-errors `
-  --resource "<EXPLICIT_VISA_RESOURCE>" `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
   --max-reads 20 `
   --json
 ```
@@ -509,7 +524,7 @@ Set only the selected output state:
 
 ```powershell
 uv run wavegen-tool output `
-  --resource "<EXPLICIT_VISA_RESOURCE>" `
+  --resource "$env:WAVEGEN_TOOL_RESOURCE" `
   --channel 1 `
   --state off
 ```
@@ -522,7 +537,7 @@ configured signal and physical load before explicitly selecting `on`.
 Send one instrument-wide IEEE-488.2 `*TRG` without waiting:
 
 ```powershell
-uv run wavegen-tool trigger --resource "<EXPLICIT_VISA_RESOURCE>"
+uv run wavegen-tool trigger --resource "$env:WAVEGEN_TOOL_RESOURCE"
 ```
 
 There is no channel option. Every armed channel using Bus trigger may respond.
@@ -573,7 +588,7 @@ uv run wavegen-tool worker --mode simulate --control-port 8765
 Worker startup options are:
 
 - `--mode {live,simulate}` (required)
-- `--resource` (required for live, forbidden for simulate)
+- `--resource` (required for live, forbidden for simulate; Worker does not read `WAVEGEN_TOOL_RESOURCE`)
 - `--backend` (default `system`)
 - `--control-port` (default `0`; zero selects an available loopback port)
 - `--allow-output-writes` (off by default)
@@ -724,7 +739,7 @@ dry-run, and simulator checks without a resource or hardware I/O.
   -Target keysight-33512b `
   -Connection usb `
   -Backend system `
-  -Resource "<EXPLICIT_VISA_RESOURCE>" `
+  -Resource "$env:WAVEGEN_TOOL_RESOURCE" `
   -PlanOnly
 ```
 
