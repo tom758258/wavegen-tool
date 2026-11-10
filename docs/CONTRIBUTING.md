@@ -110,13 +110,19 @@ contributor may see those cases run again.
 
 ### PlanOnly
 
-Create the exact intended live plan before touching hardware:
+Create the exact intended live plan before touching hardware. Set a
+PowerShell session variable to the operator-selected VISA resource and pass
+it explicitly to the validation script:
+
+```powershell
+$env:WAVEGEN_TOOL_RESOURCE = "USB0::...::INSTR"
+```
 
 ```powershell
 .\scripts\live-cli-check.ps1 `
   -Target keysight-33512b `
   -Connection usb `
-  -Resource "<EXPLICIT_VISA_RESOURCE>" `
+  -Resource "$env:WAVEGEN_TOOL_RESOURCE" `
   -Backend system `
   -PlanOnly
 ```
@@ -144,7 +150,7 @@ Run the same command without `-PlanOnly` only after the operator is ready:
 .\scripts\live-cli-check.ps1 `
   -Target keysight-33512b `
   -Connection usb `
-  -Resource "<EXPLICIT_VISA_RESOURCE>" `
+  -Resource "$env:WAVEGEN_TOOL_RESOURCE" `
   -Backend system
 ```
 

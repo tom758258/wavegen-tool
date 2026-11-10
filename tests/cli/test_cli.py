@@ -364,6 +364,7 @@ def test_identify_help(capsys):
 
 
 def test_missing_resource_is_usage_error_without_traceback(monkeypatch, capsys):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
     manager = FakeManager()
     calls = install_fake_manager(monkeypatch, manager)
 
@@ -415,6 +416,120 @@ def test_identify_validation_only_argument_guards_fail_before_visa_io(
     assert calls == []
     assert manager.opened_resources == []
     assert "usage:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("environment_resource", "explicit_resource", "expected_resource"),
+    [
+        (USB_RESOURCE, None, USB_RESOURCE),
+        (USB_RESOURCE, TCPIP_RESOURCE, TCPIP_RESOURCE),
+        (None, USB_RESOURCE, USB_RESOURCE),
+    ],
+)
+def test_direct_live_resource_precedence(
+    environment_resource, explicit_resource, expected_resource, monkeypatch, capsys
+):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
+    if environment_resource is not None:
+        monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", environment_resource)
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+    argv = ["identify", "--json"]
+    if explicit_resource is not None:
+        argv.extend(["--resource", explicit_resource])
+    if expected_resource == TCPIP_RESOURCE:
+        argv.extend(["--backend", "@py"])
+
+    exit_code = main(argv)
+
+    assert exit_code == ExitCode.SUCCESS
+    assert json.loads(capsys.readouterr().out)["success"] is True
+    assert manager.opened_resources == [expected_resource]
+    assert calls == (["@py"] if expected_resource == TCPIP_RESOURCE else ["@ivi"])
+
+
+@pytest.mark.parametrize("environment_resource", ["", " ", "\t"])
+def test_direct_live_empty_resource_environment_fails_closed(
+    environment_resource, monkeypatch, capsys
+):
+    monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", environment_resource)
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(["identify"])
+
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert calls == []
+    assert manager.opened_resources == []
+    assert "WAVEGEN_TOOL_RESOURCE" in capsys.readouterr().err
+
+
+def test_direct_live_waveform_uses_resource_environment(monkeypatch, capsys):
+    monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", USB_RESOURCE)
+    calls = []
+
+    def fake_configure_sine(*args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(
+            backend="system",
+            transport="usb",
+            identity=SimpleNamespace(
+                manufacturer="Keysight Technologies",
+                model="33521B",
+            ),
+            frequency_hz=1000.0,
+            amplitude_vpp=0.1,
+            offset_v=0.0,
+            load="50",
+            phase_deg=0.0,
+            output_state="off",
+        )
+
+    monkeypatch.setattr(cli_module, "configure_sine", fake_configure_sine)
+    exit_code = main([
+        "configure-sine", "--frequency-hz", "1000",
+        "--amplitude-vpp", "0.1", "--json",
+    ])
+
+    assert exit_code == ExitCode.SUCCESS
+    assert json.loads(capsys.readouterr().out)["success"] is True
+    assert calls[0][0] == USB_RESOURCE
+
+
+@pytest.mark.parametrize("mode_flag", ["--dry-run", "--simulate"])
+def test_resource_environment_does_not_turn_offline_modes_live(
+    mode_flag, monkeypatch, capsys
+):
+    monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", USB_RESOURCE)
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
+    exit_code = main([
+        "configure-sine", mode_flag, "--frequency-hz", "1000",
+        "--amplitude-vpp", "0.1", "--json",
+    ])
+
+    assert exit_code == ExitCode.SUCCESS
+    assert json.loads(capsys.readouterr().out)["success"] is True
+    assert calls == []
+    assert manager.opened_resources == []
+
+
+def test_explicit_resource_remains_forbidden_with_simulation_and_resource_environment(
+    monkeypatch, capsys
+):
+    monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", USB_RESOURCE)
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+
+    with pytest.raises(SystemExit) as error:
+        main(["identify", "--simulate", "--resource", USB_RESOURCE])
+
+    assert error.value.code == ExitCode.CLI_USAGE
+    assert calls == []
+    assert manager.opened_resources == []
+    assert "cannot be used with --simulate" in capsys.readouterr().err
 
 
 def test_valid_fake_identify_human_output(monkeypatch, capsys):
@@ -1420,6 +1535,7 @@ def test_internal_fm_dry_run_human_output_reports_frequency_and_deviation(
 def test_configure_sine_live_missing_resource_is_usage_error(
     monkeypatch, capsys
 ):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
     manager = FakeManager()
     manager_calls = install_fake_manager(monkeypatch, manager)
 
@@ -1622,6 +1738,7 @@ def test_configure_square_dry_run_cli_emits_hardware_free_json(
 def test_configure_square_live_missing_resource_is_usage_error(
     monkeypatch, capsys
 ):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
     manager = FakeManager()
     manager_calls = install_fake_manager(monkeypatch, manager)
 
@@ -1828,6 +1945,7 @@ def test_configure_ramp_dry_run_cli_emits_hardware_free_json(
 def test_configure_ramp_live_missing_resource_is_usage_error(
     monkeypatch, capsys
 ):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
     manager = FakeManager()
     manager_calls = install_fake_manager(monkeypatch, manager)
 
@@ -2733,6 +2851,7 @@ def test_configure_prbs_dry_run_cli_emits_hardware_free_json(
 def test_remaining_live_waveforms_require_resource(
     monkeypatch, capsys, argv
 ):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
     manager = FakeManager()
     manager_calls = install_fake_manager(monkeypatch, manager)
 

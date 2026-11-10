@@ -119,9 +119,12 @@ uv run wavegen-tool configure-sine `
   --amplitude-vpp 0.1
 ```
 
-Dry-run and simulator results are not real-instrument validation. Live use
-requires an explicit resource and follows the identity, backend, channel, and
-output-safety rules in the [CLI guide](docs/cli/README.md).
+Dry-run and simulator results are not real-instrument validation. Direct CLI
+Live uses `--resource` or the operator-set `WAVEGEN_TOOL_RESOURCE` environment
+variable, with `--resource` taking precedence. Worker and live validation
+scripts still require explicit resource arguments. All live operations follow
+the identity, backend, channel, and output-safety rules in the
+[CLI guide](docs/cli/README.md).
 
 ## Internal PWM
 

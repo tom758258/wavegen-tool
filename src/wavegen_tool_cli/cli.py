@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from enum import IntEnum
 from typing import Any, Sequence
@@ -604,7 +605,7 @@ def _add_list_sweep_arguments(
     _add_validation_support_policy_argument(parser)
     parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     parser.add_argument(
         "--backend",
@@ -683,7 +684,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_only_live_arguments(identify_parser)
     identify_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     identify_parser.add_argument(
         "--backend",
@@ -706,7 +707,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_only_live_arguments(status_parser)
     status_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     status_parser.add_argument(
         "--backend",
@@ -728,7 +729,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_only_live_arguments(read_errors_parser)
     read_errors_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     read_errors_parser.add_argument(
         "--backend",
@@ -757,7 +758,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(sine_parser)
     sine_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     sine_parser.add_argument(
         "--backend",
@@ -815,7 +816,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(sine_sweep_parser)
     sine_sweep_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     sine_sweep_parser.add_argument(
         "--backend",
@@ -896,7 +897,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(square_sweep_parser)
     square_sweep_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     square_sweep_parser.add_argument(
         "--backend",
@@ -982,7 +983,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(ramp_sweep_parser)
     ramp_sweep_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     ramp_sweep_parser.add_argument(
         "--backend",
@@ -1068,7 +1069,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(triangle_sweep_parser)
     triangle_sweep_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     triangle_sweep_parser.add_argument(
         "--backend",
@@ -1183,7 +1184,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(square_parser)
     square_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     square_parser.add_argument(
         "--backend",
@@ -1250,7 +1251,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(ramp_parser)
     ramp_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     ramp_parser.add_argument(
         "--backend",
@@ -1317,7 +1318,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(triangle_parser)
     triangle_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     triangle_parser.add_argument(
         "--backend",
@@ -1379,7 +1380,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(pulse_parser)
     pulse_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     pulse_parser.add_argument(
         "--backend",
@@ -1458,7 +1459,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(dc_parser)
     dc_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     dc_parser.add_argument(
         "--backend",
@@ -1503,7 +1504,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(noise_parser)
     noise_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     noise_parser.add_argument(
         "--backend",
@@ -1552,7 +1553,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(prbs_parser)
     prbs_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     prbs_parser.add_argument(
         "--backend",
@@ -1615,7 +1616,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_support_policy_argument(configure_output_parser)
     configure_output_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     configure_output_parser.add_argument(
         "--backend",
@@ -1680,7 +1681,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_simulate_argument(trigger_parser)
     trigger_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     trigger_parser.add_argument(
         "--backend",
@@ -1711,7 +1712,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_validation_only_live_arguments(output_parser)
     output_parser.add_argument(
         "--resource",
-        help="Explicit USB or TCPIP/LAN VISA resource required for live use.",
+        help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
     )
     output_parser.add_argument(
         "--backend",
@@ -1989,19 +1990,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "non-default --model selection requires --dry-run or --simulate"
         )
+    # Resolve the user-selected default only for Direct CLI live commands.
+    if (
+        (args.command in waveform_commands or args.command in validation_only_live_commands)
+        and not args.simulate
+        and not getattr(args, "dry_run", False)
+        and args.resource is None
+    ):
+        environment_resource = os.environ.get("WAVEGEN_TOOL_RESOURCE")
+        if environment_resource and environment_resource.strip():
+            args.resource = environment_resource
     if (
         args.command in waveform_commands
         and not args.dry_run
         and not args.simulate
         and args.resource is None
     ):
-        parser.error("the following arguments are required: --resource")
+        parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
     if (
         args.command in {"identify", "status", "output", "read-errors", "trigger"}
         and not args.simulate
         and args.resource is None
     ):
-        parser.error("the following arguments are required: --resource")
+        parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
     if args.command == "list-resources":
         return _run_list_resources(args)
     if args.command == "configure-sine":
