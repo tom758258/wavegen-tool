@@ -3840,6 +3840,8 @@ def test_configure_sine_sweep_cli_channel_two_json(capsys):
                     "resource": "USB0::SIM::33521B::INSTR",
                     "manufacturer": None,
                     "model": None,
+                    "model_id": None,
+                    "model_support_status": None,
                 }
             ],
         ),
