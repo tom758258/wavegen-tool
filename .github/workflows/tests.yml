@@ -1,0 +1,297 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changes:
+    name: Detect affected test areas
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      core: ${{ steps.filter.outputs.core }}
+      cli: ${{ steps.filter.outputs.cli }}
+      worker: ${{ steps.filter.outputs.worker }}
+      validation: ${{ steps.filter.outputs.validation }}
+      packaging: ${{ steps.filter.outputs.packaging }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select directly affected tests and integration boundaries
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          base: ${{ github.event.repository.default_branch }}
+          filters: |
+            core:
+              - 'src/wavegen_tool_core/**'
+              - 'tests/core/**'
+              - 'tests/architecture/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/tests.yml'
+            cli:
+              - 'src/wavegen_tool_cli/cli.py'
+              - 'src/wavegen_tool_cli/capabilities.py'
+              - 'src/wavegen_tool_cli/manifest.py'
+              - 'src/wavegen_tool_cli/__init__.py'
+              - 'tests/cli/test_cli.py'
+              - 'tests/cli/test_cli_list_resources.py'
+              - 'tests/cli/test_capabilities_cli.py'
+              - 'tests/cli/test_manifest.py'
+              - 'src/wavegen_tool_core/**'
+              - 'docs/contracts/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/tests.yml'
+            worker:
+              - 'src/wavegen_tool_cli/worker*.py'
+              - 'src/wavegen_tool_cli/lifecycle_client.py'
+              - 'tests/cli/test_worker*.py'
+              - 'tests/cli/test_lifecycle_client.py'
+              - 'src/wavegen_tool_core/**'
+              - 'docs/contracts/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/tests.yml'
+            validation:
+              - 'scripts/*.ps1'
+              - 'tests/cli/test_validation_scripts.py'
+              - 'tests/cli/test_validation_script_helpers.py'
+              - 'src/wavegen_tool_core/**'
+              - 'src/wavegen_tool_cli/cli.py'
+              - 'src/wavegen_tool_cli/capabilities.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/tests.yml'
+            packaging:
+              - 'src/**'
+              - 'tests/architecture/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/tests.yml'
+
+  quality:
+    name: Code quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+      - name: Install locked dependencies
+        run: uv sync --python 3.13 --all-extras --locked --link-mode=copy
+      - name: Check committed whitespace
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ ! "$BASE_SHA" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            git diff --check "${HEAD_SHA}^" "$HEAD_SHA"
+          else
+            git diff --check "$BASE_SHA" "$HEAD_SHA"
+          fi
+      - name: Run Ruff
+        run: ./.venv/bin/python -m ruff check src tests
+
+  pytest-linux:
+    name: Linux Python ${{ matrix.python-version }}
+    needs: detect-changes
+    if: >-
+      needs.detect-changes.outputs.core == 'true' ||
+      needs.detect-changes.outputs.cli == 'true' ||
+      needs.detect-changes.outputs.worker == 'true' ||
+      needs.detect-changes.outputs.packaging == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+      - name: Install locked dependencies
+        run: uv sync --python ${{ matrix.python-version }} --all-extras --locked --link-mode=copy
+      - name: Prepare test artifacts directory
+        run: mkdir -p .tmp_tests
+      - name: Core tests (primary Python)
+        if: needs.detect-changes.outputs.core == 'true' && matrix.python-version == '3.13'
+        run: >-
+          ./.venv/bin/python -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-linux-core
+          tests/core
+      - name: Core compatibility and safety contracts
+        if: needs.detect-changes.outputs.core == 'true' && matrix.python-version != '3.13'
+        run: >-
+          ./.venv/bin/python -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-linux-core-compat
+          tests/core/test_identity.py tests/core/test_capabilities.py
+          tests/core/test_transport.py tests/core/test_backends.py
+          tests/core/test_simulator.py
+      - name: Direct CLI tests (primary Python)
+        if: needs.detect-changes.outputs.cli == 'true' && matrix.python-version == '3.13'
+        run: >-
+          ./.venv/bin/python -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-linux-cli
+          tests/cli/test_cli.py tests/cli/test_cli_list_resources.py
+          tests/cli/test_capabilities_cli.py tests/cli/test_manifest.py
+      - name: Direct CLI compatibility contracts
+        if: needs.detect-changes.outputs.cli == 'true' && matrix.python-version != '3.13'
+        run: >-
+          ./.venv/bin/python -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-linux-cli-compat
+          tests/cli/test_cli.py tests/cli/test_capabilities_cli.py
+          tests/cli/test_manifest.py
+      - name: Worker tests (primary Python)
+        if: needs.detect-changes.outputs.worker == 'true' && matrix.python-version == '3.13'
+        run: >-
+          ./.venv/bin/python -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-linux-worker
+          tests/cli/test_worker.py tests/cli/test_worker_commands.py
+          tests/cli/test_lifecycle_client.py
+      - name: Worker compatibility contracts
+        if: needs.detect-changes.outputs.worker == 'true' && matrix.python-version != '3.13'
+        run: >-
+          ./.venv/bin/python -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-linux-worker-compat
+          tests/cli/test_worker_commands.py tests/cli/test_lifecycle_client.py
+      - name: Core and adapter import boundaries
+        run: >-
+          ./.venv/bin/python -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-linux-architecture
+          tests/architecture/test_import_boundaries.py
+      - name: Build distributions and smoke installed CLI
+        if: needs.detect-changes.outputs.packaging == 'true'
+        run: |
+          ./.venv/bin/python -m build
+          ./.venv/bin/python -c "import wavegen_tool_core, wavegen_tool_cli, wavegen_tool_webui"
+          ./.venv/bin/wavegen-tool --help
+
+  pytest-windows:
+    name: Windows Python ${{ matrix.python-version }}
+    needs: detect-changes
+    if: >-
+      needs.detect-changes.outputs.core == 'true' ||
+      needs.detect-changes.outputs.cli == 'true' ||
+      needs.detect-changes.outputs.worker == 'true' ||
+      needs.detect-changes.outputs.packaging == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+      - name: Install locked dependencies
+        run: uv sync --python ${{ matrix.python-version }} --all-extras --locked --link-mode=copy
+      - name: Prepare test artifacts directory
+        run: New-Item -ItemType Directory -Force .tmp_tests | Out-Null
+      - name: Core tests (Windows primary Python)
+        if: needs.detect-changes.outputs.core == 'true' && matrix.python-version == '3.13'
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-core
+          tests/core/test_identity.py tests/core/test_capabilities.py
+          tests/core/test_transport.py tests/core/test_backends.py
+          tests/core/test_simulator.py tests/core/test_visa.py
+      - name: Core compatibility contracts (Windows)
+        if: needs.detect-changes.outputs.core == 'true' && matrix.python-version != '3.13'
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-core-compat
+          tests/core/test_identity.py tests/core/test_capabilities.py
+          tests/core/test_transport.py tests/core/test_backends.py
+      - name: Direct CLI tests (Windows primary Python)
+        if: needs.detect-changes.outputs.cli == 'true' && matrix.python-version == '3.13'
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-cli
+          tests/cli/test_cli.py tests/cli/test_cli_list_resources.py
+          tests/cli/test_capabilities_cli.py tests/cli/test_manifest.py
+      - name: Direct CLI compatibility contracts (Windows)
+        if: needs.detect-changes.outputs.cli == 'true' && matrix.python-version != '3.13'
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-cli-compat
+          tests/cli/test_capabilities_cli.py tests/cli/test_manifest.py
+      - name: Worker tests (Windows primary Python)
+        if: needs.detect-changes.outputs.worker == 'true' && matrix.python-version == '3.13'
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-worker
+          tests/cli/test_worker.py tests/cli/test_worker_commands.py
+          tests/cli/test_lifecycle_client.py
+      - name: Worker compatibility contracts (Windows)
+        if: needs.detect-changes.outputs.worker == 'true' && matrix.python-version != '3.13'
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-worker-compat
+          tests/cli/test_worker_commands.py tests/cli/test_lifecycle_client.py
+      - name: Core and adapter import boundaries
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-architecture
+          tests/architecture/test_import_boundaries.py
+      - name: Build distributions and smoke installed CLI
+        if: needs.detect-changes.outputs.packaging == 'true'
+        run: |
+          .\.venv\Scripts\python.exe -m build
+          .\.venv\Scripts\python.exe -c "import wavegen_tool_core, wavegen_tool_cli, wavegen_tool_webui"
+          .\.venv\Scripts\wavegen-tool.exe --help
+
+  windows-validation:
+    name: Windows PowerShell validation scripts (no hardware)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.validation == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Require Windows PowerShell
+        run: |
+          if (-not (Get-Command powershell.exe -ErrorAction SilentlyContinue)) {
+            throw 'Windows PowerShell is required for validation-script tests'
+          }
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+      - name: Install locked dependencies
+        run: uv sync --python 3.13 --all-extras --locked --link-mode=copy
+      - name: Prepare test artifacts directory
+        run: New-Item -ItemType Directory -Force .tmp_tests | Out-Null
+      - name: Test preflight, PlanOnly and privacy contracts without hardware
+        run: >-
+          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          --basetemp .tmp_tests/ci-windows-validation
+          tests/cli/test_validation_scripts.py
+          tests/cli/test_validation_script_helpers.py
