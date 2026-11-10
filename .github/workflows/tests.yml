@@ -44,6 +44,7 @@ jobs:
               - 'src/wavegen_tool_cli/cli.py'
               - 'src/wavegen_tool_cli/capabilities.py'
               - 'src/wavegen_tool_cli/manifest.py'
+              - 'src/wavegen_tool_cli/worker_protocol.py'
               - 'src/wavegen_tool_cli/__init__.py'
               - 'tests/cli/test_cli.py'
               - 'tests/cli/test_cli_list_resources.py'
