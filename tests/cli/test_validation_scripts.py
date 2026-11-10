@@ -630,7 +630,10 @@ Write-Output ('RESULT:' + (@{ head = $head; changed_rejected = $changedRejected 
     assert result == {"head": "a" * 40, "changed_rejected": True}
 
 
-@pytest.mark.parametrize("failure", ["none", "command", "cleanup", "case-dirty", "dirty", "limit", "na"])
+@pytest.mark.parametrize("failure", [
+    "none", "command", "cleanup", "case-dirty", "dirty", "limit", "na",
+    "before-timeout", "queue-timeout", "off-timeout", "termination-unconfirmed",
+])
 def test_full_failure_gate_and_best_effort_off(artifact_root, failure):
     result = _run_powershell_test(artifact_root, r'''
 $failure = 'FAILURE'
@@ -643,8 +646,10 @@ $run = [pscustomobject]@{ Private = (Get-Location).Path }
 $script:state = 'off'
 $script:offCalls = 0
 $script:onCalls = 0
-$script:onlyOutput = @(Get-FullValidationInventory -Channels @(2) | Where-Object { $_.family -eq 'output-control' })
-function Get-FullValidationInventory { param($Channels); return $script:onlyOutput }
+$inventory = @(Get-FullValidationInventory -Channels @(2))
+$script:casesUnderTest = @($inventory | Where-Object family -eq 'output-control') +
+    @($inventory | Where-Object name -eq 'ch2/status')
+function Get-FullValidationInventory { param($Channels); return $script:casesUnderTest }
 function Invoke-WavegenJson {
     param($Name, $CliArguments, $ArtifactDirectory)
     $command = $CliArguments[0]
@@ -652,10 +657,21 @@ function Invoke-WavegenJson {
         $index = [array]::IndexOf($CliArguments, '--channel')
         if ($CliArguments[$index + 1] -ne '2') { throw 'Wrong channel used!' }
     }
+    if (($failure -eq 'before-timeout' -and $Name -like '*step1') -or
+        ($failure -eq 'queue-timeout' -and $script:state -eq 'on' -and $command -eq 'read-errors') -or
+        ($failure -eq 'off-timeout' -and $command -eq 'output' -and $CliArguments[2] -eq 'off' -and
+         ($Name -like '*step3' -or $Name -like '*cleanup-command' -or $Name -like '*final-safe-off-command'))) {
+        throw [TimeoutException]::new("$Name timed out")
+    }
     if ($command -eq 'output') {
         $script:state = $CliArguments[2]
         if ($script:state -eq 'off') { $script:offCalls++ } else { $script:onCalls++ }
         if ($failure -eq 'command' -and $script:state -eq 'on') { throw 'Injected failure after enabling output' }
+        if ($failure -eq 'termination-unconfirmed' -and $script:state -eq 'on') {
+            $timeout = [TimeoutException]::new('Output ON timed out. Subprocess termination could not be confirmed.')
+            $timeout.Data['TerminationUnconfirmed'] = $true
+            throw $timeout
+        }
         if ($failure -eq 'cleanup' -and $Name -like '*cleanup-command') { throw 'Injected cleanup failure' }
     }
     $payload = [pscustomobject]@{
@@ -676,9 +692,9 @@ $pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch2/initial-s
 Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $script:offCalls; on_calls = $script:onCalls; cases = @($cases) } | ConvertTo-Json -Depth 10 -Compress))
 '''.replace("FAILURE", failure))
     assert result["pass"] is (failure == "none")
-    assert result["state"] == "off"
+    assert result["state"] == ("on" if failure == "off-timeout" else "off")
     assert result["off_calls"] >= 2
-    assert result["on_calls"] == (0 if failure == "na" else 1)
+    assert result["on_calls"] == (0 if failure in {"na", "before-timeout"} else 1)
     statuses = {case["name"]: case["status"] for case in result["cases"]}
     if failure in {"command", "cleanup", "case-dirty"}:
         assert statuses["ch2/output-control"] == "FAIL"
@@ -686,9 +702,21 @@ Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $
         assert statuses["ch2/output-control"] == "N/A"
     if failure in {"dirty", "limit"}:
         assert statuses["final-error-queue"] == "FAIL"
+    if failure.endswith("-timeout") or failure == "termination-unconfirmed":
+        case = next(case for case in result["cases"] if case["name"] == "ch2/output-control")
+        assert case["status"] == "FAIL"
+        assert any("timed out" in reason for reason in case["failure_reasons"])
+        assert statuses["ch2/status"] == "N/A"
+        if failure in {"off-timeout", "termination-unconfirmed"}:
+            assert case["cleanup_status"] == "FAIL"
+            assert statuses["ch2/final-safe-off"] == "FAIL"
+            assert any("unconfirmed" in reason or "not confirmed" in reason
+                       for reason in case["failure_reasons"])
+        else:
+            assert case["cleanup_status"] == "PASS"
 
 
-@pytest.mark.parametrize("answer", ["Yes", "No", "", "skip", "interrupted"])
+@pytest.mark.parametrize("answer", ["Yes", "No", "", "skip", "interrupted", "status-timeout"])
 def test_full_external_observation_requires_confirmation_and_safe_off(artifact_root, answer):
     result = _run_powershell_test(artifact_root, r'''
 $script:operatorAnswer = 'ANSWER'
@@ -715,6 +743,9 @@ function Invoke-FullCommand {
     param($Name, $Arguments, [int]$Channel)
     $command = $Arguments[0]
     if ($command -eq 'trigger') { throw 'External case must use a physical trigger' }
+    if ($script:operatorAnswer -eq 'status-timeout' -and $command -eq 'status' -and $script:outputs[1] -eq 'on') {
+        throw [TimeoutException]::new('Status query timed out.')
+    }
     if ($command -eq 'output') {
         if ($Arguments[2] -eq 'on') {
             if ($Channel -ne 1) { throw 'Wrong output was enabled' }

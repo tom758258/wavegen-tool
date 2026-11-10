@@ -225,6 +225,42 @@ function Join-ProcessArguments {
     return (($Arguments | ForEach-Object { ConvertTo-ProcessArgument -Argument $_ }) -join " ")
 }
 
+function Stop-CapturedProcess {
+    param([System.Diagnostics.Process]$Process, [switch]$KillProcessTree)
+
+    $treeStopped = -not $KillProcessTree
+    if ($KillProcessTree) {
+        try {
+            if ($env:OS -eq 'Windows_NT') {
+                # Windows PowerShell lacks Process.Kill(entireProcessTree).
+                $stopInfo = [System.Diagnostics.ProcessStartInfo]::new()
+                $stopInfo.FileName = Join-Path ([Environment]::SystemDirectory) 'taskkill.exe'
+                $stopInfo.Arguments = "/PID $($Process.Id) /T /F"
+                $stopInfo.UseShellExecute = $false
+                $stopInfo.CreateNoWindow = $true
+                $stopInfo.RedirectStandardOutput = $true
+                $stopInfo.RedirectStandardError = $true
+                $stopper = [System.Diagnostics.Process]::Start($stopInfo)
+                try {
+                    $stopper.BeginOutputReadLine()
+                    $stopper.BeginErrorReadLine()
+                    if ($stopper.WaitForExit(5000)) { $treeStopped = $stopper.ExitCode -eq 0 }
+                } finally {
+                    try { if (-not $stopper.HasExited) { $stopper.Kill() } }
+                    finally { $stopper.Dispose() }
+                }
+            } else {
+                $Process.Kill($true)
+                $treeStopped = $true
+            }
+        } catch { $treeStopped = $false }
+    }
+
+    # Attempt to stop the direct child even when tree termination fails.
+    try { if (-not $Process.HasExited) { $Process.Kill() } } catch { }
+    return ($Process.WaitForExit(1000) -and $treeStopped)
+}
+
 function Invoke-CapturedCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -233,7 +269,9 @@ function Invoke-CapturedCommand {
         [Parameter(Mandatory = $true)][string]$StdOutPath,
         [Parameter(Mandatory = $true)][string]$StdErrPath,
         [string]$WorkingDirectory = (Get-Location).Path,
-        [switch]$CaptureInMemory
+        [switch]$CaptureInMemory,
+        [ValidateRange(1, 3600)][int]$TimeoutSeconds = 30,
+        [switch]$KillProcessTree
     )
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
@@ -244,17 +282,50 @@ function Invoke-CapturedCommand {
     $psi.RedirectStandardError = $true
     $psi.Arguments = Join-ProcessArguments -Arguments $Arguments
 
-    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $process = [System.Diagnostics.Process]::Start($psi)
+    $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $timeoutDetail = $null
+    $terminationConfirmed = $true
     try {
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        $stdout = $stdoutTask.GetAwaiter().GetResult()
-        $stderr = $stderrTask.GetAwaiter().GetResult()
-        $exitCode = $process.ExitCode
+        $timeoutMs = $TimeoutSeconds * 1000
+        if (-not $process.WaitForExit($timeoutMs)) {
+            $timeoutDetail = 'waiting for process exit'
+        } else {
+            $remainingMs = [int][math]::Max(0, $timeoutMs - $stopwatch.ElapsedMilliseconds)
+            $streams = [System.Threading.Tasks.Task[]]@($stdoutTask, $stderrTask)
+            if (-not [System.Threading.Tasks.Task]::WaitAll($streams, $remainingMs)) {
+                $timeoutDetail = 'waiting for stdout/stderr to close'
+                $terminationConfirmed = $false
+            } else {
+                $stdout = $stdoutTask.GetAwaiter().GetResult()
+                $stderr = $stderrTask.GetAwaiter().GetResult()
+                $exitCode = $process.ExitCode
+            }
+        }
     } finally {
-        $process.Dispose()
+        try {
+            if (-not $process.HasExited) {
+                $terminationConfirmed = Stop-CapturedProcess -Process $process -KillProcessTree:$KillProcessTree
+            }
+        } catch {
+            $terminationConfirmed = $false
+        } finally {
+            try {
+                $process.StandardOutput.Dispose()
+                $process.StandardError.Dispose()
+            } finally {
+                $process.Dispose()
+            }
+        }
+    }
+    if ($timeoutDetail) {
+        $message = "$Name timed out after $TimeoutSeconds seconds $timeoutDetail."
+        if (-not $terminationConfirmed) { $message += ' Subprocess termination could not be confirmed.' }
+        $timeout = [TimeoutException]::new($message)
+        $timeout.Data['TerminationUnconfirmed'] = -not $terminationConfirmed
+        throw $timeout
     }
     $stopwatch.Stop()
 
@@ -290,9 +361,11 @@ function Invoke-WavegenJson {
 
     $stdoutPath = Join-Path $ArtifactDirectory 'stdout.json'
     $arguments = @('-c', 'from wavegen_tool_cli.cli import main; raise SystemExit(main())') + $CliArguments
+    # A bounded error drain can perform up to 20 queries with the VISA timeout.
+    $timeoutSeconds = if ($CliArguments[0] -eq 'read-errors') { 120 } else { 30 }
     $process = Invoke-CapturedCommand -Name $Name -FilePath $Python -Arguments $arguments `
         -StdOutPath $stdoutPath -StdErrPath (Join-Path $ArtifactDirectory 'stderr.txt') `
-        -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts)
+        -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts) -TimeoutSeconds $timeoutSeconds
     $raw = if ($DebugArtifacts) { [IO.File]::ReadAllText($stdoutPath) } else { $process.stdout_text }
     $process.Remove('stdout_text')
     $process.Remove('stderr_text')

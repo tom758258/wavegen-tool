@@ -259,10 +259,14 @@ function Assert-FullErrorQueue {
 
 function Set-FullSafeOff {
     param([string]$Name, [int]$Channel)
-    $payload = Invoke-FullCommand -Name "$Name-command" -Arguments @('output', '--state', 'off') -Channel $Channel
-    Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
-    $payload = Invoke-FullCommand -Name "$Name-status" -Arguments @('status') -Channel $Channel
-    Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+    try {
+        $payload = Invoke-FullCommand -Name "$Name-command" -Arguments @('output', '--state', 'off') -Channel $Channel
+        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+        $payload = Invoke-FullCommand -Name "$Name-status" -Arguments @('status') -Channel $Channel
+        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+    } catch {
+        throw "Output OFF was not confirmed for CH${Channel}. $($_.Exception.Message)"
+    }
 }
 
 function Read-LiveConfirmation {
@@ -296,6 +300,8 @@ function Get-FullCaseEvidence {
 
 function Invoke-FullLiveCases {
     param([int[]]$Channels, [bool]$CanRun)
+
+    $unconfirmedChannels = @()
 
     try {
         foreach ($channel in $Channels) {
@@ -367,12 +373,17 @@ function Invoke-FullLiveCases {
                     Write-Host "Observe CH$channel for $($observation.seconds) seconds. Output will then turn off."
                     Start-Sleep -Seconds $observation.seconds
                 }
-            } catch { $reasons += $_.Exception.Message }
-            finally {
-                try { Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel }
-                catch { $cleanupReasons += $_.Exception.Message }
-                try { Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors" }
-                catch { $cleanupReasons += $_.Exception.Message }
+            } catch {
+                $reasons += $_.Exception.Message
+                if ($_.Exception.Data['TerminationUnconfirmed']) { $unconfirmedChannels += $channel }
+            } finally {
+                try {
+                    Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel
+                    Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors"
+                } catch { $cleanupReasons += $_.Exception.Message }
+                if ($channel -in $unconfirmedChannels) {
+                    $cleanupReasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
+                }
                 $evidence.cleanup_status = if ($cleanupReasons.Count) { 'FAIL' } else { 'PASS' }
                 $reasons += $cleanupReasons | ForEach-Object { "Cleanup: $_" }
             }
@@ -403,6 +414,9 @@ function Invoke-FullLiveCases {
             $reasons = @()
             try { Set-FullSafeOff -Name $name -Channel $channel }
             catch { $reasons += $_.Exception.Message }
+            if ($channel -in $unconfirmedChannels) {
+                $reasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
+            }
             Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         }
     }
@@ -496,7 +510,7 @@ try {
     $preflightProcess = Invoke-CapturedCommand -Name 'preflight' -FilePath $powershellPath `
         -Arguments $preflightArguments -StdOutPath (Join-Path $preflightDirectory 'stdout.txt') `
         -StdErrPath (Join-Path $preflightDirectory 'stderr.txt') `
-        -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts)
+        -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts) -TimeoutSeconds 600 -KillProcessTree
     $preflightProcess.Remove('stdout_text')
     $preflightProcess.Remove('stderr_text')
     if ($preflightProcess.exit_code -eq 0) {
@@ -953,7 +967,9 @@ if ($identityPassed) {
                             [int]$cleanupInvocation.Payload.channel -ne $cleanupChannel -or
                             [string]$cleanupInvocation.Payload.output_state -cne "off"
                         ) { [void]$cleanupReasons.Add("Cleanup did not confirm the selected channel off.") }
-                    } catch { [void]$cleanupReasons.Add($_.Exception.Message) }
+                    } catch {
+                        [void]$cleanupReasons.Add("Output OFF was not confirmed for CH${cleanupChannel}. $($_.Exception.Message)")
+                    }
                     Add-LiveCase `
                         -Cases $cases `
                         -Name "ch${cleanupChannel}/cleanup-output-off" `

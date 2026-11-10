@@ -163,4 +163,3 @@ unsupported or untested scope honestly. A failed hardware run remains useful
 diagnostic evidence, but it is not passing Product Live evidence. A simulator,
 dry-run, PlanOnly run, or successful representative live case must not be used
 to claim validation of feature families that were not exercised.
-

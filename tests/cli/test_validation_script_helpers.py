@@ -22,7 +22,7 @@ def _ps_quote(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _run_powershell(script: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def _run_powershell(script: str, *, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
     if POWERSHELL is None:
         pytest.skip("Windows PowerShell is unavailable")
     result = subprocess.run(
@@ -41,6 +41,7 @@ def _run_powershell(script: str, *, check: bool = True) -> subprocess.CompletedP
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=timeout,
     )
     if check and result.returncode != 0:
         raise AssertionError(
@@ -196,6 +197,48 @@ def test_process_capture_failure_writes_stderr(artifact_root: Path) -> None:
     assert payload["success"] is False
     assert Path(payload["stderr"]) == stderr_path
     assert stderr_path.read_text(encoding="utf-8").strip() == "captured stderr"
+
+
+@pytest.mark.parametrize("mode", ["process", "tree", "pipes"])
+def test_process_capture_timeout_stays_bounded(artifact_root: Path, mode: str) -> None:
+    pid_path = artifact_root / "pids.txt"
+    stdout_path = artifact_root / "stdout.txt"
+    stderr_path = artifact_root / "stderr.txt"
+    command = "import os, subprocess, sys, time; from pathlib import Path; "
+    if mode == "process":
+        command += "pids = [os.getpid()]; "
+    else:
+        command += (
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)']); "
+            "pids = [os.getpid(), child.pid]; "
+        )
+    command += f"Path({str(pid_path)!r}).write_text(' '.join(map(str, pids))); "
+    if mode != "pipes":
+        command += "time.sleep(10)"
+    options = "-KillProcessTree " if mode == "tree" else "-CaptureInMemory "
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "try { $null = Invoke-CapturedCommand -Name 'stalled command' "
+        + f"-FilePath {_ps_quote(sys.executable)} -Arguments @('-c', {_ps_quote(command)}) "
+        + f"-StdOutPath {_ps_quote(stdout_path)} -StdErrPath {_ps_quote(stderr_path)} "
+        + f"-TimeoutSeconds 2 {options}; throw 'Unexpected success'; "
+        + "} catch [TimeoutException] { "
+        + "$timeoutMessage = $_.Exception.Message; }; "
+        + f"$pids = (Get-Content -LiteralPath {_ps_quote(pid_path)}) -split ' '; "
+        + "if (Get-Process -Id ([int]$pids[0]) -ErrorAction SilentlyContinue) { throw 'Parent still running' }; "
+        + ("if (Get-Process -Id ([int]$pids[1]) -ErrorAction SilentlyContinue) { throw 'Child still running' }; "
+           if mode == "tree" else "")
+        + "$timeoutMessage",
+        timeout=9,
+    )
+    assert "stalled command timed out" in result.stdout
+    if mode == "pipes":
+        assert "waiting for stdout/stderr to close" in result.stdout
+        assert "termination could not be confirmed" in result.stdout
+    else:
+        assert "termination could not be confirmed" not in result.stdout
+    assert not stdout_path.exists()
+    assert not stderr_path.exists()
 
 
 def test_text_privacy_redacts_sensitive_values_and_retains_firmware(
