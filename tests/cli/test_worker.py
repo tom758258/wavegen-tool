@@ -176,6 +176,16 @@ def test_worker_cli_startup_validation(argv, error_text, monkeypatch, capsys):
         )
 
 
+def test_worker_live_does_not_use_direct_cli_resource_environment(monkeypatch, capsys):
+    monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", "USB0::0x0000::0x0000::MY00000000::INSTR")
+
+    with pytest.raises(SystemExit) as error:
+        cli_module.main(["worker", "--mode", "live"])
+
+    assert error.value.code == 2
+    assert "--resource" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("command", "arguments", "request_mode"),
     [
