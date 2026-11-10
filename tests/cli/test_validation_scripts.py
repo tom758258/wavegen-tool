@@ -93,7 +93,7 @@ def _only_run(artifact_root: Path) -> Path:
     return runs[0]
 
 
-def _read_report(run_root: Path, visibility: str = "private") -> dict[str, object]:
+def _read_report(run_root: Path, visibility: str = "shareable") -> dict[str, object]:
     return json.loads(
         (run_root / visibility / "report.json").read_text(encoding="utf-8")
     )
@@ -139,6 +139,9 @@ def test_preflight_all_uses_capability_driven_channel_coverage(
     assert (run_root / "shareable" / "report.json").is_file()
     shareable = _read_report(run_root, "shareable")
     assert shareable["target_results"][0]["channels_tested"] == [1, 2]
+    assert shareable["private_raw_artifacts_retained"] is False
+    assert not (run_root / "private").exists()
+    assert {file.name for file in (run_root / "shareable").iterdir()} == {"report.json", "summary.md"}
 
 
 def test_preflight_unknown_target_fails_closed(artifact_root: Path) -> None:
@@ -235,7 +238,6 @@ def test_live_plan_only_is_hardware_free_and_capability_driven(
     assert "hardware_touched=false" in result.stdout
     assert "visa_io_performed=false" in result.stdout
     assert "Result: PLANNED" in result.stdout
-    assert "Private artifacts:" in result.stdout
     assert "Shareable report:" in result.stdout
     assert "Shareable summary:" in result.stdout
     for channel in expected_channels:
@@ -246,7 +248,6 @@ def test_live_plan_only_is_hardware_free_and_capability_driven(
         assert unexpected_case not in report["planned_cases"]
     shareable_root = run_root / "shareable"
     assert (shareable_root / "report.json").is_file()
-    assert str(run_root / "private") in result.stdout
     assert str(shareable_root / "report.json") in result.stdout
     assert str(shareable_root / "summary.md") in result.stdout
     shareable_text = "\n".join(
@@ -274,7 +275,7 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
         "usb",
         "-Resource",
         USB_RESOURCE,
-        stdin="YES\n",
+        stdin="\n",
     )
 
     assert result.returncode == 2, result.stdout + result.stderr
@@ -297,7 +298,6 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
     assert "No reset, preset or recall is performed" in result.stdout
     assert "Coupling or tracking is not changed automatically" in result.stdout
     assert "Result: CANCELLED" in result.stdout
-    assert "Private artifacts:" in result.stdout
     assert "Shareable report:" in result.stdout
     assert "Shareable summary:" in result.stdout
     run_root = _only_run(artifact_root)
@@ -305,19 +305,10 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
     assert report["status"] == "CANCELLED"
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
-    assert (run_root / "private" / "report.json").is_file()
     assert (run_root / "shareable" / "report.json").is_file()
-    assert str(run_root / "private") in result.stdout
     assert str(run_root / "shareable" / "report.json") in result.stdout
     assert str(run_root / "shareable" / "summary.md") in result.stdout
-    assert not (run_root / "private" / "identity").exists()
-
-    script_text = LIVE_SCRIPT.read_text(encoding="utf-8")
-    assert 'Write-Host "Resource: $resourceDisplay"' in script_text
-    assert 'Write-Host "  - The runner commands each exercised channel OFF after validation."' in script_text
-    assert 'Write-Host "  - Best-effort OFF cleanup is attempted after failures."' in script_text
-    assert 'Read-Host "Type YES to begin Live validation, or Ctrl+C to cancel"' in script_text
-    assert '$confirmation -cne "YES"' in script_text
+    assert not (run_root / "private").exists()
 
 
 @pytest.mark.parametrize(
@@ -430,7 +421,6 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     assert report["channels_planned"] == channels
     assert report["channels_tested"] == []
     assert "Windows PowerShell" in report["reference_environment"]
-    assert "Only dedicated output-control cases" in result.stdout
     inventory = report["full_inventory"]
     expected_primary = {
         "status",
@@ -439,6 +429,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "modulation-am", "modulation-am-dssc", "modulation-fm", "modulation-pm",
         "modulation-fsk", "modulation-bpsk", "modulation-pwm", "modulation-sum",
         "burst-immediate", "burst-bus", "burst-timer", "burst-external", "burst-gated",
+        "burst-external-negative", "burst-gated-inverted",
         "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus", "sweep-sine-timer",
         "sweep-square-linear", "sweep-ramp-linear", "sweep-triangle-linear",
         "list-transition-cw-recovery", "list-bus-trigger", "configure-output", "output-control",
@@ -450,12 +441,10 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     primary = [case for case in inventory if case["channel"] == 1]
     secondary = [case for case in inventory if case["channel"] == 2]
     assert {case["name"] for case in primary} == {f"ch1/{name}" for name in expected_primary}
-    assert len(primary) == 33
     assert {case["name"] for case in secondary} == (
         {f"ch2/{name}" for name in expected_parity} if 2 in channels else set()
     )
-    assert len(secondary) == (8 if 2 in channels else 0)
-    assert len(report["planned_cases"]) == (48 if 2 in channels else 38)
+    assert len(report["planned_cases"]) == len(inventory) + 3 + 2 * len(channels)
     pulse = next(case for case in primary if case["name"] == "ch1/static-pulse")["steps"][0]["arguments"]
     assert pulse[pulse.index("--leading-edge-s") + 1] == "0.00000004"
     assert pulse[pulse.index("--trailing-edge-s") + 1] == "0.00000006"
@@ -474,13 +463,20 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     for case in inventory:
         for step in case["steps"]:
             if step["arguments"][:3] == ["output", "--state", "on"]:
-                assert case["family"] == "output-control"
+                assert case["family"] == "output-control" or case["observation"]
+    observed = {case["name"] for case in primary if case["observation"]}
+    assert observed == {
+        "ch1/burst-bus", "ch1/burst-timer", "ch1/burst-external", "ch1/burst-external-negative",
+        "ch1/burst-gated", "ch1/burst-gated-inverted", "ch1/sweep-sine-bus",
+        "ch1/sweep-sine-timer", "ch1/list-bus-trigger",
+    }
+    assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
     for private in (USB_RESOURCE, "SYNTHETIC123", str(REPO_ROOT), str(run)):
         assert private not in text
     assert USB_RESOURCE not in result.stdout
     assert _read_report(run, "shareable")["promotes_live_support"] is False
-    preflight = next((artifact_root / "_preflight").glob("run_*/private/report.json"))
+    preflight = next((artifact_root / "_preflight").glob("run_*/shareable/report.json"))
     readiness = json.loads(preflight.read_text(encoding="utf-8"))
     assert readiness["suite"] == "full" and readiness["status"] == "PASS"
     assert readiness["hardware_touched"] is False
@@ -519,7 +515,7 @@ def test_full_git_provenance_rejects_before_artifacts(artifact_root, fake_git, s
     assert result.returncode == 2
     assert "Full requires" in result.stderr and "Git" in result.stderr
     assert not list(artifact_root.iterdir())
-    assert "Type YES" not in result.stdout
+    assert "Press Enter" not in result.stdout
 
 
 @pytest.mark.parametrize("suite", ["full", "smoke"])
@@ -589,7 +585,7 @@ def test_full_publish_provenance_failure_retains_shareable_evidence(artifact_roo
         "    }\n"
         "}\n"
         f"& '{script_path}' -Target keysight-33521b -Suite full -Connection usb "
-        f"-Backend system -Resource '{USB_RESOURCE}' -PlanOnly -Python $Python -OutputRoot $OutputRoot\n"
+        f"-Backend system -Resource '{USB_RESOURCE}' -PlanOnly -DebugArtifacts -Python $Python -OutputRoot $OutputRoot\n"
         "exit $LASTEXITCODE\n",
         encoding="utf-8",
     )
@@ -609,8 +605,11 @@ def test_full_publish_provenance_failure_retains_shareable_evidence(artifact_roo
             "passed": len(report["cases"]) - 1, "failed": 1,
             "not_applicable": 0, "total": len(report["cases"]),
         }
-        assert len(report["planned_cases"]) == 38
         assert "git-provenance" not in report["planned_cases"]
+    nested = next((artifact_root / "_preflight").glob("run_*/private/report.json"))
+    assert json.loads(nested.read_text(encoding="utf-8"))["artifact_mode"] == "debug"
+    assert (run / "private" / "capabilities" / "stdout.json").is_file()
+    assert (run / "shareable" / "capabilities" / "stdout.json").is_file()
     summary = run / "shareable" / "summary.md"
     assert "Full requires a clean Git working tree." in summary.read_text(encoding="utf-8")
     assert "Result: FAIL" in result.stdout
@@ -687,6 +686,66 @@ Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $
         assert statuses["ch2/output-control"] == "N/A"
     if failure in {"dirty", "limit"}:
         assert statuses["final-error-queue"] == "FAIL"
+
+
+@pytest.mark.parametrize("answer", ["Yes", "No", "", "skip", "interrupted"])
+def test_full_external_observation_requires_confirmation_and_safe_off(artifact_root, answer):
+    result = _run_powershell_test(artifact_root, r'''
+$script:operatorAnswer = 'ANSWER'
+$cases = [System.Collections.ArrayList]::new()
+$channelsTested = [System.Collections.ArrayList]::new()
+$targetCapabilityModel = '33512B'
+$script:outputs = @{ 1 = 'off'; 2 = 'off' }
+$script:outputOnCalls = 0
+$script:onlyExternal = @(Get-FullValidationInventory -Channels @(1, 2) | Where-Object name -eq 'ch1/burst-external')
+function Get-FullValidationInventory { param($Channels); return $script:onlyExternal }
+function Read-LiveConfirmation {
+    if ($script:outputs[1] -ne 'off') { throw 'Output must be off during preparation' }
+    return $script:operatorAnswer -ne 'skip'
+}
+function Start-Sleep {
+    if ($script:outputs[1] -ne 'on') { throw 'Output must be on during observation' }
+    if ($script:operatorAnswer -eq 'interrupted') { throw 'Interrupted observation' }
+}
+function Read-Host {
+    if ($script:outputs[1] -ne 'off') { throw 'Output must be off before answering' }
+    return $script:operatorAnswer
+}
+function Invoke-FullCommand {
+    param($Name, $Arguments, [int]$Channel)
+    $command = $Arguments[0]
+    if ($command -eq 'trigger') { throw 'External case must use a physical trigger' }
+    if ($command -eq 'output') {
+        if ($Arguments[2] -eq 'on') {
+            if ($Channel -ne 1) { throw 'Wrong output was enabled' }
+            $script:outputOnCalls++
+        }
+        $script:outputs[$Channel] = $Arguments[2]
+    }
+    return [pscustomobject]@{
+        output_state = $script:outputs[$Channel]; function = 'PULS'; frequency_hz = 1
+        amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'
+        burst_mode = 'counted'; burst_count = 3; burst_trigger_source = 'external'; burst_trigger_slope = 'positive'
+        has_errors = $false; empty_confirmed = $true; limit_reached = $false
+    }
+}
+Invoke-FullLiveCases -Channels @(1, 2) -CanRun $true
+$case = $cases | Where-Object name -eq 'ch1/burst-external'
+$pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch1/burst-external')
+Write-Output ('RESULT:' + (@{
+    pass = $pass; case = $case; outputOnCalls = $script:outputOnCalls
+    ch1 = $script:outputs[1]; ch2 = $script:outputs[2]
+} | ConvertTo-Json -Depth 8 -Compress))
+'''.replace("ANSWER", answer))
+    assert result["pass"] is (answer == "Yes"), result["case"]
+    assert result["ch1"] == result["ch2"] == "off"
+    assert result["outputOnCalls"] == (0 if answer == "skip" else 1)
+    case = result["case"]
+    assert case["cleanup_status"] == "PASS"
+    assert case["manual_observation"]["response"] == (
+        answer.lower() if answer in {"Yes", "No"} else "not-completed"
+    )
+    assert case["evidence_level"] == ("live-functional" if answer == "Yes" else None)
 
 
 def test_trigger_validation_guard_keeps_pending_model_out_of_product(monkeypatch, capsys):

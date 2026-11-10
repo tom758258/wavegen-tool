@@ -745,7 +745,7 @@ dry-run, and simulator checks without a resource or hardware I/O.
 
 PlanOnly requires the exact intended resource but does not open VISA, touch
 hardware, or send live SCPI. Console and shareable output redact the resource;
-private evidence retains it locally.
+`-DebugArtifacts` retains it in local private evidence.
 
 The live runner parameters are:
 
@@ -757,6 +757,7 @@ The live runner parameters are:
 | `-Resource` | Required exact operator-supplied resource |
 | `-Backend` | Optional; defaults to `system` |
 | `-PlanOnly` | Optional hardware-free planning switch |
+| `-DebugArtifacts` | Optional detailed private and sanitized command artifacts, also passed to Preflight |
 | `-Python` | Optional; defaults to `.\.venv\Scripts\python.exe` |
 | `-OutputRoot` | Optional; defaults to `.tmp_tests\cli_live` |
 
@@ -765,27 +766,12 @@ The live runner parameters are:
 Remove `-PlanOnly` only when explicit hardware validation is required. Before
 any I/O, the runner prints the exact target, connection, backend, resource,
 channels, cases, representative waveform, and safety plan. Redirected input is
-rejected and only exact uppercase `YES` authorizes the run. The runner does not
-scan, guess, or auto-select a resource. Smoke never enables output; Full briefly
-enables it only in dedicated output-control cases.
+rejected and Enter starts the run. Ctrl+C cancels. The runner does not scan, guess, or
+auto-select a resource. Smoke keeps output off. Full uses output only for
+output control and confirmed observation cases. Real Full requires a scope
+and a separate Ext Trig/Gate source. An unconfirmed observation fails Full.
 
-After initial parameter admission, a run creates separate `private/` and
-`shareable/` artifacts. Invalid target, connection, or resource admission exits
-before creating the run directory. Private artifacts may contain raw or
-sensitive evidence: never commit, attach, upload, or paste them into a public
-pull request. Shareable artifacts are produced by the existing sanitization
-and redaction flow; attach the complete generated directory, normally as a ZIP,
-without manually rebuilding its metadata. Passing evidence applies only to the
-cases exercised. See [Contributing](../CONTRIBUTING.md) for acceptance and
-Product Live decision policy.
-
-## Related Documentation
-
-- [Core overview](../core/README.md)
-- [Core integration](../core/integration.md)
-- [Supported models](../core/supported-models.md)
-- [Contributing](../CONTRIBUTING.md)
-- [Testing guidelines](../testing-guidelines.md)
-- [Wavegen CLI JSON / JSONL contract](../contracts/wavegen-cli-jsonl-contract.md)
-- [Worker contract](../contracts/wavegen-worker-contract.md)
-- [Wavegen orchestrator workflows](../contracts/wavegen-orchestrator-workflows.md)
+Both scripts normally retain `shareable/report.json` and
+`shareable/summary.md`. Use `-DebugArtifacts` for detailed diagnostics.
+Keep any `private/` artifacts local. See [Contributing](../CONTRIBUTING.md)
+for artifact handling, evidence acceptance, and Product Live decisions.

@@ -136,8 +136,8 @@ to `.tmp_tests\cli_live`.
 PlanOnly does not create a VISA resource manager, open VISA, perform hardware
 I/O, or send live SCPI. The resource remains required so that the plan
 represents the exact intended connection. PlanOnly console output and
-shareable evidence redact it under the existing privacy policy; private
-evidence retains the exact value locally.
+shareable evidence redact it under the existing privacy policy. Debug
+artifacts retain the exact value locally.
 
 Review the target, connection, backend, channels, representative waveform,
 planned cases, and safety statements before continuing.
@@ -156,8 +156,8 @@ Run the same command without `-PlanOnly` only after the operator is ready:
 
 Before any hardware I/O, the runner displays the exact target, connection,
 backend, resource, channels, cases, and safety plan. The operator can inspect
-the exact resource before confirmation. Redirected standard input is rejected;
-only an interactive, exact uppercase `YES` starts the live run.
+the exact resource before confirmation. Redirected standard input is rejected.
+Press Enter to start or Ctrl+C to cancel.
 
 The runner never scans, guesses, infers, or auto-selects a resource. Resource
 discovery is a separate user-invoked Direct CLI diagnostic and is not part of
@@ -183,33 +183,51 @@ Smoke retains its existing connection/backend behavior. Detected `*IDN?` must
 exactly match `-Target`. Neither suite scans, guesses, resets, recalls a setup,
 or automatically changes coupling/tracking.
 
-Full uses one shared canonical inventory for preflight, PlanOnly, and Real
-Live. CH1 covers all eight static waveforms; AM (normal and DSSC), FM, PM, FSK,
-BPSK, PWM, Sum; Immediate/Bus/Timer/External Counted Burst and Gated Burst;
-Sine Linear/Logarithmic/Bus/Timer and Square/Ramp/Triangle sweeps; the consecutive
-Sine -> Square -> Ramp -> Triangle List transition and Sine CW recovery;
-Bus-triggered List with public `trigger`; output configuration and dedicated
-output control. Bus Burst and Bus Sweep also execute public `trigger`. Static
-Pulse uses independent 40 ns leading and 60 ns trailing edges; PWM uses a
-shared 50 ns edge. Both use 1 kHz, 100 us width, 0.1 Vpp, 0 V offset, and 50 ohms.
-The inventory remains 33 CH1 recipes and eight CH2 parity recipes.
+Full uses the same cases for Preflight, PlanOnly, and Real Live. CH1 covers
+all eight static waveforms, internal AM (normal and DSSC), FM, PM, FSK, BPSK,
+PWM, and Sum. It also covers Counted and Gated Burst, Linear and Logarithmic
+Sweeps, List Sweeps, output settings, and explicit output ON/OFF.
+The static cases include representative duty cycle, symmetry, phase, high/low
+levels, independent Pulse edges, and PRBS pattern. PWM uses a shared Pulse
+edge. The List transition checks Sine, Square, Ramp, Triangle, and CW recovery.
+Output configuration exercises High-Z and inverted polarity with limits and
+autorange off, then sets 50 ohms and normal polarity with both enabled.
 
-Channel count comes from Core capabilities. Dual-channel models add only CH2
-status, Sine, AM, Immediate Counted Burst, Sine Sweep, the List transition,
-output configuration, and output control. Single-channel models never plan CH2.
-The dedicated output-control case configures Sine at 1 kHz, 0.1 Vpp, 0 V offset,
-and a 50-ohm load setting, confirms OFF, briefly enables ON and confirms it,
-then disables output and confirms OFF. No other case enables output.
+Core capabilities determine the channel count. Dual-channel models also
+exercise CH2 status, Sine, AM, Immediate Counted Burst, Linear Sweep, List
+transition, and output configuration and control. The runner checks that the
+other output stays off. Cases sample representative combinations for each model.
 
-Each Full case records command success, available public status readback,
-bounded case-local error-queue diagnostics, and selected-channel OFF cleanup.
-Modulation/Burst/Sweep/List details not exposed by public status are admitted
-through CLI success, instrument acceptance, clean case errors, and safe
-cleanup; this is not a measurement of analog performance or external triggering.
-External/Gated cases validate configuration without an external signal.
-Any required FAIL, N/A, missing result, cleanup failure, unconfirmed OFF, dirty
-final queue, failure to reach code 0 within bounded reads, or shareable
-artifact failure makes Full fail. Failures attempt best-effort OFF.
+For Real Full, prepare a scope with a 50-ohm termination for the CH1 Output
+BNC and a separate source for the rear-panel Ext Trig BNC. The Ext Trig
+connector is chassis-referenced. Follow the target model's input and grounding
+instructions and verify Trigger Out is disabled before connecting the source.
+See the [Keysight Trueform operating and service guide](https://www.keysight.com/us/en/assets/9018-03714/service-manuals/9018-03714.pdf).
+
+The runner prompts for equipment readiness while the output is off. Press
+Enter to continue the case, or type `Skip` if you cannot perform the
+observation. For External Counted Burst, send one requested edge and look
+for three pulses followed by idle. For each Gate polarity, observe pulses
+while the gate is active and their cessation when it becomes inactive.
+Bus and Timer Burst and Sweep, including Sweep Hold/Return, and Bus List
+progression also require operator observation. Each observation has a fixed
+window. The runner turns the output off and checks cleanup before asking for
+`Yes` or `No`. Disable and disconnect the external source when prompted.
+Only the dedicated output-control case and confirmed observation cases use
+Output ON.
+
+The report identifies the case, channel, requested settings, status checks,
+verification method, operator response, and cleanup result. A passed
+`live-config` case establishes command and configuration acceptance.
+`live-functional` records a confirmed behavior, such as output ON/OFF or
+the operator-observed response. Mode parameters returned by configuration
+commands describe normalized request values. Instrument status provides
+independent readback for the fields it exposes. Physical observations verify
+behavior without calibrating output frequency, amplitude, or jitter.
+
+Required failures, skipped or missing observations, unsuccessful cleanup,
+unconfirmed OFF, a dirty or unbounded final error queue, or failed shareable
+publication cause Full to fail. Failures attempt best-effort OFF.
 
 Use `-Suite full` consistently for the admission sequence:
 
@@ -225,42 +243,30 @@ preflight full PASS
 ```
 
 Together these constitute formal admission evidence for the exact model at
-that revision, covering the currently implemented Direct CLI Product Live
-feature scope in the reference environment. Preflight and PlanOnly alone are
-not Live evidence. Preflight uses dry-run/simulator recipes without hardware;
-standalone simulator processes do not prove live transitions. PlanOnly lists
+that revision, covering the exercised Direct CLI scenarios in the reference
+environment. Direct CLI Live evidence also covers the Core control paths
+shared by Worker. Worker HTTP and lifecycle checks and the offline manifest
+use their own automated tests.
+
+Preflight uses hardware-free dry-run and simulator recipes. PlanOnly lists
 the same intended inventory and explicitly reports `hardware_touched=false`
 and `visa_io_performed=false` without constructing VISA or issuing live SCPI.
 
 Scripts never change Product Live policy. Promotion still requires a separate,
 explicit Core policy change; 33510B remains validation-pending. Evidence stays
-in the existing local `private/` and sanitized `shareable/` artifacts.
+in the sanitized `shareable/` artifacts.
 
 ## Artifact Privacy
 
-After initial parameter admission creates a run directory, validation output is
-separated into:
+Both runners default to a sanitized `shareable/report.json` and
+`shareable/summary.md`. Add `-DebugArtifacts` to retain detailed raw command
+artifacts in `private/` and sanitized command artifacts in `shareable/`.
+The Live runner passes this option to its Preflight run.
 
-```text
-private/
-shareable/
-```
-
-`private/` contains raw or potentially sensitive evidence. It remains local:
-
-- never commit it;
-- never attach or upload it;
-- never paste it into a public pull request;
-- never use it as a fallback when shareable generation fails.
-
-`shareable/` is produced by the existing sanitization and redaction flow. It is
-the evidence contributors may publish. Attach the complete generated
-`shareable/` directory, normally as a ZIP. Do not manually rebuild or rewrite
-its metadata.
-
-If shareable generation fails, the run is not acceptable as public evidence.
-Private evidence stays local and may be used for diagnosis, but must not be
-uploaded as a substitute.
+Keep `private/` local. It can contain raw resources, identity data, logs, and
+paths. Attach the complete generated `shareable/` directory, normally as a ZIP,
+and preserve its metadata. If publication fails, the run fails and the runner
+attempts to retain only the safe `private/error-summary.md`.
 
 Never commit or publish a real VISA resource, serial number, raw IDN response,
 private or link-local address, private hostname, personal filesystem path, or

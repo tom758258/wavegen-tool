@@ -120,11 +120,11 @@ Smoke remains a representative Sine sanity check and never enables output:
 `smoke PASS != all implemented features validated`.
 
 Full preflight and PlanOnly share the Real Full canonical inventory, but remain
-hardware-free (`hardware_touched=false`, `visa_io_performed=false`). Test the
-exact 33-recipe CH1 set and eight-recipe CH2 parity set, capability-driven
-channels, reference-environment and dirty-Git rejection, privacy, and
-representative failure paths. Static Pulse covers independent edges while PWM
-covers shared edges. Full reports bind to a checked clean Git HEAD; Smoke
+hardware-free (`hardware_touched=false`, `visa_io_performed=false`). Check
+required CH1 observations, the representative CH2 set, capability-driven
+channels, reference-environment and dirty-Git rejection, artifact privacy,
+and representative failure paths. Static Pulse covers independent edges while
+PWM covers shared edges. Full reports bind to a checked clean Git HEAD. Smoke
 remains usable with a dirty working tree.
 Do not duplicate waveform parameter boundary permutations in runner tests.
 
@@ -135,8 +135,9 @@ model and revision's implemented Direct CLI Product Live scope only under
 Windows PowerShell, project Python, explicit USB resource, and system VISA.
 Required FAIL/N/A, missing cases, cleanup errors, unconfirmed OFF, dirty or
 unbounded final queue, and shareable generation failure must fail the gate.
-Only dedicated output-control cases may enable output; inject a failure after
-ON and verify best-effort OFF. Keep the List-to-List-to-CW transition intact.
+Only output-control and operator-confirmed observation cases may enable output.
+Verify best-effort OFF after a failure after ON, and require an affirmative
+observation for a functional pass. Keep the List-to-List-to-CW transition intact.
 
 Full PASS is eligible evidence for a separate Product Live policy decision,
 never automatic promotion. 33510B stays validation-pending until an explicit

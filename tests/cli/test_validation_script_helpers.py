@@ -452,3 +452,23 @@ def test_run_directory_layout_is_created_under_tmp_tests(artifact_root: Path) ->
     assert Path(paths["Private"]).is_dir()
     assert Path(paths["Shareable"]).is_dir()
     assert REPO_ROOT / ".tmp_tests" in run_root.parents
+
+
+def test_publication_failure_removes_partial_evidence(artifact_root: Path) -> None:
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH, PRIVACY_PATH)
+        + f"$run = New-ValidationRunDirectory -RepoRoot {_ps_quote(REPO_ROOT)} "
+        + f"-BaseRoot {_ps_quote(artifact_root)}; "
+        + "function New-ShareableArtifactSet { "
+        + "Write-Utf8NoBomText -LiteralPath (Join-Path $run.Shareable 'report.json') -Text '{}'; "
+        + "throw 'synthetic private detail'; }; "
+        + "$report = [pscustomobject]@{status='PASS'}; "
+        + "$published = Publish-ValidationArtifacts -Report $report -Run $run "
+        + f"-RepoRoot {_ps_quote(REPO_ROOT)} "
+        + "-SummaryText 'synthetic raw summary' -DebugArtifacts; "
+        + "if ($published -or $report.status -ne 'FAIL') { throw 'Publication did not fail closed'; }"
+    )
+    assert "Safe report publication failed." in result.stderr
+    files = [path for path in artifact_root.rglob("*") if path.is_file()]
+    assert [path.name for path in files] == ["error-summary.md"]
+    assert "synthetic" not in files[0].read_text(encoding="utf-8")

@@ -232,14 +232,9 @@ function Invoke-CapturedCommand {
         [Parameter(Mandatory = $true)][string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$StdOutPath,
         [Parameter(Mandatory = $true)][string]$StdErrPath,
-        [string]$WorkingDirectory = (Get-Location).Path
+        [string]$WorkingDirectory = (Get-Location).Path,
+        [switch]$CaptureInMemory
     )
-
-    foreach ($requiredDir in @((Split-Path -Parent $StdOutPath), (Split-Path -Parent $StdErrPath))) {
-        if (-not [string]::IsNullOrWhiteSpace($requiredDir)) {
-            New-Item -ItemType Directory -Force -Path $requiredDir | Out-Null
-        }
-    }
 
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $FilePath
@@ -251,26 +246,69 @@ function Invoke-CapturedCommand {
 
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $process = [System.Diagnostics.Process]::Start($psi)
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
-    $stdout = $stdoutTask.GetAwaiter().GetResult()
-    $stderr = $stderrTask.GetAwaiter().GetResult()
+    try {
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        $exitCode = $process.ExitCode
+    } finally {
+        $process.Dispose()
+    }
     $stopwatch.Stop()
 
-    Write-Utf8NoBomText -LiteralPath $StdOutPath -Text $stdout
-    Write-Utf8NoBomText -LiteralPath $StdErrPath -Text $stderr
-
-    return [ordered]@{
+    $result = [ordered]@{
         name = $Name
-        command = $FilePath
-        arguments = @($Arguments)
-        exit_code = $process.ExitCode
+        exit_code = $exitCode
         duration_ms = [math]::Round($stopwatch.Elapsed.TotalMilliseconds, 3)
-        stdout = $StdOutPath
-        stderr = $StdErrPath
-        success = ($process.ExitCode -eq 0)
+        success = ($exitCode -eq 0)
     }
+    if ($CaptureInMemory) {
+        $result.stdout_text = $stdout
+        $result.stderr_text = $stderr
+    } else {
+        foreach ($directory in @((Split-Path -Parent $StdOutPath), (Split-Path -Parent $StdErrPath))) {
+            if ($directory) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
+        }
+        Write-Utf8NoBomText -LiteralPath $StdOutPath -Text $stdout
+        Write-Utf8NoBomText -LiteralPath $StdErrPath -Text $stderr
+        $result.command = $FilePath
+        $result.arguments = @($Arguments)
+        $result.stdout = $StdOutPath
+        $result.stderr = $StdErrPath
+    }
+    return $result
+}
+
+function Invoke-WavegenJson {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string[]]$CliArguments,
+        [Parameter(Mandatory = $true)][string]$ArtifactDirectory
+    )
+
+    $stdoutPath = Join-Path $ArtifactDirectory 'stdout.json'
+    $arguments = @('-c', 'from wavegen_tool_cli.cli import main; raise SystemExit(main())') + $CliArguments
+    $process = Invoke-CapturedCommand -Name $Name -FilePath $Python -Arguments $arguments `
+        -StdOutPath $stdoutPath -StdErrPath (Join-Path $ArtifactDirectory 'stderr.txt') `
+        -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts)
+    $raw = if ($DebugArtifacts) { [IO.File]::ReadAllText($stdoutPath) } else { $process.stdout_text }
+    $process.Remove('stdout_text')
+    $process.Remove('stderr_text')
+
+    $payload = $null
+    $parseError = $null
+    try {
+        if ([string]::IsNullOrWhiteSpace($raw)) { throw 'CLI returned empty JSON output.' }
+        $payload = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        $parseError = 'CLI returned invalid or empty JSON.'
+    }
+    if ($process.exit_code -ne 0 -and $null -ne $payload -and 'error' -in $payload.PSObject.Properties.Name) {
+        $process.cli_error = [string]$payload.error
+    }
+    return [pscustomobject]@{ Process = $process; Payload = $payload; ParseError = $parseError }
 }
 
 function New-ValidationRunDirectory {
@@ -310,16 +348,17 @@ function Get-FullValidationInventory {
     $pulseIndependentEdges = @('configure-pulse', '--frequency-hz', '1000', '--pulse-width-s', '0.0001', '--leading-edge-s', '0.00000004', '--trailing-edge-s', '0.00000006') + $voltage
     $recipes = [System.Collections.ArrayList]::new()
     function Add-Recipe {
-        param($Name, $Family, $Steps, [bool]$Parity = $false)
+        param($Name, $Family, $Steps, [bool]$Parity = $false, $Observation = $null)
         [void]$recipes.Add([pscustomobject]@{
-            name = $Name; family = $Family; steps = @($Steps); parity = $Parity
+            name = $Name; family = $Family; steps = @($Steps); parity = $Parity; observation = $Observation
         })
     }
     function New-Step {
-        param([string[]]$Arguments, [hashtable]$Readback = @{})
-        return [pscustomobject]@{ arguments = $Arguments; readback = $Readback }
+        param([string[]]$Arguments, [hashtable]$Readback = @{}, [hashtable]$Result = @{})
+        return [pscustomobject]@{ arguments = $Arguments; readback = $Readback; result = $Result }
     }
     Add-Recipe 'status' 'inspection' @((New-Step @('status'))) $true
+    $outputOn = New-Step @('output', '--state', 'on') @{ output_state = 'on' }
     $functions = @{ sine = 'SIN'; square = 'SQU'; ramp = 'RAMP'; triangle = 'TRI'; pulse = 'PULS'; dc = 'DC'; noise = 'NOIS'; prbs = 'PRBS' }
     foreach ($wave in @('sine', 'square', 'ramp', 'triangle', 'pulse', 'dc', 'noise', 'prbs')) {
         $args = @("configure-$wave") + $voltage
@@ -338,7 +377,18 @@ function Get-FullValidationInventory {
                 if ($wave -eq 'pulse') { $args = $pulseIndependentEdges }
             }
         }
-        Add-Recipe "static-$wave" 'static' @((New-Step $args $readback)) ($wave -eq 'sine')
+        $result = @{}
+        switch ($wave) {
+            'sine' { $args += @('--phase-deg', '45'); $result.phase_deg = 45 }
+            'square' { $args += @('--duty-cycle-percent', '30'); $result.duty_cycle_percent = 30 }
+            'ramp' { $args += @('--symmetry-percent', '30'); $result.symmetry_percent = 30 }
+            'triangle' {
+                $args = @('configure-triangle', '--frequency-hz', '1000', '--high-level-v', '0.075', '--low-level-v', '-0.025', '--load', '50')
+                $readback.offset_v = 0.025
+            }
+            'prbs' { $args += @('--pattern', 'PN9'); $result.pattern = 'PN9' }
+        }
+        Add-Recipe "static-$wave" 'static' @((New-Step $args $readback $result)) ($wave -eq 'sine')
     }
     $modes = [ordered]@{
         am = @('--am-frequency', '10', '--am-depth', '20')
@@ -352,26 +402,87 @@ function Get-FullValidationInventory {
     }
     foreach ($mode in $modes.Keys) {
         $carrier = if ($mode -eq 'pwm') { $pulseSharedEdge } else { $sine }
-        Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modes[$mode]) @{ function = $(if ($mode -eq 'pwm') { 'PULS' } else { 'SIN' }); frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' })) ($mode -eq 'am')
+        $modeName = ($mode -split '-')[0]
+        $result = @{ "${modeName}_enabled" = $true }
+        if ($modeName -eq 'am') { $result.am_type = if ($mode -eq 'am-dssc') { 'dssc' } else { 'normal' } }
+        $readback = @{ function = $(if ($mode -eq 'pwm') { 'PULS' } else { 'SIN' }); frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+        Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modes[$mode]) $readback $result)) ($mode -eq 'am')
     }
+
+    Add-Recipe 'configure-output' 'output-config' @(
+        (New-Step @('configure-output', '--load', 'high-z', '--polarity', 'inverted', '--voltage-limits', 'off', '--autorange', 'off') @{ load = 'high-z' } @{ polarity = 'inverted'; voltage_limits_enabled = $false; autorange_enabled = $false }),
+        (New-Step @('configure-output', '--load', '50', '--polarity', 'normal', '--voltage-limit-low', '-1', '--voltage-limit-high', '1', '--voltage-limits', 'on', '--autorange', 'on') @{ load = '50' } @{ polarity = 'normal'; voltage_limit_low = -1; voltage_limit_high = 1; voltage_limits_enabled = $true; autorange_enabled = $true })
+    ) $true
+
+    $burstPulse = @('configure-pulse', '--frequency-hz', '1', '--pulse-width-s', '0.2') + $voltage
+    $pulseReadback = @{ function = 'PULS'; frequency_hz = 1; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+    $sineReadback = @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
     foreach ($source in @('immediate', 'bus', 'timer', 'external')) {
-        $args = $sine + @('--burst-count', '3', '--burst-trigger-source', $source)
+        $carrier = if ($source -eq 'immediate') { $sine } else { $burstPulse }
+        $readback = if ($source -eq 'immediate') { $sineReadback } else { $pulseReadback }
+        $args = $carrier + @('--burst-count', '3', '--burst-trigger-source', $source)
         if ($source -eq 'immediate') { $args += @('--burst-period-s', '0.1') }
-        if ($source -eq 'timer') { $args += @('--burst-trigger-timer-s', '0.1') }
-        $steps = @((New-Step $args @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }))
-        if ($source -eq 'bus') { $steps += New-Step @('trigger') }
-        Add-Recipe "burst-$source" 'burst' $steps ($source -eq 'immediate')
+        if ($source -eq 'timer') { $args += @('--burst-trigger-timer-s', '5') }
+        if ($source -eq 'external') { $args += @('--burst-trigger-slope', 'positive') }
+        $result = @{ burst_mode = 'counted'; burst_count = 3; burst_trigger_source = $source }
+        if ($source -eq 'external') { $result.burst_trigger_slope = 'positive' }
+        $steps = @((New-Step $args $readback $result))
+        $observation = switch ($source) {
+            'bus' { @{ expected = 'No pulses before the Bus trigger, then exactly three pulses followed by idle.'; seconds = 5 } }
+            'timer' { @{ expected = 'Repeated groups of exactly three pulses with idle gaps between groups.'; seconds = 14 } }
+            'external' { @{ input = 'external-trigger'; idle = 'low'; action = 'Send one rising-edge trigger, then wait for the burst to finish.'; expected = 'No pulses before the external edge, then exactly three pulses followed by idle.'; seconds = 20 } }
+        }
+        if ($null -ne $observation) { $steps += $outputOn }
+        if ($source -eq 'bus') { $steps += New-Step @('trigger') @{ output_state = 'on' } }
+        Add-Recipe "burst-$source" 'burst' $steps ($source -eq 'immediate') -Observation $observation
     }
-    Add-Recipe 'burst-gated' 'burst' @((New-Step ($sine + @('--gated-burst')) @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }))
+    $fallingEdge = $burstPulse + @('--burst-count', '3', '--burst-trigger-source', 'external', '--burst-trigger-slope', 'negative')
+    Add-Recipe 'burst-external-negative' 'burst' @(
+        (New-Step $fallingEdge $pulseReadback @{ burst_mode = 'counted'; burst_count = 3; burst_trigger_slope = 'negative' }),
+        $outputOn
+    ) -Observation @{
+        input = 'external-trigger'
+        idle = 'high'
+        action = 'Send one falling-edge trigger, then wait for the burst to finish.'
+        expected = 'No pulses before the external edge, then exactly three pulses followed by idle.'
+        seconds = 20
+    }
+    foreach ($polarity in @('normal', 'inverted')) {
+        $name = if ($polarity -eq 'normal') { 'burst-gated' } else { 'burst-gated-inverted' }
+        $levels = if ($polarity -eq 'normal') { 'low to high to low' } else { 'high to low to high' }
+        Add-Recipe $name 'burst' @(
+            (New-Step ($burstPulse + @('--gated-burst', '--gate-polarity', $polarity)) $pulseReadback @{ burst_mode = 'gated'; burst_gate_polarity = $polarity }),
+            $outputOn
+        ) -Observation @{
+            input = 'external-gate'
+            idle = if ($polarity -eq 'normal') { 'low' } else { 'high' }
+            action = "Switch the gate $levels, holding the active level for several seconds."
+            expected = 'Pulses continue while the gate is active and stop after the current cycle when it becomes inactive.'
+            seconds = 20
+        }
+    }
     foreach ($variant in @('sine-linear', 'sine-logarithmic', 'sine-bus', 'sine-timer', 'square-linear', 'ramp-linear', 'triangle-linear')) {
         $wave, $option = $variant.Split('-')
         $spacing = if ($option -eq 'logarithmic') { 'logarithmic' } else { 'linear' }
-        $args = @("configure-$wave-sweep", '--start-frequency-hz', '1000', '--stop-frequency-hz', '2000', '--spacing', $spacing, '--sweep-time-s', '0.1') + $voltage
-        if ($option -in @('bus', 'timer')) { $args += @('--trigger-source', $option) }
-        if ($option -eq 'timer') { $args += @('--trigger-timer-s', '0.2') }
-        $steps = @((New-Step $args @{ function = $functions[$wave]; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }))
-        if ($option -eq 'bus') { $steps += New-Step @('trigger') }
-        Add-Recipe "sweep-$variant" 'sweep' $steps ($variant -eq 'sine-linear')
+        $triggered = $option -in @('bus', 'timer')
+        $sweepTime = if ($triggered) { '1' } else { '0.1' }
+        $args = @("configure-$wave-sweep", '--start-frequency-hz', '1000', '--stop-frequency-hz', '2000', '--spacing', $spacing, '--sweep-time-s', $sweepTime) + $voltage
+        if ($triggered) { $args += @('--trigger-source', $option, '--hold-time-s', '0.2', '--return-time-s', '0.2') }
+        if ($option -eq 'timer') { $args += @('--trigger-timer-s', '2') }
+        $readback = @{ function = $functions[$wave]; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+        $result = @{ spacing = $spacing }
+        if ($triggered) { $result += @{ trigger_source = $option; hold_time_s = 0.2; return_time_s = 0.2 } }
+        $steps = @((New-Step $args $readback $result))
+        $observation = $null
+        if ($triggered) {
+            $steps += $outputOn
+            $expected = if ($option -eq 'bus') {
+                $steps += New-Step @('trigger') @{ output_state = 'on' }
+                'The frequency holds at the start until the Bus trigger, then makes one sweep, holds at the stop frequency, and returns.'
+            } else { 'The Timer repeatedly starts sweeps, with a hold at the stop frequency and a return each time.' }
+            $observation = @{ expected = $expected; seconds = 7 }
+        }
+        Add-Recipe "sweep-$variant" 'sweep' $steps ($variant -eq 'sine-linear') -Observation $observation
     }
     $steps = @()
     foreach ($wave in @('sine', 'square', 'ramp', 'triangle')) {
@@ -379,11 +490,14 @@ function Get-FullValidationInventory {
     }
     $steps += New-Step $sine @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
     Add-Recipe 'list-transition-cw-recovery' 'list-sweep' $steps $true
-    Add-Recipe 'list-bus-trigger' 'bus-trigger' @(
-        (New-Step (@('configure-sine-list-sweep', '--frequencies-hz', '1000,1500,2000', '--trigger-source', 'bus') + $voltage)),
-        (New-Step @('trigger'))
-    )
-    Add-Recipe 'configure-output' 'output-config' @((New-Step @('configure-output', '--load', '50', '--polarity', 'normal', '--voltage-limit-low', '-1', '--voltage-limit-high', '1', '--voltage-limits', 'on', '--autorange', 'on') @{ load = '50' })) $true
+    $listTrigger = New-Step @('trigger') @{ output_state = 'on' }
+    Add-Recipe 'list-bus-trigger' 'list-sweep' @(
+        (New-Step (@('configure-sine-list-sweep', '--frequencies-hz', '1000,1500,2000', '--trigger-source', 'bus') + $voltage) @{} @{ trigger_source = 'bus' }),
+        $outputOn, $listTrigger, $listTrigger, $listTrigger
+    ) -Observation @{
+        expected = 'The output advances through distinct frequency plateaus after the individual Bus triggers.'
+        seconds = 4
+    }
     Add-Recipe 'output-control' 'output-control' @(
         (New-Step $sine @{ function = 'SIN'; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }),
         (New-Step @('output', '--state', 'on') @{ output_state = 'on' }),
@@ -395,6 +509,7 @@ function Get-FullValidationInventory {
             [pscustomobject]@{
                 name = "ch${channel}/$($recipe.name)"; family = $recipe.family
                 channel = $channel; required = $true; steps = $recipe.steps
+                observation = $recipe.observation
             }
         }
     }

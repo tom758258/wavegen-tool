@@ -3,6 +3,7 @@ param(
     [ValidateSet("smoke", "full")][string]$Suite = "smoke",
     [string]$Target = "all",
     [string]$Python = ".\.venv\Scripts\python.exe",
+    [switch]$DebugArtifacts,
     [string]$OutputRoot = ".tmp_tests\cli_preflight"
 )
 
@@ -12,48 +13,6 @@ $ErrorActionPreference = "Stop"
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 . (Join-Path $PSScriptRoot "_validation_helpers.ps1")
 . (Join-Path $PSScriptRoot "_artifact_privacy.ps1")
-
-function Invoke-WavegenJson {
-    param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string[]]$CliArguments,
-        [Parameter(Mandatory = $true)][string]$ArtifactDirectory
-    )
-
-    New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
-    $stdoutPath = Join-Path $ArtifactDirectory "stdout.json"
-    $stderrPath = Join-Path $ArtifactDirectory "stderr.txt"
-    $arguments = @(
-        "-c",
-        "from wavegen_tool_cli.cli import main; raise SystemExit(main())"
-    ) + $CliArguments
-    $process = Invoke-CapturedCommand `
-        -Name $Name `
-        -FilePath $Python `
-        -Arguments $arguments `
-        -StdOutPath $stdoutPath `
-        -StdErrPath $stderrPath `
-        -WorkingDirectory $repoRoot
-
-    $payload = $null
-    $parseError = $null
-    if ($process.exit_code -eq 0) {
-        try {
-            $raw = Get-Content -LiteralPath $stdoutPath -Raw
-            if ([string]::IsNullOrWhiteSpace($raw)) {
-                throw "CLI returned empty JSON output."
-            }
-            $payload = $raw | ConvertFrom-Json -ErrorAction Stop
-        } catch {
-            $parseError = $_.Exception.Message
-        }
-    }
-    return [pscustomobject]@{
-        Process = $process
-        Payload = $payload
-        ParseError = $parseError
-    }
-}
 
 function Add-ValidationCase {
     param(
@@ -105,9 +64,8 @@ function Test-CloseNumber {
     return [math]::Abs($Actual - $Expected) -le $Tolerance
 }
 
-function Write-PrivateSummary {
+function Get-ValidationSummary {
     param(
-        [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)]$Report
     )
 
@@ -130,7 +88,7 @@ function Write-PrivateSummary {
             $lines += "  - $reason"
         }
     }
-    Write-Utf8NoBomLines -LiteralPath $Path -Lines $lines
+    return ($lines -join "`n") + "`n"
 }
 
 try {
@@ -257,7 +215,11 @@ foreach ($targetProfile in $targets) {
                         $args = @($step.arguments) + @("--$mode", '--model', $modelId, '--json')
                         if ($command -ne 'trigger') { $args += @('--channel', [string]$recipe.channel) }
                         $invocation = Invoke-WavegenJson -Name $name -CliArguments $args -ArtifactDirectory (Join-Path $targetDirectory (New-SafeCaseName $name))
-                        if ($invocation.Process.exit_code -ne 0 -or $null -ne $invocation.ParseError) { throw 'Command or JSON parsing failed; see private command diagnostics.' }
+                        if ($invocation.Process.exit_code -ne 0) {
+                            $detail = $invocation.Process['cli_error']
+                            throw "Command exited with code $($invocation.Process.exit_code). $detail".TrimEnd()
+                        }
+                        if ($null -ne $invocation.ParseError) { throw $invocation.ParseError }
                         $payload = $invocation.Payload
                         if ($payload.success -ne $true -or $payload.action -cne $command -or $payload.mode -cne $mode) { throw 'Unexpected command result.' }
                         if ($command -ne 'trigger' -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
@@ -378,8 +340,6 @@ if ($Suite -eq 'full') {
 }
 $summaryCounts = Get-SummaryCounts -Cases $cases
 $status = if ($summaryCounts.failed -eq 0 -and ($Suite -ne "full" -or $summaryCounts.not_applicable -eq 0)) { "PASS" } else { "FAIL" }
-$privateReportPath = Join-Path $run.Private "report.json"
-$privateSummaryPath = Join-Path $run.Private "summary.md"
 $report = [pscustomobject][ordered]@{
     suite = $Suite
     schema_version = 1
@@ -398,43 +358,14 @@ $report = [pscustomobject][ordered]@{
     resource_guess_performed = $false
     cases = @($cases)
     summary_counts = $summaryCounts
-    artifact_paths = [ordered]@{
-        private_report = $privateReportPath
-        private_summary = $privateSummaryPath
-        shareable_report = Join-Path $run.Shareable "report.json"
-        shareable_summary = Join-Path $run.Shareable "summary.md"
-    }
+    artifact_mode = if ($DebugArtifacts) { 'debug' } else { 'minimal' }
 }
 if ($Suite -eq 'full') { $report | Add-Member -NotePropertyName git_clean -NotePropertyValue $gitClean }
-Write-JsonReport -LiteralPath $privateReportPath -Report $report
-Write-PrivateSummary -Path $privateSummaryPath -Report $report
-
-try {
-    $null = New-ShareableArtifactSet `
-        -PrivateReport $report `
-        -PrivateSummaryPath $privateSummaryPath `
-        -RunRoot $run.Root `
-        -PrivateRoot $run.Private `
-        -ShareableRoot $run.Shareable `
-        -RepoRoot $repoRoot
-} catch {
-    $report.status = "FAIL"
-    $report | Add-Member -NotePropertyName artifact_error -NotePropertyValue $_.Exception.Message -Force
-    Write-JsonReport -LiteralPath $privateReportPath -Report $report
-    Write-PrivateSummary -Path $privateSummaryPath -Report $report
-    Write-CaseStatus `
-        -Status FAIL `
-        -Context "[preflight][cli]" `
-        -Name "shareable-artifacts" `
-        -FailureReasons $_.Exception.Message
-    Write-Host "Result: FAIL"
-    Write-Host "Private artifacts: $($run.Private)"
-    exit 1
-}
-
+$published = Publish-ValidationArtifacts -Report $report -Run $run -RepoRoot $repoRoot `
+    -SummaryText (Get-ValidationSummary -Report $report) -DebugArtifacts:$DebugArtifacts
 Write-Host "Result: $($report.status)"
-Write-Host "Private artifacts: $($run.Private)"
-Write-Host "Shareable artifacts: $($run.Shareable)"
+if (-not $published -or $DebugArtifacts) { Write-Host "Private artifacts: $($run.Private)" }
+if ($published) { Write-Host "Shareable artifacts: $($run.Shareable)" }
 if ($report.status -eq "PASS") {
     exit 0
 }

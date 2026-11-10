@@ -16,6 +16,7 @@ param(
 
     [string]$Python = ".\.venv\Scripts\python.exe",
 
+    [switch]$DebugArtifacts,
     [string]$OutputRoot = ".tmp_tests\cli_live"
 )
 
@@ -26,48 +27,6 @@ $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 . (Join-Path $PSScriptRoot "_validation_helpers.ps1")
 . (Join-Path $PSScriptRoot "_artifact_privacy.ps1")
 
-function Invoke-WavegenJson {
-    param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string[]]$CliArguments,
-        [Parameter(Mandatory = $true)][string]$ArtifactDirectory
-    )
-
-    New-Item -ItemType Directory -Force -Path $ArtifactDirectory | Out-Null
-    $stdoutPath = Join-Path $ArtifactDirectory "stdout.json"
-    $stderrPath = Join-Path $ArtifactDirectory "stderr.txt"
-    $arguments = @(
-        "-c",
-        "from wavegen_tool_cli.cli import main; raise SystemExit(main())"
-    ) + $CliArguments
-    $process = Invoke-CapturedCommand `
-        -Name $Name `
-        -FilePath $Python `
-        -Arguments $arguments `
-        -StdOutPath $stdoutPath `
-        -StdErrPath $stderrPath `
-        -WorkingDirectory $repoRoot
-
-    $payload = $null
-    $parseError = $null
-    if ($process.exit_code -eq 0) {
-        try {
-            $raw = Get-Content -LiteralPath $stdoutPath -Raw
-            if ([string]::IsNullOrWhiteSpace($raw)) {
-                throw "CLI returned empty JSON output."
-            }
-            $payload = $raw | ConvertFrom-Json -ErrorAction Stop
-        } catch {
-            $parseError = $_.Exception.Message
-        }
-    }
-    return [pscustomobject]@{
-        Process = $process
-        Payload = $payload
-        ParseError = $parseError
-    }
-}
-
 function Add-LiveCase {
     param(
         [Parameter(Mandatory = $true)]
@@ -76,7 +35,8 @@ function Add-LiveCase {
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][ValidateSet("PASS", "FAIL", "N/A")][string]$Status,
         [AllowEmptyCollection()][string[]]$FailureReasons = @(),
-        $Process = $null
+        $Process = $null,
+        [System.Collections.IDictionary]$Evidence = @{}
     )
 
     $case = [ordered]@{
@@ -87,6 +47,7 @@ function Add-LiveCase {
     if ($null -ne $Process) {
         $case.process = $Process
     }
+    foreach ($key in $Evidence.Keys) { $case[$key] = $Evidence[$key] }
     [void]$Cases.Add([pscustomobject]$case)
     Write-CaseStatus `
         -Status $Status `
@@ -153,18 +114,19 @@ function Write-CompletionSummary {
     Write-Host ""
     Write-Host "Result: $Result"
     Write-Host ""
-    Write-Host "Private artifacts:"
-    Write-Host "  $($Run.Private)"
-    Write-Host ""
+    if ($DebugArtifacts -or -not $ShareableAvailable) {
+        Write-Host "Private artifacts:"
+        Write-Host "  $($Run.Private)"
+        Write-Host ""
+    }
     Write-Host "Shareable report:"
     Write-Host $(if ($ShareableAvailable) { "  $(Join-Path $Run.Shareable 'report.json')" } else { "  unavailable" })
     Write-Host "Shareable summary:"
     Write-Host $(if ($ShareableAvailable) { "  $(Join-Path $Run.Shareable 'summary.md')" } else { "  unavailable" })
 }
 
-function Write-PrivateSummary {
+function Get-ValidationSummary {
     param(
-        [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)]$Report
     )
 
@@ -175,6 +137,7 @@ function Write-PrivateSummary {
         "- Suite: $($Report.suite)",
         "- Validation mode: $($Report.validation_mode)",
         "- Expected model: $($Report.expected_model)",
+        "- Git commit: $($Report.git_head)",
         "- Connection: $($Report.connection)",
         "- Backend: $($Report.backend)",
         "- Resource: $($Report.resource)",
@@ -186,19 +149,25 @@ function Write-PrivateSummary {
     )
     foreach ($case in @($Report.cases)) {
         $lines += "- $($case.status): $($case.name)"
+        if ('verification_method' -in $case.PSObject.Properties.Name) {
+            $lines += "  - Method: $($case.verification_method). Cleanup: $($case.cleanup_status)."
+            if ($case.evidence_level) { $lines += "  - Evidence: $($case.evidence_level)." }
+            if ($case.manual_observation) {
+                $lines += "  - Expected: $($case.manual_observation.expected)"
+                $lines += "  - Operator response: $($case.manual_observation.response)"
+            }
+        }
         foreach ($reason in @($case.failure_reasons)) {
             $lines += "  - $reason"
         }
     }
-    Write-Utf8NoBomLines -LiteralPath $Path -Lines $lines
+    return ($lines -join "`n") + "`n"
 }
 
 function Publish-LiveArtifacts {
     param(
         [Parameter(Mandatory = $true)]$Report,
         [Parameter(Mandatory = $true)]$Run,
-        [Parameter(Mandatory = $true)][string]$PrivateReportPath,
-        [Parameter(Mandatory = $true)][string]$PrivateSummaryPath,
         [AllowEmptyCollection()][string[]]$ExtraSensitiveValues = @()
     )
 
@@ -213,34 +182,9 @@ function Publish-LiveArtifacts {
             $Report.summary_counts = Get-SummaryCounts -Cases $reportCases
         }
     }
-    Write-JsonReport -LiteralPath $PrivateReportPath -Report $Report
-    Write-PrivateSummary -Path $PrivateSummaryPath -Report $Report
-    try {
-        $null = New-ShareableArtifactSet `
-            -PrivateReport $Report `
-            -PrivateSummaryPath $PrivateSummaryPath `
-            -RunRoot $Run.Root `
-            -PrivateRoot $Run.Private `
-            -ShareableRoot $Run.Shareable `
-            -RepoRoot $repoRoot `
-            -Resource $Resource `
-            -ExtraSensitiveValues $ExtraSensitiveValues
-        return $true
-    } catch {
-        $Report.status = "FAIL"
-        $Report | Add-Member `
-            -NotePropertyName artifact_error `
-            -NotePropertyValue $_.Exception.Message `
-            -Force
-        Write-JsonReport -LiteralPath $PrivateReportPath -Report $Report
-        Write-PrivateSummary -Path $PrivateSummaryPath -Report $Report
-        Write-CaseStatus `
-            -Status FAIL `
-            -Context "[live][cli]" `
-            -Name "shareable-artifacts" `
-            -FailureReasons $_.Exception.Message
-        return $false
-    }
+    return (Publish-ValidationArtifacts -Report $Report -Run $Run -RepoRoot $repoRoot `
+        -SummaryText (Get-ValidationSummary -Report $Report) -Resource $Resource `
+        -SensitiveValues $ExtraSensitiveValues -DebugArtifacts:$DebugArtifacts)
 }
 
 function Add-RemainingChannelCases {
@@ -254,7 +198,7 @@ function Add-RemainingChannelCases {
 
     if ($Suite -eq 'full') {
         foreach ($recipe in @(Get-FullValidationInventory -Channels $Channels)) {
-            Add-LiveCase -Cases $Cases -Name $recipe.name -Status 'N/A' -FailureReasons $Reason
+            Add-LiveCase -Cases $Cases -Name $recipe.name -Status 'N/A' -FailureReasons $Reason -Evidence (Get-FullCaseEvidence $recipe)
         }
         return
     }
@@ -275,7 +219,10 @@ function Invoke-FullCommand {
     $args = @($Arguments) + $liveCommon
     if ($Channel -gt 0) { $args += @('--channel', [string]$Channel) }
     $invocation = Invoke-WavegenJson -Name $Name -CliArguments $args -ArtifactDirectory (Join-Path $run.Private (New-SafeCaseName $Name))
-    if ($invocation.Process.exit_code -ne 0) { throw "$Name exited with code $($invocation.Process.exit_code); see command diagnostics." }
+    if ($invocation.Process.exit_code -ne 0) {
+        $detail = $invocation.Process['cli_error']
+        throw "$Name exited with code $($invocation.Process.exit_code). $detail".TrimEnd()
+    }
     if ($null -ne $invocation.ParseError) { throw "$Name returned invalid JSON." }
     $payload = $invocation.Payload
     if ($payload.success -ne $true -or $payload.action -cne $Arguments[0] -or $payload.model -cne $targetCapabilityModel) { throw "$Name returned an unsuccessful or mismatched result." }
@@ -291,6 +238,8 @@ function Assert-FullReadback {
         if ($key -eq 'function') {
             $aliases = @{ SIN = @('SIN', 'SINUSOID'); SQU = @('SQU', 'SQUARE'); RAMP = @('RAMP'); TRI = @('TRI', 'TRIANGLE'); PULS = @('PULS', 'PULSE'); DC = @('DC'); NOIS = @('NOIS', 'NOISE'); PRBS = @('PRBS') }
             if ([string]$Payload.$key -cnotin $aliases[$value]) { throw "Unexpected readback: $key." }
+        } elseif ($value -is [bool]) {
+            if ($Payload.$key -isnot [bool] -or $Payload.$key -ne $value) { throw "Unexpected value: $key." }
         } elseif ($value -is [string]) {
             if ([string]$Payload.$key -cne $value) { throw "Unexpected readback: $key." }
         } elseif (-not (Test-CloseNumber -Actual ([double]$Payload.$key) -Expected ([double]$value) -AbsoluteTolerance 0.000001 -RelativeTolerance 0.0001)) {
@@ -303,7 +252,8 @@ function Assert-FullErrorQueue {
     param([string]$Name)
     $payload = Invoke-FullCommand -Name $Name -Arguments @('read-errors', '--max-reads', '20')
     if ($payload.has_errors -ne $false -or $payload.empty_confirmed -ne $true -or $payload.limit_reached -ne $false) {
-        throw "$Name was dirty or did not reach code 0 within bounded reads."
+        $codes = if ('errors' -in $payload.PSObject.Properties.Name) { @($payload.errors | ForEach-Object { $_.code }) -join ', ' }
+        throw "$Name was dirty or did not reach code 0 within bounded reads. Error codes: $codes"
     }
 }
 
@@ -313,6 +263,35 @@ function Set-FullSafeOff {
     Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
     $payload = Invoke-FullCommand -Name "$Name-status" -Arguments @('status') -Channel $Channel
     Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+}
+
+function Read-LiveConfirmation {
+    param([string]$Prompt)
+
+    if ([Console]::IsInputRedirected) {
+        Write-Host 'Live validation requires interactive confirmation; redirected stdin is rejected.'
+        return $false
+    }
+    return ((Read-Host $Prompt) -ceq '')
+}
+
+function Get-FullCaseEvidence {
+    param($Recipe)
+
+    return [ordered]@{
+        channel = $Recipe.channel
+        family = $Recipe.family
+        required = $Recipe.required
+        verification_method = if ($Recipe.observation) { 'operator-observed-output' } else { 'cli-result-and-instrument-status' }
+        evidence_level = $null
+        cleanup_status = 'not-run'
+        manual_observation = if ($Recipe.observation) {
+            [ordered]@{
+                expected = $Recipe.observation.expected
+                response = 'not-completed'
+            }
+        } else { $null }
+    }
 }
 
 function Invoke-FullLiveCases {
@@ -327,24 +306,52 @@ function Invoke-FullLiveCases {
             Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         }
         foreach ($recipe in @(Get-FullValidationInventory -Channels $Channels)) {
+            $evidence = Get-FullCaseEvidence $recipe
             if (-not $CanRun) {
-                Add-LiveCase -Cases $cases -Name $recipe.name -Status 'N/A' -FailureReasons 'A required prerequisite or prior case failed.'
+                Add-LiveCase -Cases $cases -Name $recipe.name -Status 'N/A' -Evidence $evidence `
+                    -FailureReasons 'A required prerequisite or prior case failed.'
                 continue
             }
             $channel = $recipe.channel
             if ($channel -notin $channelsTested) { [void]$channelsTested.Add($channel) }
+            $observation = $recipe.observation
+            $externalInput = if ($observation) { $observation['input'] }
             $reasons = @()
+            $cleanupReasons = @()
             try {
                 Set-FullSafeOff -Name "$($recipe.name)/before" -Channel $channel
                 Assert-FullErrorQueue -Name "$($recipe.name)/before-errors"
+                if ($observation) {
+                    Write-Host ""
+                    Write-Host "$targetCapabilityModel CH${channel} - $($recipe.name)"
+                    Write-Host "Connect the front-panel CH$channel Output BNC to a scope with a 50-ohm termination."
+                    if ($externalInput) {
+                        Write-Host 'Use the chassis-referenced rear-panel Ext Trig BNC. Confirm Trigger Out is disabled before connecting the external source.'
+                        Write-Host "Check grounding and the Ext Trig input limits in the $targetCapabilityModel manual."
+                        Write-Host "Set the source to $($observation.idle) and hold that level until prompted."
+                    }
+                    Write-Host "Configuration: $($recipe.steps[0].arguments -join ' ')"
+                    Write-Host "Expected: $($observation.expected)"
+                    if (-not (Read-LiveConfirmation 'Press Enter when ready, type Skip if equipment is unavailable, or Ctrl+C to cancel')) {
+                        throw 'Operator preparation was not confirmed.'
+                    }
+                }
                 $index = 0
                 foreach ($step in $recipe.steps) {
                     $index += 1
                     $name = "$($recipe.name)/step$index"
                     $command = $step.arguments[0]
-                    if ($command -eq 'output' -and $step.arguments[2] -eq 'on' -and $recipe.family -cne 'output-control') { throw 'Output ON is restricted to the dedicated case.' }
+                    $turningOn = $command -eq 'output' -and $step.arguments[2] -eq 'on'
+                    if ($turningOn -and -not $observation -and $recipe.family -cne 'output-control') {
+                        throw 'Output ON is restricted to output-control and confirmed observation cases.'
+                    }
+                    if ($command -eq 'trigger' -and $observation) {
+                        Start-Sleep -Seconds 2
+                        Write-Host 'Sending Bus trigger.'
+                    }
                     $commandChannel = if ($command -eq 'trigger') { 0 } else { $channel }
-                    $null = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
+                    $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
+                    Assert-FullReadback -Payload $result -Expected $step.result
                     $expected = @{ output_state = 'off' }
                     foreach ($key in $step.readback.Keys) { $expected[$key] = $step.readback[$key] }
                     $payload = Invoke-FullCommand -Name "$name-readback" -Arguments @('status') -Channel $channel
@@ -355,17 +362,39 @@ function Invoke-FullLiveCases {
                     }
                     Assert-FullErrorQueue -Name "$name-errors"
                 }
+                if ($observation) {
+                    if ($externalInput) { Write-Host $observation.action }
+                    Write-Host "Observe CH$channel for $($observation.seconds) seconds. Output will then turn off."
+                    Start-Sleep -Seconds $observation.seconds
+                }
             } catch { $reasons += $_.Exception.Message }
             finally {
-                # Drain even after command/readback failure to retain case-local errors.
-                try { Assert-FullErrorQueue -Name "$($recipe.name)/case-errors" }
-                catch { $reasons += $_.Exception.Message }
                 try { Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel }
-                catch { $reasons += "Cleanup: $($_.Exception.Message)" }
+                catch { $cleanupReasons += $_.Exception.Message }
                 try { Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors" }
-                catch { $reasons += $_.Exception.Message }
+                catch { $cleanupReasons += $_.Exception.Message }
+                $evidence.cleanup_status = if ($cleanupReasons.Count) { 'FAIL' } else { 'PASS' }
+                $reasons += $cleanupReasons | ForEach-Object { "Cleanup: $_" }
             }
-            Add-LiveCase -Cases $cases -Name $recipe.name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
+            if ($observation -and -not $reasons.Count) {
+                if ($externalInput) { Write-Host 'Disable and disconnect the external source before answering.' }
+                $answer = $null
+                try { $answer = Read-Host 'Did you observe the expected behavior? Enter Yes or No' }
+                catch { $reasons += 'Operator observation was interrupted.' }
+                if ($answer -ieq 'Yes') {
+                    $evidence.manual_observation.response = 'yes'
+                } elseif ($answer -ieq 'No') {
+                    $evidence.manual_observation.response = 'no'
+                    $reasons += 'Operator did not observe the expected behavior.'
+                } else {
+                    $reasons += 'Required observation was not confirmed.'
+                }
+            }
+            if (-not $reasons.Count) {
+                $evidence.evidence_level = if ($observation -or $recipe.family -eq 'output-control') { 'live-functional' } else { 'live-config' }
+            }
+            Add-LiveCase -Cases $cases -Name $recipe.name -Evidence $evidence `
+                -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
             if ($reasons.Count) { $CanRun = $false }
         }
     } finally {
@@ -422,8 +451,6 @@ $cases = [System.Collections.ArrayList]::new()
 $channelsTested = [System.Collections.ArrayList]::new()
 $expectedModel = [string]$targetProfile.model_id
 $targetCapabilityModel = [string]$targetProfile.model
-$privateReportPath = Join-Path $run.Private "report.json"
-$privateSummaryPath = Join-Path $run.Private "summary.md"
 $report = [pscustomobject][ordered]@{
     suite = $Suite
     schema_version = 1
@@ -442,6 +469,7 @@ $report = [pscustomobject][ordered]@{
     package_version = Get-PackageVersion -ProjectRoot $repoRoot
     git_head = if ($Suite -eq 'full') { $gitHead } else { Get-GitHead -ProjectRoot $repoRoot }
     generated_at = (Get-Date).ToUniversalTime().ToString("o")
+    execution_path = 'direct-cli'
     validation_mode = if ($PlanOnly) { "live-plan-only" } else { "live" }
     hardware_touched = $false
     visa_io_performed = $false
@@ -450,36 +478,27 @@ $report = [pscustomobject][ordered]@{
     planned_cases = @()
     cases = @()
     summary_counts = [ordered]@{ passed = 0; failed = 0; not_applicable = 0; total = 0 }
-    artifact_paths = [ordered]@{
-        private_report = $privateReportPath
-        private_summary = $privateSummaryPath
-        shareable_report = Join-Path $run.Shareable "report.json"
-        shareable_summary = Join-Path $run.Shareable "summary.md"
-    }
+    artifact_mode = if ($DebugArtifacts) { 'debug' } else { 'minimal' }
 }
 
 if ($Suite -eq 'full') { $report | Add-Member -NotePropertyName git_clean -NotePropertyValue $true }
 $powershellPath = (Get-Process -Id $PID).Path
 $preflightDirectory = Join-Path $run.Private "preflight"
-New-Item -ItemType Directory -Force -Path $preflightDirectory | Out-Null
+$preflightArguments = @(
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', (Join-Path $PSScriptRoot 'preflight-cli.ps1'),
+    '-Target', $expectedModel, '-Suite', $Suite, '-Python', $Python,
+    '-OutputRoot', (Join-Path $OutputRoot '_preflight')
+)
+if ($DebugArtifacts) { $preflightArguments += '-DebugArtifacts' }
 $preflightProcess = $null
 try {
-    $preflightProcess = Invoke-CapturedCommand `
-        -Name "preflight" `
-        -FilePath $powershellPath `
-        -Arguments @(
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy", "Bypass",
-            "-File", (Join-Path $PSScriptRoot "preflight-cli.ps1"),
-            "-Target", $expectedModel,
-            "-Suite", $Suite,
-            "-Python", $Python,
-            "-OutputRoot", (Join-Path $OutputRoot "_preflight")
-        ) `
-        -StdOutPath (Join-Path $preflightDirectory "stdout.txt") `
-        -StdErrPath (Join-Path $preflightDirectory "stderr.txt") `
-        -WorkingDirectory $repoRoot
+    $preflightProcess = Invoke-CapturedCommand -Name 'preflight' -FilePath $powershellPath `
+        -Arguments $preflightArguments -StdOutPath (Join-Path $preflightDirectory 'stdout.txt') `
+        -StdErrPath (Join-Path $preflightDirectory 'stderr.txt') `
+        -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts)
+    $preflightProcess.Remove('stdout_text')
+    $preflightProcess.Remove('stderr_text')
     if ($preflightProcess.exit_code -eq 0) {
         Add-LiveCase -Cases $cases -Name "preflight" -Status PASS -Process $preflightProcess
     } else {
@@ -501,7 +520,7 @@ try {
 if (@($cases | Where-Object { $_.name -eq "preflight" -and $_.status -eq "FAIL" }).Count -gt 0) {
     $report.cases = @($cases)
     $report.summary_counts = Get-SummaryCounts -Cases $cases
-    $published = Publish-LiveArtifacts -Report $report -Run $run -PrivateReportPath $privateReportPath -PrivateSummaryPath $privateSummaryPath
+    $published = Publish-LiveArtifacts -Report $report -Run $run
     Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $published
     exit 1
 }
@@ -562,9 +581,7 @@ if ($capabilityReasons.Count -eq 0) {
     $report.summary_counts = Get-SummaryCounts -Cases $cases
     $published = Publish-LiveArtifacts `
         -Report $report `
-        -Run $run `
-        -PrivateReportPath $privateReportPath `
-        -PrivateSummaryPath $privateSummaryPath
+        -Run $run
     Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $published
     exit 1
 }
@@ -611,7 +628,10 @@ Write-Host "  Load: 50 ohm"
 Write-Host ""
 Write-Host "Safety:"
 if ($Suite -eq 'full') {
-    Write-Host "  - Only dedicated output-control cases briefly use Output ON in Real Full."
+    Write-Host "  - Only output-control and confirmed observation cases use Output ON."
+    Write-Host "  - Prepare a scope with a 50-ohm termination and a separate Ext Trig/Gate source for CH1 observations."
+    Write-Host "  - The rear-panel Ext Trig BNC is chassis-referenced. Follow the target model's input limits and grounding instructions."
+    Write-Host "  - Every observation is required for a Real Full PASS."
 } else {
     Write-Host "  - Output ON will not be used."
 }
@@ -633,9 +653,7 @@ if ($PlanOnly) {
     $report.summary_counts = Get-SummaryCounts -Cases $cases
     $published = Publish-LiveArtifacts `
         -Report $report `
-        -Run $run `
-        -PrivateReportPath $privateReportPath `
-        -PrivateSummaryPath $privateSummaryPath
+        -Run $run
     if (-not $published -or $report.status -ne 'PASS') {
         Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $published
         exit 1
@@ -645,21 +663,20 @@ if ($PlanOnly) {
 }
 
 Write-Host ""
-$confirmation = $null
-if ([Console]::IsInputRedirected) {
-    Write-Host "Live validation requires interactive confirmation; redirected stdin is rejected."
-} else {
-    $confirmation = Read-Host "Type YES to begin Live validation, or Ctrl+C to cancel"
+$confirmed = $false
+try {
+    $confirmed = Read-LiveConfirmation 'Press Enter to begin Live validation, or Ctrl+C to cancel'
+} catch {
+    Write-Host 'Live confirmation was unavailable.'
+} finally {
+    if (-not $confirmed) {
+        $report.status = 'CANCELLED'
+        $report.cases = @($cases)
+        $report.summary_counts = Get-SummaryCounts -Cases $cases
+        $published = Publish-LiveArtifacts -Report $report -Run $run
+    }
 }
-if ($confirmation -cne "YES") {
-    $report.status = "CANCELLED"
-    $report.cases = @($cases)
-    $report.summary_counts = Get-SummaryCounts -Cases $cases
-    $published = Publish-LiveArtifacts `
-        -Report $report `
-        -Run $run `
-        -PrivateReportPath $privateReportPath `
-        -PrivateSummaryPath $privateSummaryPath
+if (-not $confirmed) {
     if (-not $published) {
         Write-CompletionSummary -Result FAIL -Run $run -ShareableAvailable $false
         exit 1
@@ -771,8 +788,22 @@ if ($identityPassed) {
     }
 
     if ($Suite -eq 'full') {
-        try { Invoke-FullLiveCases -Channels $channels -CanRun (-not $stopChannels) }
-        catch { Add-LiveCase -Cases $cases -Name 'full-runner' -Status FAIL -FailureReasons $_.Exception.Message }
+        $fullFinished = $false
+        try {
+            Invoke-FullLiveCases -Channels $channels -CanRun (-not $stopChannels)
+            $fullFinished = $true
+        } catch {
+            Add-LiveCase -Cases $cases -Name 'full-runner' -Status FAIL -FailureReasons $_.Exception.Message
+            $fullFinished = $true
+        } finally {
+            if (-not $fullFinished) {
+                $report | Add-Member -NotePropertyName interrupted -NotePropertyValue $true
+                $report.channels_tested = @($channelsTested)
+                $report.cases = @($cases)
+                $report.summary_counts = Get-SummaryCounts -Cases $cases
+                $null = Publish-LiveArtifacts -Report $report -Run $run -ExtraSensitiveValues $detectedSensitiveValues
+            }
+        }
     }
     if (-not $stopChannels -and $Suite -eq 'smoke') {
         for ($channelIndex = 0; $channelIndex -lt $channels.Count; $channelIndex += 1) {
@@ -976,8 +1007,6 @@ $report.status = if ($Suite -eq 'full') {
 $published = Publish-LiveArtifacts `
     -Report $report `
     -Run $run `
-    -PrivateReportPath $privateReportPath `
-    -PrivateSummaryPath $privateSummaryPath `
     -ExtraSensitiveValues $detectedSensitiveValues
 if (-not $published) {
     $report.status = "FAIL"

@@ -255,12 +255,17 @@ function Convert-PrivateJsonArtifact {
     if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
         $payload = New-SafeJsonPlaceholder -ArtifactKind $ArtifactKind -ParseStatus 'missing'
     } else {
+        $raw = [IO.File]::ReadAllText($SourcePath)
         try {
-            $raw = Get-Content -LiteralPath $SourcePath -Raw
-            if ([string]::IsNullOrWhiteSpace($raw)) {
-                throw 'empty JSON artifact'
-            }
+            if ([string]::IsNullOrWhiteSpace($raw)) { throw 'Empty JSON artifact.' }
             $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+            $parseStatus = 'parsed'
+        } catch {
+            $parseStatus = 'failed'
+        }
+        if ($parseStatus -eq 'failed') {
+            $payload = New-SafeJsonPlaceholder -ArtifactKind $ArtifactKind -ParseStatus 'failed'
+        } else {
             $payload = ConvertTo-ShareableArtifactValue `
                 -Value $parsed `
                 -PrivateRoot $Context.PrivateRoot `
@@ -268,8 +273,6 @@ function Convert-PrivateJsonArtifact {
                 -RepoRoot $Context.RepoRoot `
                 -Resource $Context.Resource `
                 -SensitiveValues $Context.SensitiveValues
-        } catch {
-            $payload = New-SafeJsonPlaceholder -ArtifactKind $ArtifactKind -ParseStatus 'failed'
         }
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $DestinationPath) | Out-Null
@@ -292,7 +295,7 @@ function Copy-ShareableArtifactTree {
             { $_ -in @('.txt', '.md', '.log') } {
                 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
                 $safe = Protect-ArtifactText `
-                    -Text (Get-Content -LiteralPath $file.FullName -Raw) `
+                    -Text ([IO.File]::ReadAllText($file.FullName)) `
                     -Resource $Context.Resource `
                     -RepoRoot $Context.RepoRoot `
                     -PrivateRoot $Context.PrivateRoot `
@@ -309,7 +312,9 @@ function Copy-ShareableArtifactTree {
 function New-ShareableArtifactSet {
     param(
         [Parameter(Mandatory = $true)]$PrivateReport,
-        [Parameter(Mandatory = $true)][string]$PrivateSummaryPath,
+        [string]$PrivateSummaryPath,
+        [string]$SummaryText,
+        [switch]$MinimalArtifacts,
         [Parameter(Mandatory = $true)][string]$RunRoot,
         [Parameter(Mandatory = $true)][string]$PrivateRoot,
         [Parameter(Mandatory = $true)][string]$ShareableRoot,
@@ -338,7 +343,7 @@ function New-ShareableArtifactSet {
             @($ExtraSensitiveValues)
         )
     }
-    Copy-ShareableArtifactTree -Context $context
+    if (-not $MinimalArtifacts) { Copy-ShareableArtifactTree -Context $context }
 
     $report = ConvertTo-ShareableArtifactValue `
         -Value $PrivateReport `
@@ -350,25 +355,63 @@ function New-ShareableArtifactSet {
     $report.artifact_visibility = 'shareable'
     $report.candidate_evidence_only = $true
     $report.promotes_live_support = $false
-    $report.private_raw_artifacts_retained = $true
+    $report.private_raw_artifacts_retained = -not $MinimalArtifacts
     $report.redaction_applied = $true
     $report.redaction_version = 1
     Write-Utf8NoBomText `
         -LiteralPath (Join-Path $context.ShareableRoot 'report.json') `
         -Text ($report | ConvertTo-Json -Depth 20)
 
-    if (Test-Path -LiteralPath $PrivateSummaryPath -PathType Leaf) {
-        $summarySafe = Protect-ArtifactText `
-            -Text (Get-Content -LiteralPath $PrivateSummaryPath -Raw) `
-            -Resource $context.Resource `
-            -RepoRoot $context.RepoRoot `
-            -PrivateRoot $context.PrivateRoot `
-            -SensitiveValues $context.SensitiveValues
-    } else {
-        $summarySafe = "# Validation Summary`n`n- Private summary unavailable; raw private artifacts retained."
+    if (-not $MinimalArtifacts -and $PrivateSummaryPath) {
+        $SummaryText = [IO.File]::ReadAllText($PrivateSummaryPath)
     }
+    $summarySafe = Protect-ArtifactText -Text $SummaryText -Resource $context.Resource `
+        -RepoRoot $context.RepoRoot -PrivateRoot $context.PrivateRoot -SensitiveValues $context.SensitiveValues
     Write-Utf8NoBomText `
         -LiteralPath (Join-Path $context.ShareableRoot 'summary.md') `
         -Text $summarySafe
     return $report
+}
+
+function Publish-ValidationArtifacts {
+    param(
+        $Report,
+        $Run,
+        [string]$SummaryText,
+        [string]$RepoRoot,
+        [string]$Resource,
+        [string[]]$SensitiveValues = @(),
+        [switch]$DebugArtifacts
+    )
+
+    $runPath = Get-FullPath -Path $Run.Root
+    $privatePath = Join-Path $runPath 'private'
+    $shareablePath = Join-Path $runPath 'shareable'
+    Assert-PathUnderRoot -RootPath (Join-Path $RepoRoot '.tmp_tests') -Path $runPath
+    try {
+        if ($DebugArtifacts) {
+            Write-JsonReport -LiteralPath (Join-Path $privatePath 'report.json') -Report $Report
+            Write-Utf8NoBomText -LiteralPath (Join-Path $privatePath 'summary.md') -Text $SummaryText
+        }
+        $null = New-ShareableArtifactSet -PrivateReport $Report -SummaryText $SummaryText `
+            -MinimalArtifacts:(-not $DebugArtifacts) -RunRoot $runPath `
+            -PrivateRoot $privatePath -ShareableRoot $shareablePath -RepoRoot $RepoRoot `
+            -Resource $Resource -ExtraSensitiveValues $SensitiveValues
+        if (-not $DebugArtifacts) { [IO.Directory]::Delete($privatePath) }
+        return $true
+    } catch {
+        $Report.status = 'FAIL'
+        try {
+            foreach ($path in @($shareablePath, $privatePath)) {
+                if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+            }
+            New-Item -ItemType Directory -Path $privatePath | Out-Null
+            Write-Utf8NoBomText -LiteralPath (Join-Path $privatePath 'error-summary.md') `
+                -Text "# Validation failed`n`nSafe report publication failed.`n"
+        } catch {
+            [Console]::Error.WriteLine('Could not remove incomplete artifacts or write the safe error summary.')
+        }
+        [Console]::Error.WriteLine('Safe report publication failed.')
+        return $false
+    }
 }
