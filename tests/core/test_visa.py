@@ -5722,3 +5722,87 @@ def test_configure_output_independent_channel_guard_fails_before_write():
             resource_manager_factory=RecordingFactory(manager),
         )
     assert session.writes == []
+
+def test_full_validation_reset_checks_outputs_around_bounded_opc() -> None:
+    session = FakeSession(
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1"},
+    )
+    manager = FakeManager(session)
+    visa_module.reset_for_live_full_validation(
+        USB_RESOURCE,
+        expected_model_id="keysight-33521b",
+        resource_manager_factory=RecordingFactory(manager),
+    )
+
+    assert session.queries == [
+        IDN_QUERY, "OUTPut1?", "*OPC?", "OUTPut1?",
+    ]
+    assert session.writes == ["*RST"]
+    assert session.close_calls == manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("responses", "writes"),
+    [
+        ({"OUTPut1?": "1", "*OPC?": "1"}, []),
+        ({"OUTPut1?": "0", "*OPC?": "0"}, ["*RST"]),
+    ],
+)
+def test_full_validation_reset_fails_closed_on_output_or_opc(responses, writes) -> None:
+    session = FakeSession(responses_by_command=responses)
+    with pytest.raises(WaveformVerificationError):
+        visa_module.reset_for_live_full_validation(
+            USB_RESOURCE,
+            expected_model_id="keysight-33521b",
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == writes
+
+
+def test_full_validation_reset_fails_when_output_turns_on_after_reset() -> None:
+    class PostResetOutputOn(FakeSession):
+        def query(self, command):
+            if command == "OUTPut1?" and "OUTPut1?" in self.queries:
+                self.responses_by_command["OUTPut1?"] = "1"
+            return super().query(command)
+
+    session = PostResetOutputOn(
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1"},
+    )
+    with pytest.raises(WaveformVerificationError):
+        visa_module.reset_for_live_full_validation(
+            USB_RESOURCE,
+            expected_model_id="keysight-33521b",
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == ["*RST"]
+
+
+def test_full_validation_reset_rejects_mismatched_identity_before_write() -> None:
+    session = FakeSession(responses_by_command={"OUTPut1?": "0"})
+    with pytest.raises(UnsupportedInstrumentError):
+        visa_module.reset_for_live_full_validation(
+            USB_RESOURCE,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == []
+
+
+def test_full_validation_reset_guards_every_channel() -> None:
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={
+            "OUTPut1?": "0",
+            "OUTPut2?": "1",
+            "*OPC?": "1",
+        },
+    )
+    with pytest.raises(WaveformVerificationError):
+        visa_module.reset_for_live_full_validation(
+            USB_RESOURCE,
+            expected_model_id="keysight-33512b",
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == []
+    assert session.queries == [IDN_QUERY, "OUTPut1?", "OUTPut2?"]

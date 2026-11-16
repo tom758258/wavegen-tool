@@ -79,7 +79,9 @@ Tests that cover instrument-facing behavior should confirm that:
   is enabled, indeterminate, or cannot be queried;
 - unsupported identity, transport, backend, parameter, and expected-model
   combinations fail before unsafe execution;
-- the implementation does not use `*RST`, preset, or setup recall;
+- normal instrument control and hardware-free validation do not use `*RST`,
+  preset, or setup recall; Real Live Full alone resets before each independent
+  case with output-off checks and bounded completion confirmation;
 - cleanup and error-queue failures remain visible rather than being converted
   into passing results.
 
@@ -109,7 +111,10 @@ Resource enumeration is allowed only when a user explicitly invokes the
 dedicated discovery diagnostic; it is not unattended live admission.
 
 Keep output off unless a separately approved test explicitly requires it. Do
-not use `*RST`. Do not make tests depend on a private lab resource, and never
+not use `*RST` in hardware-free tests or normal operation. Real Live Full
+resets before each independent case after checking all outputs are off and
+verifies `*OPC?` and safe-off state before proceeding. Do not make tests depend
+on a private lab resource, and never
 commit the real resource, serial, raw IDN, private address, hostname, or local
 path.
 
@@ -136,6 +141,8 @@ Windows PowerShell, project Python, explicit USB resource, and system VISA.
 Required FAIL/N/A, missing cases, cleanup errors, unconfirmed OFF, dirty or
 unbounded final queue, and shareable generation failure must fail the gate.
 Only output-control and operator-confirmed observation cases may enable output.
+Real Live Full resets before each independent case (not between its steps);
+reset or safe-off failure fails that case and blocks subsequent cases.
 Verify best-effort OFF after a failure after ON, and require an affirmative
 observation for a functional pass. Keep the List-to-List-to-CW transition intact.
 

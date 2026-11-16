@@ -460,6 +460,16 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "configure-sine-list-sweep", "configure-square-list-sweep",
         "configure-ramp-list-sweep", "configure-triangle-list-sweep", "configure-sine",
     ]
+    sweep_names = {
+        "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus",
+        "sweep-sine-timer", "sweep-square-linear", "sweep-ramp-linear",
+        "sweep-triangle-linear",
+    }
+    for case in primary:
+        if case["name"].split("/", 1)[1] in sweep_names:
+            args = case["steps"][0]["arguments"]
+            assert args[args.index("--start-frequency-hz") + 1] == "2"
+            assert args[args.index("--stop-frequency-hz") + 1] == "8"
     for case in inventory:
         for step in case["steps"]:
             if step["arguments"][:3] == ["output", "--state", "on"]:
@@ -631,7 +641,7 @@ Write-Output ('RESULT:' + (@{ head = $head; changed_rejected = $changedRejected 
 
 
 @pytest.mark.parametrize("failure", [
-    "none", "command", "cleanup", "case-dirty", "dirty", "limit", "na",
+    "none", "command", "cleanup", "case-dirty", "dirty", "limit", "na", "reset",
     "before-timeout", "queue-timeout", "off-timeout", "termination-unconfirmed",
 ])
 def test_full_failure_gate_and_best_effort_off(artifact_root, failure):
@@ -646,6 +656,7 @@ $run = [pscustomobject]@{ Private = (Get-Location).Path }
 $script:state = 'off'
 $script:offCalls = 0
 $script:onCalls = 0
+$script:resetCalls = 0
 $inventory = @(Get-FullValidationInventory -Channels @(2))
 $script:casesUnderTest = @($inventory | Where-Object family -eq 'output-control') +
     @($inventory | Where-Object name -eq 'ch2/status')
@@ -684,19 +695,25 @@ function Invoke-WavegenJson {
     }
     return [pscustomobject]@{ Process = @{ exit_code = 0 }; ParseError = $null; Payload = $payload }
 }
+function Invoke-FullValidationReset {
+    param($Name)
+    $script:resetCalls++
+    if ($failure -eq 'reset') { throw 'Injected reset failure' }
+}
 Invoke-FullLiveCases -Channels @(2) -CanRun ($failure -ne 'na')
 $finalReasons = @()
 try { Assert-FullErrorQueue -Name 'final-error-queue' } catch { $finalReasons += $_.Exception.Message }
 Add-LiveCase -Cases $cases -Name 'final-error-queue' -Status $(if ($finalReasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $finalReasons
 $pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch2/initial-safe-off', 'ch2/output-control', 'ch2/final-safe-off', 'final-error-queue')
-Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $script:offCalls; on_calls = $script:onCalls; cases = @($cases) } | ConvertTo-Json -Depth 10 -Compress))
+Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $script:offCalls; on_calls = $script:onCalls; reset_calls = $script:resetCalls; cases = @($cases) } | ConvertTo-Json -Depth 10 -Compress))
 '''.replace("FAILURE", failure))
     assert result["pass"] is (failure == "none")
     assert result["state"] == ("on" if failure == "off-timeout" else "off")
     assert result["off_calls"] >= 2
-    assert result["on_calls"] == (0 if failure in {"na", "before-timeout"} else 1)
+    assert result["on_calls"] == (0 if failure in {"na", "reset", "before-timeout"} else 1)
+    assert result["reset_calls"] == (0 if failure == "na" else 2 if failure in {"none", "dirty", "limit"} else 1)
     statuses = {case["name"]: case["status"] for case in result["cases"]}
-    if failure in {"command", "cleanup", "case-dirty"}:
+    if failure in {"command", "cleanup", "case-dirty", "reset"}:
         assert statuses["ch2/output-control"] == "FAIL"
     if failure == "na":
         assert statuses["ch2/output-control"] == "N/A"
@@ -758,6 +775,12 @@ function Invoke-FullCommand {
         amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'
         burst_mode = 'counted'; burst_count = 3; burst_trigger_source = 'external'; burst_trigger_slope = 'positive'
         has_errors = $false; empty_confirmed = $true; limit_reached = $false
+    }
+}
+function Invoke-FullValidationReset {
+    param($Name)
+    if ($script:outputs[1] -ne 'off' -or $script:outputs[2] -ne 'off') {
+        throw 'Reset requires all outputs OFF'
     }
 }
 Invoke-FullLiveCases -Channels @(1, 2) -CanRun $true

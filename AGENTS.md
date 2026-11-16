@@ -66,7 +66,10 @@ planning, simple and surgical changes, and text-file hygiene.
 - Keep real output off by default. Connection, identification, diagnostics,
   queries, and waveform configuration must not enable output implicitly;
   output-on must remain explicit. Do not use `*RST`, preset, setup recall, or
-  other broad state-changing operations by default.
+  other broad state-changing operations during normal control or hardware-free
+  validation. The explicitly initiated Real Live Full Suite is the sole exception:
+  it performs a bounded `*RST` before each independent case, after confirming
+  all outputs are off, and verifies completion and safe-off state.
 - Real hardware access is explicit and opt-in. One-shot Direct CLI live access
   requires either a user-supplied `--resource` or the operator-set
   `WAVEGEN_TOOL_RESOURCE` environment variable; `--resource` takes precedence.

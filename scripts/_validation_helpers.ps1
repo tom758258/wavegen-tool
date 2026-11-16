@@ -539,7 +539,7 @@ function Get-FullValidationInventory {
         $spacing = if ($option -eq 'logarithmic') { 'logarithmic' } else { 'linear' }
         $triggered = $option -in @('bus', 'timer')
         $sweepTime = if ($triggered) { '1' } else { '0.1' }
-        $args = @("configure-$wave-sweep", '--start-frequency-hz', '1000', '--stop-frequency-hz', '2000', '--spacing', $spacing, '--sweep-time-s', $sweepTime) + $voltage
+        $args = @("configure-$wave-sweep", '--start-frequency-hz', '2', '--stop-frequency-hz', '8', '--spacing', $spacing, '--sweep-time-s', $sweepTime) + $voltage
         if ($triggered) { $args += @('--trigger-source', $option, '--hold-time-s', '0.2', '--return-time-s', '0.2') }
         if ($option -eq 'timer') { $args += @('--trigger-timer-s', '2') }
         $readback = @{ function = $functions[$wave]; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
