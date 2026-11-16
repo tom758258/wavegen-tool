@@ -159,7 +159,7 @@ Artifacts are written to `dist/`. This uses the root `pyproject.toml` and its
 Run the hardware-free repository tests and source lint checks:
 
 ```powershell
-uv run python -m pytest -q -rs -p no:cacheprovider
+uv run python -m pytest -q -rs -p no:cacheprovider --basetemp .tmp_tests/readme-pytest
 uv run python -m ruff check src tests
 ```
 
