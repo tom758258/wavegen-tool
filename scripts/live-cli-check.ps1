@@ -257,6 +257,21 @@ function Assert-FullErrorQueue {
     }
 }
 
+function Invoke-FullValidationReset {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $artifactDirectory = Join-Path $run.Private (New-SafeCaseName "$Name-reset")
+    $code = 'import sys; from wavegen_tool_core.visa import reset_for_live_full_validation; reset_for_live_full_validation(sys.argv[1], sys.argv[2], expected_model_id=sys.argv[3])'
+    $process = Invoke-CapturedCommand -Name $Name -FilePath $Python `
+        -Arguments @('-c', $code, $Resource, $backendName, $expectedModel) `
+        -StdOutPath (Join-Path $artifactDirectory 'stdout.txt') `
+        -StdErrPath (Join-Path $artifactDirectory 'stderr.txt') `
+        -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts) -TimeoutSeconds 30
+    if ($process.exit_code -ne 0) {
+        throw "Full validation reset failed (exit code $($process.exit_code))."
+    }
+}
+
 function Set-FullSafeOff {
     param([string]$Name, [int]$Channel)
     try {
@@ -326,7 +341,16 @@ function Invoke-FullLiveCases {
             $cleanupReasons = @()
             try {
                 Set-FullSafeOff -Name "$($recipe.name)/before" -Channel $channel
+                foreach ($other in @($Channels | Where-Object { $_ -ne $channel })) {
+                    Set-FullSafeOff -Name "$($recipe.name)/before-ch$other" -Channel $other
+                }
                 Assert-FullErrorQueue -Name "$($recipe.name)/before-errors"
+                Invoke-FullValidationReset -Name "$($recipe.name)/reset"
+                foreach ($checked in $Channels) {
+                    $state = Invoke-FullCommand -Name "$($recipe.name)/reset-ch$checked" -Arguments @('status') -Channel $checked
+                    Assert-FullReadback -Payload $state -Expected @{ output_state = 'off' }
+                }
+                Assert-FullErrorQueue -Name "$($recipe.name)/reset-errors"
                 if ($observation) {
                     Write-Host ""
                     Write-Host "$targetCapabilityModel CH${channel} - $($recipe.name)"
@@ -653,7 +677,11 @@ Write-Host "  - Each exercised channel is forced OFF before configuration."
 Write-Host "  - The runner commands each exercised channel OFF after validation."
 Write-Host "  - Best-effort OFF cleanup is attempted after failures."
 Write-Host "  - No resource scanning or guessing is performed."
-Write-Host "  - No reset, preset or recall is performed."
+if ($Suite -eq 'full' -and -not $PlanOnly) {
+    Write-Host "  - Real Full resets the instrument before every independent case; all outputs are checked OFF."
+} else {
+    Write-Host "  - No reset, preset or recall is performed."
+}
 Write-Host "  - Coupling or tracking is not changed automatically."
 
 if ($PlanOnly) {

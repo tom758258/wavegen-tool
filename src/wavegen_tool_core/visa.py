@@ -42,6 +42,7 @@ from wavegen_tool_core.identity import (
     InstrumentIdentity,
     ModelInfo,
     SUPPORT_POLICY_MODE_PRODUCT,
+    SUPPORT_POLICY_MODE_VALIDATION,
     classify_discovered_identity,
     model_info_for_model_id,
     parse_idn,
@@ -7159,6 +7160,47 @@ def send_bus_trigger(
         backend=context.backend,
         transport=context.transport,
         identity=context.identity,
+    )
+
+
+def reset_for_live_full_validation(
+    resource: str,
+    backend: str | None = None,
+    *,
+    expected_model_id: str,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> None:
+    """Reset one explicitly selected instrument only for Real Live Full cases."""
+
+    if not isinstance(expected_model_id, str) or not expected_model_id.strip():
+        raise WaveformParameterError("Full validation reset requires an expected model.")
+
+    def reset_and_verify(
+        session: VisaSession,
+        context: IdentificationResult,
+    ) -> None:
+        channel_count = _capabilities_for_identity(context.identity).channel_count
+        for channel in range(1, channel_count + 1):
+            if _parse_status_output(session.query(f"OUTPut{channel}?")) != "off":
+                raise WaveformVerificationError(
+                    "All instrument outputs must be OFF before Full validation reset."
+                )
+        session.write("*RST")
+        if str(session.query("*OPC?")).strip() != "1":
+            raise WaveformVerificationError("Full validation reset did not complete.")
+        for channel in range(1, channel_count + 1):
+            if _parse_status_output(session.query(f"OUTPut{channel}?")) != "off":
+                raise WaveformVerificationError(
+                    "An instrument output was not OFF after Full validation reset."
+                )
+
+    _run_on_supported_instrument(
+        resource,
+        backend,
+        reset_and_verify,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id=expected_model_id,
+        resource_manager_factory=resource_manager_factory,
     )
 
 

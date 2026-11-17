@@ -180,8 +180,11 @@ Full admission is limited to Windows PowerShell, the project's
 `.venv/Scripts/python.exe`, an explicit operator-supplied USB resource, and
 `-Backend system`. Other connection/backend combinations fail closed for Full;
 Smoke retains its existing connection/backend behavior. Detected `*IDN?` must
-exactly match `-Target`. Neither suite scans, guesses, resets, recalls a setup,
-or automatically changes coupling/tracking.
+exactly match `-Target`. Neither suite scans, guesses, recalls a setup, or
+changes coupling/tracking automatically. Smoke, Full Preflight, and Full PlanOnly
+never reset the instrument. Real Live Full alone performs a bounded `*RST`
+before every independent case, after safe-off checks; it never resets between
+steps of the same case.
 
 Full uses the same cases for Preflight, PlanOnly, and Real Live. CH1 covers
 all eight static waveforms, internal AM (normal and DSSC), FM, PM, FSK, BPSK,

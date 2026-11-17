@@ -189,6 +189,33 @@ List backend-reported resources:
 uv run wavegen-tool list-resources --backend system
 ```
 
+For a JSON inventory of those resource strings (still no instrument sessions):
+
+```powershell
+uv run wavegen-tool list-resources --backend system --json
+```
+
+To explicitly query eligible resources and show only those responding to
+`*IDN?`, use `--live-only`. This actively opens sessions; it is **not** a
+passive scan:
+
+```powershell
+uv run wavegen-tool list-resources --backend system --live-only
+uv run wavegen-tool list-resources --backend system --live-only --json
+```
+
+For a TCPIP/LAN discovery check using separately installed PyVISA-py:
+
+```powershell
+uv run wavegen-tool list-resources --backend '@py' --live-only --json
+```
+
+To inspect the simulated resource inventory without physical VISA access:
+
+```powershell
+uv run wavegen-tool list-resources --simulate --json
+```
+
 Raw listing returns resource strings reported by the selected backend. It does
 not open instrument sessions or send SCPI. Options are:
 
@@ -335,6 +362,19 @@ uv run wavegen-tool configure-pulse `
   --load 50
 ```
 
+Additional static waveform previews, each hardware-free and independent:
+
+```powershell
+uv run wavegen-tool configure-square --dry-run --model keysight-33521b --frequency-hz 1000 --amplitude-vpp 0.1 --duty-cycle-percent 50
+uv run wavegen-tool configure-ramp --dry-run --model keysight-33521b --frequency-hz 1000 --amplitude-vpp 0.1 --symmetry-percent 50
+uv run wavegen-tool configure-triangle --dry-run --model keysight-33521b --frequency-hz 1000 --amplitude-vpp 0.1
+uv run wavegen-tool configure-dc --dry-run --model keysight-33521b --voltage-v 0.1
+uv run wavegen-tool configure-noise --dry-run --model keysight-33521b --bandwidth-hz 1000 --amplitude-vpp 0.1
+uv run wavegen-tool configure-prbs --dry-run --model keysight-33521b --bit-rate-bps 1000000 --amplitude-vpp 0.1 --pattern PN7
+```
+
+Sine is shown in [Safe Quick Start](#safe-quick-start); Pulse is shown above.
+
 Use `--leading-edge-s` and `--trailing-edge-s` together for independent pulse
 edges. They cannot be mixed with `--edge-time-s`. Live pulse configuration
 queries and verifies the instrument's applicable dynamic edge limits; dry-run
@@ -386,6 +426,50 @@ uv run wavegen-tool configure-sine `
   --am-depth 50
 ```
 
+Other internal modulation and Sum examples (run each independently):
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --fm-frequency 5 --fm-deviation 100
+
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --pm-frequency 5 --pm-deviation-deg 90
+
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --fsk-hop-frequency 2000 --fsk-rate 10
+
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --bpsk-phase-shift-deg 180 --bpsk-rate 10
+
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --sum-frequency 10 --sum-amplitude-percent 20
+```
+
+Pulse PWM uses an internal sine source; frequency and width deviation must
+be supplied together. PWM and AM cannot be combined:
+
+```powershell
+uv run wavegen-tool configure-pulse `
+  --dry-run `
+  --model keysight-33521b `
+  --frequency-hz 1000 `
+  --pulse-width-s 0.0001 `
+  --amplitude-vpp 1 `
+  --edge-time-s 0.00000005 `
+  --pwm-frequency 5 `
+  --pwm-deviation-s 0.00002
+```
+
 An ordinary static waveform or sweep configuration disables applicable prior
 modulation state on the selected channel before configuring the new mode.
 
@@ -419,6 +503,51 @@ Gated Burst uses:
 
 It is mutually exclusive with every Counted Burst option. Both burst modes
 leave output off and affect only the selected channel.
+
+The following are **alternative** Sine previews, not options to combine.
+Immediate Counted Burst supplies a period:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --burst-count 3 --burst-period-s 0.1
+```
+
+Bus, Timer, and External Counted Burst use their own trigger parameters:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --burst-count 3 --burst-trigger-source bus
+
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --burst-count 3 --burst-trigger-source timer `
+  --burst-trigger-timer-s 0.1
+
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --burst-count 3 --burst-trigger-source external `
+  --burst-trigger-slope positive
+```
+
+Gated Burst is configured independently and needs a separate physical gate
+signal for live gated operation:
+
+```powershell
+uv run wavegen-tool configure-sine `
+  --dry-run --model keysight-33521b `
+  --frequency-hz 1000 --amplitude-vpp 0.1 `
+  --gated-burst --gate-polarity normal
+```
+
+Bus-triggered Burst requires a later explicit instrument-wide `trigger`
+after live configuration and any separately authorized output-on. External
+trigger/gate operation requires a compatible external source.
 
 ## Linear and Logarithmic Frequency Sweeps
 
@@ -457,6 +586,35 @@ uv run wavegen-tool configure-sine-sweep `
   --amplitude-vpp 0.1
 ```
 
+Other representative sweep previews include a linear square sweep, a
+Bus-triggered ramp sweep, and a Timer-triggered triangle sweep:
+
+```powershell
+uv run wavegen-tool configure-square-sweep `
+  --dry-run --model keysight-33521b `
+  --start-frequency-hz 1000 --stop-frequency-hz 2000 `
+  --spacing linear --sweep-time-s 1 `
+  --duty-cycle-percent 50 --amplitude-vpp 0.1
+
+uv run wavegen-tool configure-ramp-sweep `
+  --dry-run --model keysight-33521b `
+  --start-frequency-hz 100 --stop-frequency-hz 1000 `
+  --spacing linear --sweep-time-s 1 `
+  --symmetry-percent 50 --amplitude-vpp 0.1 `
+  --trigger-source bus
+
+uv run wavegen-tool configure-triangle-sweep `
+  --dry-run --model keysight-33521b `
+  --start-frequency-hz 100 --stop-frequency-hz 1000 `
+  --spacing linear --sweep-time-s 1 `
+  --amplitude-vpp 0.1 `
+  --trigger-source timer --trigger-timer-s 2
+```
+
+Bus-triggered sweeps require a separate `trigger` command after live
+configuration and explicit output-on. Timer sweep timing must accommodate
+sweep, hold, and return time.
+
 ## Frequency List Sweep
 
 The Direct CLI provides:
@@ -483,6 +641,16 @@ uv run wavegen-tool configure-sine-list-sweep `
   --dwell-s 0.005 `
   --trigger-source immediate `
   --amplitude-vpp 0.1
+```
+
+For a Bus-triggered List Sweep, omit `--dwell-s`. Each later instrument-wide
+`trigger` advances the configured list; configuring the list does not send it:
+
+```powershell
+uv run wavegen-tool configure-sine-list-sweep `
+  --dry-run --model keysight-33521b `
+  --frequencies-hz "1000,3000,7000" `
+  --trigger-source bus --amplitude-vpp 0.1
 ```
 
 Square List Sweep adds duty cycle; Ramp List Sweep adds symmetry. Pulse, PRBS,
@@ -543,6 +711,27 @@ uv run wavegen-tool trigger --resource "$env:WAVEGEN_TOOL_RESOURCE"
 There is no channel option. Every armed channel using Bus trigger may respond.
 The command does not change output state. In simulation only, `--model` selects
 the registered profile.
+
+### Explicit Live Output Sequence
+
+Only run the following with an **operator-selected** admitted VISA resource,
+verified wiring and load, and a safe intended waveform. These commands are
+separate invocations; there is no automatic output-on or guaranteed output-off
+if the shell is interrupted:
+
+```powershell
+$env:WAVEGEN_TOOL_RESOURCE = "<your exact VISA resource>"
+uv run wavegen-tool identify --json
+uv run wavegen-tool configure-sine --frequency-hz 1000 --amplitude-vpp 0.1
+uv run wavegen-tool output --state on
+uv run wavegen-tool status --channel 1 --json
+uv run wavegen-tool output --state off
+```
+
+Configuration leaves the output OFF. `output --state on` is a separate,
+deliberate action; always issue `output --state off` when finished. For a Bus
+List Sweep or Bus Burst/Sweep, `trigger` is also a separate action and may
+affect **every armed channel**, not only Channel 1.
 
 ## JSON and Errors
 
@@ -695,6 +884,36 @@ For normal live shutdown, submit explicit output-off before stopping. Use the
 and [common protocol](../contracts/common-worker-protocol.md) for the exact
 schemas, lifecycle meanings, and queue rules.
 
+### Simulated Worker Walkthrough
+
+In one PowerShell terminal, start the local Worker; leave it running:
+
+```powershell
+uv run wavegen-tool worker --mode simulate --control-port 8765
+```
+
+In another terminal, wait for readiness, submit a simulated configuration,
+observe job completion, then request a cooperative stop:
+
+```powershell
+uv run wavegen-tool wait-ready --port 8765 --json
+
+uv run wavegen-tool send-command `
+  --port 8765 --command configure-sine `
+  --context-json '{"mode":"simulate","planning_model_id":"keysight-33521b"}' `
+  --arguments-json '{"frequency_hz":1000,"amplitude_vpp":0.1}' --json
+
+uv run wavegen-tool wait-ready --port 8765 --json
+uv run wavegen-tool worker-status --port 8765 --json
+uv run wavegen-tool worker-stop --port 8765 --json
+```
+
+This uses the simulator only, not real hardware. `send-command` returning
+HTTP 202 means admission, not completion; the later readiness/status calls
+provide lifecycle information. The Worker stop request does not turn a
+physical output off: send an explicit `output` command with
+`{"enabled":false}` and await its completion before stopping a **Live** Worker.
+
 ## CLI Validation Scripts
 
 These scripts are contributor tools, not normal requirements for every pull
@@ -775,3 +994,47 @@ Both scripts normally retain `shareable/report.json` and
 `shareable/summary.md`. Use `-DebugArtifacts` for detailed diagnostics.
 Keep any `private/` artifacts local. See [Contributing](../CONTRIBUTING.md)
 for artifact handling, evidence acceptance, and Product Live decisions.
+
+### Full and Debug Examples
+
+The following **hardware-free** Full checks require a clean Git working tree
+and the documented Windows PowerShell/project-Python reference environment:
+
+```powershell
+.\scripts\preflight-cli.ps1 -Target all -Suite full -DebugArtifacts
+
+.\scripts\live-cli-check.ps1 `
+  -Target keysight-33512b `
+  -Connection usb `
+  -Backend system `
+  -Resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  -Suite full `
+  -PlanOnly
+```
+
+`-DebugArtifacts` is optional and can also be used on the live runner to
+retain detailed private diagnostics. PlanOnly requires an intended resource
+but does not open it.
+
+**Real Live Full is an opt-in hardware operation**, not a normal documentation
+or CI check. Only after preparing the physical instrument, oscilloscope,
+separate external Trigger/Gate source, clean Git tree, and operator confirmation,
+the same runner can be invoked without `-PlanOnly`:
+
+```powershell
+.\scripts\live-cli-check.ps1 `
+  -Target keysight-33512b `
+  -Connection usb `
+  -Backend system `
+  -Resource "$env:WAVEGEN_TOOL_RESOURCE" `
+  -Suite full
+```
+
+Unlike normal CLI/Worker control, explicitly initiated Real Live Full performs
+a bounded `*RST` before **each independent case**, after confirming all outputs
+are OFF. It waits for `*OPC?`, rechecks safe-off state, and checks the bounded
+error queue. An unsafe or failed reset blocks subsequent cases; it never
+constitutes a passed hardware test. Real Full can explicitly turn output on
+for permitted observation cases; a scope observation and safe-off cleanup are
+required. Smoke, Preflight, PlanOnly, ordinary CLI, and Worker do **not** reset
+the instrument automatically.
