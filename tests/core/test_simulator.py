@@ -1361,3 +1361,93 @@ def test_configure_output_ch2_isolation():
     assert any("SOURce2" in c for c in result.commands)
     assert all("OUTPut1" not in c for c in result.commands)
     assert all("SOURce1" not in c for c in result.commands)
+
+
+@pytest.mark.parametrize(
+    ("configure", "args", "options"),
+    [
+        (configure_sine, (1000, 0.1), {"am": AMConfig(10, 20)}),
+        (configure_sine, (1000, 0.1), {"am": AMConfig(10, 20, "dssc")}),
+        (configure_sine, (1000, 0.1), {"fm": FMConfig(10, 100)}),
+        (configure_sine, (1000, 0.1), {"pm": PMConfig(10, 30)}),
+        (configure_sine, (1000, 0.1), {"fsk": FSKConfig(2000, 10)}),
+        (configure_sine, (1000, 0.1), {"bpsk": BPSKConfig(90, 10)}),
+        (configure_pulse, (1000, 0.1, 0.0001), {"pwm": PWMConfig(10, 0.00002)}),
+        (configure_sine, (1000, 0.1), {"sum": SumConfig(10, 10)}),
+        (configure_sine, (1000, 0.1), {"burst": CountedBurstConfig(3, 0.1)}),
+        (
+            configure_sine,
+            (1000, 0.1),
+            {"burst": CountedBurstConfig(3, trigger_source="bus")},
+        ),
+        (
+            configure_sine,
+            (1000, 0.1),
+            {"burst": CountedBurstConfig(3, trigger_source="external")},
+        ),
+        (
+            configure_sine,
+            (1000, 0.1),
+            {"burst": CountedBurstConfig(
+                3, trigger_source="timer", trigger_timer_s=1
+            )},
+        ),
+        (configure_square, (1000, 0.1), {"burst": GatedBurstConfig("inverted")}),
+        (configure_sine_sweep, (1000, 2000, "linear", 1, 0.1), {}),
+        (configure_sine_sweep, (1000, 2000, "logarithmic", 1, 0.1), {}),
+        (
+            configure_sine_sweep,
+            (1000, 2000, "linear", 1, 0.1),
+            {"trigger_source": "timer", "trigger_timer_s": 2},
+        ),
+        (
+            configure_sine_list_sweep,
+            ((1000, 2000, 1000), 0.1),
+            {"dwell_s": 0.01},
+        ),
+        (
+            configure_sine_list_sweep,
+            ((2, 5, 8), 0.1),
+            {"trigger_source": "bus"},
+        ),
+        (
+            configure_prbs,
+            (10000, 0.1),
+            {"burst": CountedBurstConfig(3, trigger_source="bus")},
+        ),
+    ],
+)
+def test_advanced_mode_readback_verifies_simulated_settings(
+    configure, args, options
+) -> None:
+    state = Simulated33521BState()
+    factory = SimulatedResourceManagerFactory(state)
+    result = configure(
+        factory.resource_name,
+        *args,
+        verify_readback=True,
+        resource_manager_factory=factory,
+        **options,
+    )
+
+    assert result.output_state == "off"
+    assert state.ch1.output_enabled is False
+
+
+def test_advanced_mode_readback_respects_selected_channel() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+    result = configure_sine(
+        factory.resource_name,
+        1000,
+        0.1,
+        am=AMConfig(10, 20),
+        channel=2,
+        verify_readback=True,
+        resource_manager_factory=factory,
+    )
+
+    assert result.channel == 2
+    assert state.ch2.am_enabled is True
+    assert state.ch1.am_enabled is False
+
