@@ -778,6 +778,7 @@ function Invoke-FullCommand {
         output_state = $script:outputs[$Channel]; function = 'PULS'; frequency_hz = 1
         amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'
         burst_mode = 'counted'; burst_count = 3; burst_trigger_source = 'external'; burst_trigger_slope = 'positive'
+        readback_verified = $true
         has_errors = $false; empty_confirmed = $true; limit_reached = $false
     }
 }
