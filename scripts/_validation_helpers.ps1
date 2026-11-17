@@ -576,6 +576,20 @@ function Get-FullValidationInventory {
         (New-Step @('output', '--state', 'on') @{ output_state = 'on' }),
         (New-Step @('output', '--state', 'off') @{ output_state = 'off' })
     ) $true
+    # Reuse existing Full cases; only configure steps with an active Advanced Mode
+    # opt into independent instrument/simulator readback.
+    foreach ($recipe in $recipes) {
+        if ($recipe.family -notin @('modulation', 'burst', 'sweep', 'list-sweep')) { continue }
+        foreach ($step in $recipe.steps) {
+            $command = [string]$step.arguments[0]
+            if (-not $command.StartsWith('configure-')) { continue }
+            # The final CW recovery in list-transition-cw-recovery is not
+            # an Advanced Mode operation and must retain normal behavior.
+            if ($recipe.family -eq 'list-sweep' -and $command -notlike '*-list-sweep') { continue }
+            $step.arguments = @($step.arguments) + @('--verify-readback')
+            $step.result['readback_verified'] = $true
+        }
+    }
     foreach ($channel in $Channels) {
         foreach ($recipe in $recipes) {
             if ($channel -ne 1 -and -not $recipe.parity) { continue }
