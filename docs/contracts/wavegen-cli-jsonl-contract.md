@@ -67,6 +67,13 @@ symmetry, pulse-edge, PRBS, sweep timing/spacing/trigger, and List Sweep fields
 only when that Direct CLI command exposes them. This contract does not freeze
 every internal result dataclass field.
 
+For the existing Advanced Mode configuration commands, a successful executed
+operation with `--verify-readback` adds `readback_verified: true` to Direct CLI
+JSON. A failed comparison retains `success: false` and the existing waveform
+verification error category (exit 29). Default executed results and hardware-free
+dry-run plans never include that field. Normalized configuration results remain
+requested values and must not be mistaken for independent observations.
+
 ## Direct CLI Commands
 
 The public Direct CLI machine surface includes:
