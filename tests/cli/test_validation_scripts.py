@@ -460,6 +460,10 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "configure-sine-list-sweep", "configure-square-list-sweep",
         "configure-ramp-list-sweep", "configure-triangle-list-sweep", "configure-sine",
     ]
+    list_bus = next(case for case in primary if case["name"] == "ch1/list-bus-trigger")
+    list_bus_args = list_bus["steps"][0]["arguments"]
+    assert list_bus_args[list_bus_args.index("--frequencies-hz") + 1] == "2,5,8"
+    assert sum(step["arguments"][0] == "trigger" for step in list_bus["steps"]) == 3
     sweep_names = {
         "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus",
         "sweep-sine-timer", "sweep-square-linear", "sweep-ramp-linear",

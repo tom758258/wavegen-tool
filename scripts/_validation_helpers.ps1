@@ -565,7 +565,7 @@ function Get-FullValidationInventory {
     Add-Recipe 'list-transition-cw-recovery' 'list-sweep' $steps $true
     $listTrigger = New-Step @('trigger') @{ output_state = 'on' }
     Add-Recipe 'list-bus-trigger' 'list-sweep' @(
-        (New-Step (@('configure-sine-list-sweep', '--frequencies-hz', '1000,1500,2000', '--trigger-source', 'bus') + $voltage) @{} @{ trigger_source = 'bus' }),
+        (New-Step (@('configure-sine-list-sweep', '--frequencies-hz', '2,5,8', '--trigger-source', 'bus') + $voltage) @{} @{ trigger_source = 'bus' }),
         $outputOn, $listTrigger, $listTrigger, $listTrigger
     ) -Observation @{
         expected = 'The output advances through distinct frequency plateaus after the individual Bus triggers.'
