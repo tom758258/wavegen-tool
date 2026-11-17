@@ -733,6 +733,37 @@ deliberate action; always issue `output --state off` when finished. For a Bus
 List Sweep or Bus Burst/Sweep, `trigger` is also a separate action and may
 affect **every armed channel**, not only Channel 1.
 
+## Optional Advanced Mode Readback
+
+Supported Advanced Mode Direct CLI configurations accept `--verify-readback`. When enabled,
+the instrument's programmed mode settings are queried and compared in the same VISA
+session after configuration, with output remaining OFF. This covers AM/DSSC, FM,
+PM, FSK, BPSK, PWM, Sum, Counted/Gated Burst, linear/logarithmic Sweep, and List
+Sweep on their already supported carriers; it does not introduce new combinations.
+
+Ordinary static sine, square, ramp, triangle, pulse, or PRBS configuration
+without an Advanced Mode option rejects this flag before sending any settings.
+DC, noise, and output configuration do not accept this flag.
+
+Hardware-free simulator example:
+
+```powershell
+uv run wavegen-tool configure-sine --simulate --frequency-hz 1000 `
+  --amplitude-vpp 0.1 --am-frequency 10 --am-depth 80 `
+  --verify-readback --json
+```
+
+A successful executed verification adds `readback_verified: true` to Direct CLI
+JSON and `Advanced Mode readback: PASS` to text output. A mismatch, malformed
+response, or failed query returns a waveform verification error (exit code 29),
+with expected and actual values where available. Without the flag, executed
+results and queries are unchanged.
+
+The `--simulate` path checks an in-memory model only. The `--dry-run` path, even
+with `--verify-readback`, returns the normal offline plan and does not claim a
+readback was performed. Programmed-settings verification does not prove analog
+waveform accuracy or actual external trigger/gate behavior.
+
 ## JSON and Errors
 
 Use `--json` for one JSON object from a Direct CLI command. Do not parse
