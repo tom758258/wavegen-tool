@@ -8008,11 +8008,13 @@ def _advanced_readback_matches(header: str, expected: str, response: str) -> boo
         actual_number = float(actual)
     except (ValueError, OverflowError):
         return False
-    return (
-        math.isfinite(actual_number)
-        and math.isclose(
-            expected_number, actual_number, rel_tol=1e-4, abs_tol=1e-12
-        )
+    if not math.isfinite(actual_number):
+        return False
+    # Burst cycle count is discrete; a one-cycle difference must not pass.
+    if header.endswith(":BURSt:NCYCles"):
+        return expected_number == actual_number
+    return math.isclose(
+        expected_number, actual_number, rel_tol=1e-4, abs_tol=1e-12
     )
 
 

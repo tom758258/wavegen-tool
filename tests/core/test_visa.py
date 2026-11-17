@@ -5901,3 +5901,34 @@ def test_advanced_mode_verification_rejects_ordinary_sine_without_writes():
         )
 
     assert session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("reported_count", "should_fail"),
+    [("100000.0", False), ("100001", True)],
+)
+def test_advanced_mode_burst_count_readback_is_exact(reported_count, should_fail):
+    session = EchoAdvancedReadbackSession(
+        responses_by_command={"SOURce1:BURSt:NCYCles?": reported_count},
+    )
+    manager = FakeManager(session)
+
+    def configure():
+        return configure_sine(
+            USB_RESOURCE,
+            1000,
+            0.1,
+            burst=CountedBurstConfig(100_000, trigger_source="bus"),
+            verify_readback=True,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    if should_fail:
+        with pytest.raises(WaveformVerificationError, match="SOURce1:BURSt:NCYCles"):
+            configure()
+    else:
+        assert configure().output_state == "off"
+
+    assert "SOURce1:BURSt:NCYCles?" in session.queries
+    assert "OUTPut1 ON" not in session.writes
+    assert session.close_calls == manager.close_calls == 1
