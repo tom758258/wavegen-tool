@@ -149,6 +149,60 @@ _LIST_SWEEP_ACTIONS = frozenset(
 )
 
 
+
+_ADVANCED_STATIC_ACTIONS = frozenset(
+    {
+        "configure-sine",
+        "configure-square",
+        "configure-ramp",
+        "configure-triangle",
+        "configure-pulse",
+        "configure-prbs",
+    }
+)
+_ADVANCED_READBACK_ACTIONS = _ADVANCED_STATIC_ACTIONS | frozenset(
+    {
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
+        "configure-sine-list-sweep",
+        "configure-square-list-sweep",
+        "configure-ramp-list-sweep",
+        "configure-triangle-list-sweep",
+    }
+)
+_ADVANCED_OPTION_FIELDS = (
+    "am_frequency",
+    "am_depth",
+    "am_type",
+    "fm_frequency",
+    "fm_deviation",
+    "pm_frequency",
+    "pm_deviation_deg",
+    "fsk_hop_frequency",
+    "fsk_rate",
+    "bpsk_phase_shift_deg",
+    "bpsk_rate",
+    "pwm_frequency",
+    "pwm_deviation_s",
+    "sum_frequency",
+    "sum_amplitude_percent",
+    "burst_count",
+    "burst_period_s",
+    "burst_trigger_source",
+    "burst_trigger_timer_s",
+    "burst_trigger_slope",
+    "gate_polarity",
+)
+
+
+def _has_advanced_mode_request(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "gated_burst", False)) or any(
+        getattr(args, field, None) is not None for field in _ADVANCED_OPTION_FIELDS
+    )
+
+
 def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--simulate",
@@ -1888,6 +1942,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow live waveform configuration and output-on requests.",
     )
+    for command in _ADVANCED_READBACK_ACTIONS:
+        subparsers.choices[command].add_argument(
+            "--verify-readback",
+            action="store_true",
+            help="Compare active Advanced Mode settings with independent instrument readback.",
+        )
     return parser
 
 
@@ -1896,6 +1956,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    if (
+        getattr(args, "verify_readback", False)
+        and args.command in _ADVANCED_STATIC_ACTIONS
+        and not _has_advanced_mode_request(args)
+    ):
+        parser.error("--verify-readback requires an Advanced Mode option.")
     if args.command == "worker":
         return _run_worker(args, parser)
     if args.command == "send-command":
@@ -2257,6 +2323,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2342,6 +2409,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2428,6 +2496,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2515,6 +2584,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2601,6 +2671,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2695,6 +2766,7 @@ def _run_configure_sine_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2737,6 +2809,7 @@ def _run_configure_square_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2779,6 +2852,7 @@ def _run_configure_ramp_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2819,6 +2893,7 @@ def _run_configure_triangle_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2893,6 +2968,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2980,6 +3056,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3066,6 +3143,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3152,6 +3230,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             pwm=_pwm_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3365,6 +3444,7 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
             args.backend,
             channel=args.channel,
             burst=_burst_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3686,6 +3766,8 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
 
     if args.json_output:
         payload = _control_success_payload(args.command, result)
+        if getattr(args, "verify_readback", False):
+            payload["readback_verified"] = True
         print(
             json.dumps(
                 _with_simulation_fields(payload, args.simulate),
@@ -3695,7 +3777,12 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
     else:
         print(
             _with_simulation_notice(
-                _human_control_success(args.command, result),
+                _human_control_success(args.command, result)
+                + (
+                    "\nAdvanced Mode readback: PASS"
+                    if getattr(args, "verify_readback", False)
+                    else ""
+                ),
                 args.simulate,
             )
         )
