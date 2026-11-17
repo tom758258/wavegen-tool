@@ -1450,4 +1450,3 @@ def test_advanced_mode_readback_respects_selected_channel() -> None:
     assert result.channel == 2
     assert state.ch2.am_enabled is True
     assert state.ch1.am_enabled is False
-

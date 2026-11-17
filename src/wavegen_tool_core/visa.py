@@ -7954,6 +7954,7 @@ _READBACK_ENUM_ALIASES = {
     "INT": "INTERNAL",
     "EXT": "EXTERNAL",
     "SIN": "SINUSOID",
+    "SINE": "SINUSOID",
     "TRIG": "TRIGGERED",
     "GAT": "GATED",
     "IMM": "IMMEDIATE",

@@ -5901,4 +5901,3 @@ def test_advanced_mode_verification_rejects_ordinary_sine_without_writes():
         )
 
     assert session.writes == []
-
