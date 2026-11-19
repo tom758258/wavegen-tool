@@ -455,6 +455,15 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     assert {case["channel"] for case in inventory} == set(channels)
     assert all(case["required"] for case in inventory)
     assert {case["name"] for case in inventory} <= set(report["planned_cases"])
+    assert "readback-advanced" not in {case["name"] for case in inventory}
+    for case in inventory:
+        for step in case["steps"]:
+            if "--verify-readback" in step["arguments"]:
+                assert step["advanced_expected"]["advanced_mode"] != "CW"
+    assert next(
+        case for case in inventory
+        if case["name"] == "ch1/list-transition-cw-recovery"
+    )["steps"][-1]["advanced_expected"]["advanced_mode"] == "CW"
     transition = next(case for case in inventory if case["name"] == "ch1/list-transition-cw-recovery")
     assert [step["arguments"][0] for step in transition["steps"]] == [
         "configure-sine-list-sweep", "configure-square-list-sweep",
@@ -764,6 +773,15 @@ function Invoke-FullCommand {
     param($Name, $Arguments, [int]$Channel)
     $command = $Arguments[0]
     if ($command -eq 'trigger') { throw 'External case must use a physical trigger' }
+    if ($command -eq 'readback-advanced') {
+        return [pscustomobject]@{
+            advanced_mode = 'BURST'
+            settings = [pscustomobject]@{
+                burst_mode = 'counted'; count = 3
+                trigger_source = 'external'; trigger_slope = 'positive'
+            }
+        }
+    }
     if ($script:operatorAnswer -eq 'status-timeout' -and $command -eq 'status' -and $script:outputs[1] -eq 'on') {
         throw [TimeoutException]::new('Status query timed out.')
     }
@@ -778,6 +796,7 @@ function Invoke-FullCommand {
         output_state = $script:outputs[$Channel]; function = 'PULS'; frequency_hz = 1
         amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'
         burst_mode = 'counted'; burst_count = 3; burst_trigger_source = 'external'; burst_trigger_slope = 'positive'
+        readback_verified = $true
         has_errors = $false; empty_confirmed = $true; limit_reached = $false
     }
 }

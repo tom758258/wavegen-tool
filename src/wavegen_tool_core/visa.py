@@ -1786,6 +1786,7 @@ def configure_sine(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    verify_readback: bool = False,
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
@@ -1880,6 +1881,7 @@ def configure_sine(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2044,6 +2046,7 @@ def configure_sine_sweep(
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2076,6 +2079,7 @@ def configure_sine_sweep(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2205,6 +2209,7 @@ def configure_square_sweep(
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2238,6 +2243,7 @@ def configure_square_sweep(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2373,6 +2379,7 @@ def configure_ramp_sweep(
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2416,6 +2423,7 @@ def configure_ramp_sweep(
         output_state_after_writes="off",
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2534,6 +2542,7 @@ def configure_triangle_sweep(
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2575,6 +2584,7 @@ def configure_triangle_sweep(
         output_state_after_writes="off",
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2683,6 +2693,7 @@ def configure_sine_list_sweep(
     dwell_s: object = None,
     trigger_source: object = "immediate",
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2715,6 +2726,7 @@ def configure_sine_list_sweep(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2809,6 +2821,7 @@ def configure_square_list_sweep(
     dwell_s: object = None,
     trigger_source: object = "immediate",
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2842,6 +2855,7 @@ def configure_square_list_sweep(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2942,6 +2956,7 @@ def configure_ramp_list_sweep(
     dwell_s: object = None,
     trigger_source: object = "immediate",
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2975,6 +2990,7 @@ def configure_ramp_list_sweep(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -3073,6 +3089,7 @@ def configure_triangle_list_sweep(
     dwell_s: object = None,
     trigger_source: object = "immediate",
     channel: int = 1,
+    verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -3105,6 +3122,7 @@ def configure_triangle_list_sweep(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -4962,6 +4980,7 @@ def configure_square(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    verify_readback: bool = False,
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
@@ -5077,6 +5096,7 @@ def configure_square(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -5380,6 +5400,7 @@ def configure_ramp(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    verify_readback: bool = False,
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
@@ -5474,6 +5495,7 @@ def configure_ramp(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -5723,6 +5745,7 @@ def configure_triangle(
     phase_deg: object = 0.0,
     *,
     channel: int = 1,
+    verify_readback: bool = False,
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
@@ -5816,6 +5839,7 @@ def configure_triangle(
         prepare_configuration,
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -6036,6 +6060,7 @@ def configure_pulse(
     trailing_edge_s: object = None,
     *,
     channel: int = 1,
+    verify_readback: bool = False,
     am: AMConfig | None = None,
     pwm: PWMConfig | None = None,
     burst: BurstConfig | None = None,
@@ -6111,6 +6136,9 @@ def configure_pulse(
             normalized_burst,
             burst_commands,
         )
+
+    if verify_readback and not any(value is not None for value in (am, pwm, sum, burst)):
+        raise WaveformParameterError("Advanced Mode readback requires an Advanced Mode.")
 
     prepare_configuration(
         _preflight_capabilities_for_configuration(resource_manager_factory)
@@ -6341,6 +6369,13 @@ def configure_pulse(
             write_pulse_command(command, "off")
         for command in burst_commands:
             write_pulse_command(command, "off")
+        if verify_readback:
+            _verify_advanced_mode_configuration(
+                session,
+                context,
+                (*am_commands, *pwm_commands, *sum_commands, *burst_commands),
+                selected_channel=selected_channel,
+            )
         return (
             amplitude,
             offset,
@@ -6909,6 +6944,7 @@ def configure_prbs(
     backend: str | None = None,
     *,
     channel: int = 1,
+    verify_readback: bool = False,
     burst: BurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -6942,6 +6978,7 @@ def configure_prbs(
         output_state_after_writes="off",
         channel=channel,
         independent_channel_guard=True,
+        verify_readback=verify_readback,
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -7847,6 +7884,433 @@ def _run_on_supported_instrument(
     return context, operation_result
 
 
+
+
+@dataclass(frozen=True)
+class AdvancedModeReadbackResult:
+    """Current effective Advanced Mode settings, independently queried."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    channel: int
+    advanced_mode: str
+    settings: dict[str, object]
+
+
+def query_advanced_mode(
+    resource: str,
+    backend: str | None = None,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> AdvancedModeReadbackResult:
+    """Read the active mode without sending any state-changing SCPI."""
+
+    def operation(
+        session: VisaSession, context: IdentificationResult
+    ) -> tuple[int, str, dict[str, object]]:
+        capabilities = _capabilities_for_identity(context.identity)
+        selected = _validate_channel(
+            channel, capabilities, context.identity.model
+        )
+        prefix = f"SOURce{selected}:"
+        fields: dict[str, object] = {}
+
+        def raw(header: str) -> str:
+            command = f"{header}?"
+            try:
+                response = session.query(command)
+            except Exception as exc:
+                raise StatusQueryError(
+                    f"Advanced Mode query {command} failed or timed out.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                ) from exc
+            if not isinstance(response, str) or not response.strip():
+                raise StatusQueryError(
+                    f"Advanced Mode query {command} returned an invalid response.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            return response.strip()
+
+        def choice(header: str, allowed: frozenset[str]) -> str:
+            value = _canonical_readback_enum(raw(header))
+            if value not in allowed:
+                raise StatusQueryError(
+                    f"Advanced Mode query {header}? returned an unknown value.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            return value.lower()
+
+        def number(header: str) -> float:
+            try:
+                value = float(raw(header))
+            except ValueError as exc:
+                raise StatusQueryError(
+                    f"Advanced Mode query {header}? returned an invalid number.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                ) from exc
+            if not math.isfinite(value):
+                raise StatusQueryError(
+                    f"Advanced Mode query {header}? returned a non-finite number.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            return value
+
+        source_values = frozenset({"INTERNAL", "EXTERNAL", "CH1", "CH2"})
+        modes = [
+            prefix_name
+            for prefix_name in _ADVANCED_MODULATION_PREFIXES
+            if choice(prefix + prefix_name + ":STATe", frozenset({"ON", "OFF"}))
+            == "on"
+        ]
+        frequency_mode = choice(
+            prefix + "FREQuency:MODE", frozenset({"CW", "LIST", "SWEEP"})
+        )
+        if len(modes) > 1 or (modes and frequency_mode != "cw"):
+            raise StatusQueryError(
+                "Advanced Mode instrument state is ambiguous.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        active = modes[0] if modes else None
+        if active is None:
+            if frequency_mode == "cw":
+                return selected, "CW", fields
+            active = frequency_mode.upper()
+
+        if active in {"AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM"}:
+            source = choice(prefix + active + ":SOURce", source_values)
+            fields["source"] = source
+            if source == "internal":
+                if active not in {"FSKey", "BPSK"}:
+                    fields["internal_function"] = choice(
+                        prefix + active + ":INTernal:FUNCtion",
+                        frozenset({
+                            "SINUSOID", "SQUARE", "TRIANGLE", "RAMP",
+                            "NOISE", "PRBS", "ARB", "NRAMP", "UPRAMP", "DOWNRAMP",
+                        }),
+                    )
+                    fields["internal_frequency_hz"] = number(
+                        prefix + active + ":INTernal:FREQuency"
+                    )
+                else:
+                    fields["rate_hz"] = number(
+                        prefix + active + ":INTernal:RATE"
+                    )
+            specific = {
+                "AM": ("depth_percent", "DEPTh"),
+                "FM": ("deviation_hz", "DEViation"),
+                "PM": ("deviation_deg", "DEViation"),
+                "FSKey": ("hop_frequency_hz", "FREQuency"),
+                "BPSK": ("phase_shift_deg", "PHASe"),
+                "PWM": ("deviation_s", "DEViation"),
+                "SUM": ("amplitude_percent", "AMPLitude"),
+            }
+            field, suffix = specific[active]
+            fields[field] = number(prefix + active + ":" + suffix)
+            if active == "AM":
+                dssc = choice(prefix + "AM:DSSC", frozenset({"ON", "OFF"}))
+                return selected, "AM-DSSC" if dssc == "on" else "AM", fields
+            return selected, "FSK" if active == "FSKey" else active, fields
+
+        if active == "BURSt":
+            burst_mode = choice(
+                prefix + "BURSt:MODE", frozenset({"TRIGGERED", "GATED"})
+            )
+            fields["burst_mode"] = "counted" if burst_mode == "triggered" else "gated"
+            if burst_mode == "gated":
+                fields["gate_polarity"] = choice(
+                    prefix + "BURSt:GATE:POLarity",
+                    frozenset({"NORMAL", "INVERTED"}),
+                )
+            else:
+                count = number(prefix + "BURSt:NCYCles")
+                if count < 1 or not count.is_integer():
+                    raise StatusQueryError(
+                        "Advanced Mode Burst cycle count is not a positive integer.",
+                        backend=context.backend,
+                        transport=context.transport,
+                        identity=context.identity,
+                    )
+                fields["count"] = int(count)
+                fields["phase_deg"] = number(prefix + "BURSt:PHASe")
+                trigger = choice(
+                    f"TRIGger{selected}:SOURce",
+                    frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
+                )
+                fields["trigger_source"] = trigger
+                if trigger == "immediate":
+                    fields["period_s"] = number(prefix + "BURSt:INTernal:PERiod")
+                elif trigger == "timer":
+                    fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
+                elif trigger == "external":
+                    fields["trigger_slope"] = choice(
+                        f"TRIGger{selected}:SLOPe",
+                        frozenset({"POSITIVE", "NEGATIVE"}),
+                    )
+            return selected, "BURST", fields
+
+        if active == "SWEEP":
+            fields["start_frequency_hz"] = number(prefix + "FREQuency:STARt")
+            fields["stop_frequency_hz"] = number(prefix + "FREQuency:STOP")
+            fields["spacing"] = choice(
+                prefix + "SWEep:SPACing",
+                frozenset({"LINEAR", "LOGARITHMIC"}),
+            )
+            fields["sweep_time_s"] = number(prefix + "SWEep:TIME")
+            fields["hold_time_s"] = number(prefix + "SWEep:HTIMe")
+            fields["return_time_s"] = number(prefix + "SWEep:RTIMe")
+        elif active == "LIST":
+            response = raw(prefix + "LIST:FREQuency")
+            try:
+                values = [float(part.strip()) for part in response.split(",")]
+            except ValueError as exc:
+                raise StatusQueryError(
+                    "Advanced Mode LIST frequencies are invalid.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                ) from exc
+            if not values or not all(math.isfinite(x) and x > 0 for x in values):
+                raise StatusQueryError(
+                    "Advanced Mode LIST frequencies are invalid.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            fields["frequencies_hz"] = values
+            fields["dwell_s"] = number(prefix + "LIST:DWELl")
+        else:
+            raise StatusQueryError(
+                "Advanced Mode frequency mode is unsupported.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        trigger = choice(
+            f"TRIGger{selected}:SOURce",
+            frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
+        )
+        fields["trigger_source"] = trigger
+        if trigger == "timer":
+            fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
+        elif trigger == "external":
+            fields["trigger_slope"] = choice(
+                f"TRIGger{selected}:SLOPe",
+                frozenset({"POSITIVE", "NEGATIVE"}),
+            )
+        return selected, active, fields
+
+    context, values = _run_on_supported_instrument(
+        resource,
+        backend,
+        operation,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    selected, mode, settings = values
+    return AdvancedModeReadbackResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        channel=selected,
+        advanced_mode=mode,
+        settings=settings,
+    )
+
+
+_ADVANCED_MODULATION_PREFIXES = (
+    "AM",
+    "FM",
+    "PM",
+    "FSKey",
+    "BPSK",
+    "PWM",
+    "SUM",
+    "BURSt",
+)
+
+
+def _advanced_mode_readback_fields(commands: tuple[str, ...]) -> dict[str, str]:
+    """Select only the active mode's settings from an already validated SCPI plan."""
+
+    enabled = [
+        name
+        for name in _ADVANCED_MODULATION_PREFIXES
+        if f"SOURce1:{name}:STATe ON" in commands
+    ]
+    if len(enabled) > 1:
+        raise WaveformParameterError("Only one Advanced Mode may be verified.")
+    active = enabled[0] if enabled else None
+
+    if active is not None:
+        prefixes = (f"SOURce1:{active}:",)
+        if active == "BURSt":
+            prefixes += ("TRIGger1:",)
+    else:
+        frequency_modes = [
+            command.split(" ", 1)[1]
+            for command in commands
+            if command.startswith("SOURce1:FREQuency:MODE ")
+        ]
+        frequency_mode = frequency_modes[-1].upper() if frequency_modes else "CW"
+        if frequency_mode == "LIST":
+            prefixes = (
+                "SOURce1:LIST:",
+                "SOURce1:FREQuency:MODE",
+                "TRIGger1:",
+            )
+        elif frequency_mode == "SWEEP":
+            prefixes = (
+                "SOURce1:FREQuency:STARt",
+                "SOURce1:FREQuency:STOP",
+                "SOURce1:SWEep:",
+                "SOURce1:FREQuency:MODE",
+                "TRIGger1:",
+            )
+        else:
+            raise WaveformParameterError(
+                "Advanced Mode readback requires AM, FM, PM, FSK, BPSK, "
+                "PWM, Sum, Burst, Sweep, or List Sweep."
+            )
+
+    selected: dict[str, str] = {}
+    for command in commands:
+        header, separator, expected = command.partition(" ")
+        if separator and any(header.startswith(prefix) for prefix in prefixes):
+            selected[header] = expected
+    if not selected:
+        raise WaveformParameterError("No active Advanced Mode settings to verify.")
+    return selected
+
+
+_READBACK_ENUM_ALIASES = {
+    "INT": "INTERNAL",
+    "EXT": "EXTERNAL",
+    "SIN": "SINUSOID",
+    "SQU": "SQUARE",
+    "TRI": "TRIANGLE",
+    "NOIS": "NOISE",
+    "NRAM": "NRAMP",
+    "SINE": "SINUSOID",
+    "TRIG": "TRIGGERED",
+    "GAT": "GATED",
+    "IMM": "IMMEDIATE",
+    "TIM": "TIMER",
+    "POS": "POSITIVE",
+    "NEG": "NEGATIVE",
+    "NORM": "NORMAL",
+    "INV": "INVERTED",
+    "LIN": "LINEAR",
+    "LOG": "LOGARITHMIC",
+    "SWE": "SWEEP",
+    "FIX": "CW",
+    "FIXED": "CW",
+    "1": "ON",
+    "0": "OFF",
+}
+
+
+def _canonical_readback_enum(value: str) -> str:
+    normalized = value.strip().upper()
+    return _READBACK_ENUM_ALIASES.get(normalized, normalized)
+
+
+def _advanced_readback_matches(header: str, expected: str, response: str) -> bool:
+    actual = response.strip()
+    if not actual:
+        return False
+    if header.endswith(":LIST:FREQuency"):
+        try:
+            expected_points = tuple(float(item.strip()) for item in expected.split(","))
+            actual_points = tuple(float(item.strip()) for item in actual.split(","))
+        except (ValueError, OverflowError):
+            return False
+        return (
+            len(expected_points) == len(actual_points)
+            and all(
+                math.isfinite(value)
+                and math.isclose(
+                    request,
+                    value,
+                    rel_tol=1e-4,
+                    abs_tol=1e-12,
+                )
+                for request, value in zip(expected_points, actual_points)
+            )
+        )
+
+    try:
+        expected_number = float(expected)
+    except (ValueError, OverflowError):
+        return _canonical_readback_enum(expected) == _canonical_readback_enum(actual)
+    try:
+        actual_number = float(actual)
+    except (ValueError, OverflowError):
+        return False
+    if not math.isfinite(actual_number):
+        return False
+    # Burst cycle count is discrete; a one-cycle difference must not pass.
+    if header.endswith(":BURSt:NCYCles"):
+        return expected_number == actual_number
+    return math.isclose(
+        expected_number, actual_number, rel_tol=1e-4, abs_tol=1e-12
+    )
+
+
+def _verify_advanced_mode_configuration(
+    session: VisaSession,
+    context: IdentificationResult,
+    commands: tuple[str, ...],
+    *,
+    selected_channel: int,
+) -> None:
+    """Independently compare active mode settings without changing output state."""
+
+    fields = _advanced_mode_readback_fields(commands)
+    for header, expected in fields.items():
+        query = _channelize_commands((f"{header}?",), selected_channel)[0]
+        try:
+            actual = session.query(query)
+        except Exception as exc:
+            raise WaveformVerificationError(
+                f"Advanced Mode readback failed for {query}: query error or timeout.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+                output_state="off",
+            ) from exc
+        if not isinstance(actual, str) or not _advanced_readback_matches(
+            header, expected, actual
+        ):
+            actual_label = repr(actual)[:120]
+            raise WaveformVerificationError(
+                f"Advanced Mode readback mismatch for {query}: "
+                f"expected {expected!r}, actual {actual_label}.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+                output_state="off",
+            )
+
+
 def _write_to_supported_instrument(
     resource: str,
     backend: str | None,
@@ -7858,6 +8322,7 @@ def _write_to_supported_instrument(
     expected_model_id: str | None = None,
     channel: int = 1,
     independent_channel_guard: bool = False,
+    verify_readback: bool = False,
 ) -> IdentificationResult:
     def write_commands(
         session: VisaSession,
@@ -7871,8 +8336,14 @@ def _write_to_supported_instrument(
         )
         if independent_channel_guard:
             _check_independent_channel_guard(session, capabilities, context)
+        if verify_readback:
+            _advanced_mode_readback_fields(commands)
         for command in _channelize_commands(commands, selected_channel):
             session.write(command)
+        if verify_readback:
+            _verify_advanced_mode_configuration(
+                session, context, commands, selected_channel=selected_channel
+            )
 
     context, _ = _run_on_supported_instrument(
         resource,
@@ -7899,10 +8370,13 @@ def _prepare_and_write_to_supported_instrument(
     expected_model_id: str | None,
     channel: int = 1,
     independent_channel_guard: bool = False,
+    verify_readback: bool = False,
 ) -> tuple[IdentificationResult, tuple[object, ...]]:
-    prepare_configuration(
+    preflight = prepare_configuration(
         _preflight_capabilities_for_configuration(resource_manager_factory)
     )
+    if verify_readback:
+        _advanced_mode_readback_fields(preflight[1])
 
     def prepare_and_write(
         session: VisaSession,
@@ -7919,6 +8393,10 @@ def _prepare_and_write_to_supported_instrument(
         values, commands = prepare_configuration(capabilities)
         for command in _channelize_commands(commands, selected_channel):
             session.write(command)
+        if verify_readback:
+            _verify_advanced_mode_configuration(
+                session, context, commands, selected_channel=selected_channel
+            )
         return values
 
     context, values = _run_on_supported_instrument(

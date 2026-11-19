@@ -921,6 +921,10 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:FUNCtion?": ch_state.active_function,
             f"SOURce{prefix_ch}:FREQuency?": _format_number(ch_state.frequency_hz),
             f"SOURce{prefix_ch}:FREQuency:MODE?": ch_state.frequency_mode,
+            f"SOURce{prefix_ch}:LIST:FREQuency?": ",".join(
+                _format_number(value) for value in ch_state.list_frequencies_hz
+            ),
+            f"SOURce{prefix_ch}:LIST:DWELl?": _format_number(ch_state.list_dwell_s),
             f"SOURce{prefix_ch}:FREQuency:STARt?": _format_number(
                 ch_state.sweep_start_frequency_hz
             ),
@@ -971,6 +975,14 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:VOLTage:LIMit:HIGH?": _format_number(ch_state.voltage_limit_high),
             f"SOURce{prefix_ch}:VOLTage:LIMit:STATe?": "1" if ch_state.voltage_limit_enabled else "0",
             f"SOURce{prefix_ch}:VOLTage:RANGe:AUTO?": "1" if ch_state.autorange_enabled else "0",
+            f"SOURce{prefix_ch}:AM:STATe?": "1" if ch_state.am_enabled else "0",
+            f"SOURce{prefix_ch}:AM:DSSC?": "1" if ch_state.am_type == "dssc" else "0",
+            f"SOURce{prefix_ch}:AM:SOURce?": ch_state.am_source,
+            f"SOURce{prefix_ch}:AM:INTernal:FUNCtion?": ch_state.am_internal_function,
+            f"SOURce{prefix_ch}:AM:INTernal:FREQuency?": _format_number(
+                ch_state.am_internal_frequency_hz
+            ),
+            f"SOURce{prefix_ch}:AM:DEPTh?": _format_number(ch_state.am_depth_percent),
             f"SOURce{prefix_ch}:FM:STATe?": "1" if ch_state.fm_enabled else "0",
             f"SOURce{prefix_ch}:FM:SOURce?": ch_state.fm_source,
             f"SOURce{prefix_ch}:FM:INTernal:FUNCtion?": ch_state.fm_internal_function,

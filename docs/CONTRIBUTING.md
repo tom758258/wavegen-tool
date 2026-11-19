@@ -223,10 +223,13 @@ The report identifies the case, channel, requested settings, status checks,
 verification method, operator response, and cleanup result. A passed
 `live-config` case establishes command and configuration acceptance.
 `live-functional` records a confirmed behavior, such as output ON/OFF or
-the operator-observed response. Mode parameters returned by configuration
-commands describe normalized request values. Instrument status provides
-independent readback for the fields it exposes. Physical observations verify
-behavior without calibrating output frequency, amplitude, or jitter.
+the operator-observed response. Mode parameters returned by configuration commands describe normalized request
+values. Related Full Suite configure steps opt into `--verify-readback` and
+independently compare the applicable Advanced Mode settings. Instrument status
+continues to provide independent readback only for its existing fields.
+Dry-run cannot verify readbacks; simulator checks are not physical evidence.
+Physical observations verify behavior without calibrating output frequency,
+amplitude, or jitter.
 
 Required failures, skipped or missing observations, unsuccessful cleanup,
 unconfirmed OFF, a dirty or unbounded final error queue, or failed shareable

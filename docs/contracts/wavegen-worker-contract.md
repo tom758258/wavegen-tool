@@ -64,7 +64,7 @@ does not expand Product Live support. Unknown context fields are rejected.
 
 ## Supported Commands
 
-All 16 domain commands accepted by `POST /command` are `async_job` commands
+All 17 domain commands accepted by `POST /command` are `async_job` commands
 under `common.async_jobs` contract version 1. Manifest declares
 `execution.model="multi_job"` and `execution.context_binding="per_command"`,
 with this feature and no duplicate commands table. Cancellation and streaming
@@ -76,6 +76,7 @@ Supported commands are:
 - `identify`
 - `status`
 - `read-errors`
+- `readback-advanced`
 - `configure-sine`
 - `configure-square`
 - `configure-ramp`
@@ -94,8 +95,14 @@ Supported commands are:
 not listed above are unsupported. List Sweep is also unsupported.
 
 In `dry_run` context, all twelve `configure-*` commands are supported.
-`identify`, `status`, `read-errors`, and `output` do not receive invented
+`identify`, `status`, `read-errors`, `readback-advanced`, and `output` do not receive invented
 dry-run behavior.
+
+The read-only `readback-advanced` command accepts an optional channel
+(default 1), requires no `allow_output_writes` authorization, and returns
+`advanced_mode` and `settings` in its normal terminal job result.
+It is supported in live and simulate contexts, not dry_run. It cannot
+configure a mode or broaden model/transport admission.
 
 ## Command Arguments
 
@@ -104,7 +111,7 @@ are rejected.
 
 `identify` does not allow argument fields.
 
-`status`, all twelve `configure-*` commands, and `output` accept optional
+`status`, `readback-advanced`, all twelve `configure-*` commands, and `output` accept optional
 `channel`, defaulting to integer `1`. Worker admission requires a non-boolean
 positive integer. Core owns the supported channel domain and model-specific
 channel count: 33510B and 33512B admit Channels 1 and 2, while 33521B rejects
@@ -162,7 +169,7 @@ admission safety field and is not passed to Core.
 
 The following safety gate applies only when `context.mode` is `live`:
 
-- `identify`, `status`, and `read-errors` do not require
+- `identify`, `status`, `read-errors`, and `readback-advanced` do not require
   `allow_output_writes`.
 - Every `configure-*` command requires `allow_output_writes=True`.
 - `output` with `enabled=false` is always allowed.
@@ -179,7 +186,7 @@ Worker.
 
 `GET /status` is lifecycle status only. It does not execute a Wavegen Core
 command or perform VISA I/O. Instrument status must be requested with
-`command="status"`.
+`command="status"`; current Advanced Mode settings use `command="readback-advanced"`.
 
 `POST /stop` follows the Common lifecycle contract and does not change the
 command admission rules above. The Worker does not create per-job artifacts.

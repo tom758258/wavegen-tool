@@ -64,6 +64,7 @@ SUPPORTED_WORKER_COMMANDS = frozenset(
         "identify",
         "status",
         "read-errors",
+        "readback-advanced",
         "configure-sine",
         "configure-sine-sweep",
         "configure-square-sweep",
@@ -96,11 +97,12 @@ _CONFIGURE_COMMANDS = frozenset(
     }
 )
 _DRY_RUN_COMMANDS = _CONFIGURE_COMMANDS
-_CHANNEL_COMMANDS = _CONFIGURE_COMMANDS | frozenset({"status", "output"})
+_CHANNEL_COMMANDS = _CONFIGURE_COMMANDS | frozenset({"status", "readback-advanced", "output"})
 
 _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "identify": frozenset(),
     "status": frozenset(),
+    "readback-advanced": frozenset(),
     "read-errors": frozenset({"max_reads"}),
     "configure-sine": frozenset(
         {

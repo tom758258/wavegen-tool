@@ -1255,3 +1255,31 @@ def test_worker_fatal_startup_preserves_error_summary_and_exit(monkeypatch, caps
     assert summary["exit_code"] == 3 and summary["fatal_error"] == error["error"]
     assert error["run_id"] == summary["run_id"]
     assert error["schema_version"] == summary["schema_version"] == 3
+
+def test_worker_independent_readback_preserves_simulated_sweep():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        sequence = [
+            ("configure-sine-sweep", {
+                "start_frequency_hz": 1000, "stop_frequency_hz": 2000,
+                "spacing": "linear", "sweep_time_s": 1, "amplitude_vpp": 0.1,
+            }),
+            ("readback-advanced", {}),
+        ]
+        for index, (command, arguments) in enumerate(sequence):
+            code, accepted = _request(
+                runtime, "POST", "/command",
+                _payload(command, arguments, job_id=f"readback-{index}"),
+            )
+            assert code == 202
+            finished = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")
+            if command == "readback-advanced":
+                result = finished["result"]
+                assert result["advanced_mode"] == "SWEEP"
+                assert result["settings"]["start_frequency_hz"] == 1000
+                assert result["settings"]["stop_frequency_hz"] == 2000
+        assert runtime.simulator_state.ch1.output_enabled is False
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)

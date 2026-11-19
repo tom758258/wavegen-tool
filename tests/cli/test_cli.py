@@ -4528,3 +4528,95 @@ def test_configure_output_simulator_high_z_representative(capsys):
     assert payload["load"] == "high-z"
     assert payload["channel"] == 2
     assert payload["output_state"] == "off"
+
+
+
+@pytest.mark.parametrize(
+    ("command", "options"),
+    [
+        ("configure-sine", ["--frequency-hz", "1000", "--amplitude-vpp", "0.1",
+                            "--am-frequency", "10", "--am-depth", "20"]),
+        ("configure-sine-sweep", ["--start-frequency-hz", "1000",
+                                  "--stop-frequency-hz", "2000", "--spacing", "linear",
+                                  "--sweep-time-s", "1", "--amplitude-vpp", "0.1"]),
+        ("configure-sine-list-sweep", ["--frequencies-hz", "1000,2000,1000",
+                                       "--dwell-s", "0.01", "--amplitude-vpp", "0.1"]),
+        ("configure-prbs", ["--bit-rate-bps", "10000", "--amplitude-vpp", "0.1",
+                            "--burst-count", "3", "--burst-trigger-source", "bus"]),
+    ],
+)
+def test_cli_advanced_readback_simulation_pass(command, options, capsys):
+    status = main([command, "--simulate", "--verify-readback", "--json", *options])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == ExitCode.SUCCESS
+    assert payload["success"] is True
+    assert payload["readback_verified"] is True
+    assert payload["output_state"] == "off"
+    assert payload["simulated"] is True
+
+
+def test_cli_advanced_readback_dry_run_does_not_claim_verification(capsys):
+    status = main([
+        "configure-sine", "--dry-run", "--verify-readback", "--json",
+        "--frequency-hz", "1000", "--amplitude-vpp", "0.1",
+        "--am-frequency", "10", "--am-depth", "20",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == ExitCode.SUCCESS
+    assert payload["executed"] is False
+    assert "readback_verified" not in payload
+
+
+def test_cli_advanced_readback_rejects_ordinary_waveform_before_io(capsys):
+    with pytest.raises(SystemExit) as raised:
+        main([
+            "configure-sine", "--verify-readback", "--simulate",
+            "--frequency-hz", "1000", "--amplitude-vpp", "0.1",
+        ])
+
+    assert raised.value.code == ExitCode.CLI_USAGE
+    assert "requires an Advanced Mode" in capsys.readouterr().err
+
+
+def test_cli_advanced_readback_failure_uses_existing_exit_code(monkeypatch, capsys):
+    def reject_readback(*args, **kwargs):
+        assert kwargs["verify_readback"] is True
+        raise visa.WaveformVerificationError(
+            "Advanced Mode readback mismatch: expected 80, actual 50."
+        )
+
+    monkeypatch.setattr(cli_module, "configure_sine", reject_readback)
+    status = main([
+        "configure-sine", "--resource", USB_RESOURCE, "--verify-readback",
+        "--frequency-hz", "1000", "--amplitude-vpp", "0.1",
+        "--am-frequency", "10", "--am-depth", "80", "--json",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert status == ExitCode.WAVEFORM_VERIFICATION_ERROR
+    assert payload["success"] is False
+    assert "expected 80, actual 50" in payload["error"]
+
+def test_cli_independent_readback_cw_simulated_json(capsys):
+    status = main([
+        "readback-advanced", "--simulate", "--model", "keysight-33512b",
+        "--channel", "2", "--json",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert status == ExitCode.SUCCESS
+    assert payload["success"] is True
+    assert payload["advanced_mode"] == "CW"
+    assert payload["settings"] == {}
+    assert payload["mode"] == "simulate"
+    assert payload["channel"] == 2
+    assert "readback_verified" not in payload
+
+
+def test_cli_independent_readback_rejects_ch2_on_33521b(capsys):
+    status = main(["readback-advanced", "--simulate", "--channel", "2", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert status == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+    assert payload["advanced_mode"] is None

@@ -74,6 +74,7 @@ from wavegen_tool_core import (
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
+    query_advanced_mode,
     query_status,
     read_error_queue,
     resolve_voltage_inputs,
@@ -147,6 +148,60 @@ _LIST_SWEEP_ACTIONS = frozenset(
         "configure-triangle-list-sweep",
     }
 )
+
+
+
+_ADVANCED_STATIC_ACTIONS = frozenset(
+    {
+        "configure-sine",
+        "configure-square",
+        "configure-ramp",
+        "configure-triangle",
+        "configure-pulse",
+        "configure-prbs",
+    }
+)
+_ADVANCED_READBACK_ACTIONS = _ADVANCED_STATIC_ACTIONS | frozenset(
+    {
+        "configure-sine-sweep",
+        "configure-square-sweep",
+        "configure-ramp-sweep",
+        "configure-triangle-sweep",
+        "configure-sine-list-sweep",
+        "configure-square-list-sweep",
+        "configure-ramp-list-sweep",
+        "configure-triangle-list-sweep",
+    }
+)
+_ADVANCED_OPTION_FIELDS = (
+    "am_frequency",
+    "am_depth",
+    "am_type",
+    "fm_frequency",
+    "fm_deviation",
+    "pm_frequency",
+    "pm_deviation_deg",
+    "fsk_hop_frequency",
+    "fsk_rate",
+    "bpsk_phase_shift_deg",
+    "bpsk_rate",
+    "pwm_frequency",
+    "pwm_deviation_s",
+    "sum_frequency",
+    "sum_amplitude_percent",
+    "burst_count",
+    "burst_period_s",
+    "burst_trigger_source",
+    "burst_trigger_timer_s",
+    "burst_trigger_slope",
+    "gate_polarity",
+)
+
+
+def _has_advanced_mode_request(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "gated_burst", False)) or any(
+        getattr(args, field, None) is not None for field in _ADVANCED_OPTION_FIELDS
+    )
 
 
 def _add_simulate_argument(parser: argparse.ArgumentParser) -> None:
@@ -720,6 +775,20 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit exactly one JSON object.",
     )
+
+    readback_parser = subparsers.add_parser(
+        "readback-advanced",
+        help="Read the current active Advanced Mode without changing the instrument.",
+    )
+    _add_simulate_argument(readback_parser)
+    _add_channel_argument(readback_parser)
+    _add_validation_only_live_arguments(readback_parser)
+    readback_parser.add_argument(
+        "--resource",
+        help="Explicit VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
+    )
+    readback_parser.add_argument("--backend", default="system")
+    readback_parser.add_argument("--json", action="store_true", dest="json_output")
 
     read_errors_parser = subparsers.add_parser(
         "read-errors",
@@ -1888,6 +1957,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow live waveform configuration and output-on requests.",
     )
+    for command in _ADVANCED_READBACK_ACTIONS:
+        subparsers.choices[command].add_argument(
+            "--verify-readback",
+            action="store_true",
+            help="Compare active Advanced Mode settings with independent instrument readback.",
+        )
     return parser
 
 
@@ -1896,6 +1971,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    if (
+        getattr(args, "verify_readback", False)
+        and args.command in _ADVANCED_STATIC_ACTIONS
+        and not _has_advanced_mode_request(args)
+    ):
+        parser.error("--verify-readback requires an Advanced Mode option.")
     if args.command == "worker":
         return _run_worker(args, parser)
     if args.command == "send-command":
@@ -1932,11 +2013,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     validation_only_live_commands = {
         "identify",
         "status",
+        "readback-advanced",
         "read-errors",
         "output",
         "trigger",
     }
-    standalone_simulator_model_commands = {"status", "output", "trigger"}
+    standalone_simulator_model_commands = {"status", "readback-advanced", "output", "trigger"}
     if (
         args.command in waveform_commands
         and args.dry_run
@@ -2008,7 +2090,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
     if (
-        args.command in {"identify", "status", "output", "read-errors", "trigger"}
+        args.command in {"identify", "status", "readback-advanced", "output", "read-errors", "trigger"}
         and not args.simulate
         and args.resource is None
     ):
@@ -2055,6 +2137,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_trigger(args)
     if args.command == "status":
         return _run_status(args)
+    if args.command == "readback-advanced":
+        return _run_readback_advanced(args)
     if args.command == "read-errors":
         return _run_read_errors(args)
     return _run_identify(args)
@@ -2257,6 +2341,7 @@ def _run_configure_sine(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2342,6 +2427,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2428,6 +2514,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2515,6 +2602,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2601,6 +2689,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2695,6 +2784,7 @@ def _run_configure_sine_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2737,6 +2827,7 @@ def _run_configure_square_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2779,6 +2870,7 @@ def _run_configure_ramp_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2819,6 +2911,7 @@ def _run_configure_triangle_list_sweep(args: argparse.Namespace) -> int:
             dwell_s=args.dwell_s,
             trigger_source=args.trigger_source,
             channel=args.channel,
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2893,6 +2986,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2980,6 +3074,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3066,6 +3161,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             bpsk=_bpsk_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3152,6 +3248,7 @@ def _run_configure_pulse(args: argparse.Namespace) -> int:
             pwm=_pwm_config_from_args(args),
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3365,6 +3462,7 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
             args.backend,
             channel=args.channel,
             burst=_burst_config_from_args(args),
+            verify_readback=args.verify_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3583,6 +3681,81 @@ def _run_status(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_readback_advanced(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target(args.model or CANONICAL_MODEL_ID)
+        if args.simulate else (args.resource, None)
+    )
+    try:
+        result = query_advanced_mode(
+            resource,
+            args.backend,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        )
+    except WavegenError as exc:
+        payload = {
+            "success": False,
+            "action": "readback-advanced",
+            "channel": args.channel,
+            "advanced_mode": None,
+            "settings": None,
+            "error": _error_text(exc),
+        }
+        if args.json_output:
+            print(json.dumps(
+                _with_simulation_fields(payload, args.simulate), separators=(",", ":")
+            ))
+        else:
+            print(_with_simulation_notice(_human_error(exc), args.simulate),
+                  file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        payload = {
+            "success": False,
+            "action": "readback-advanced",
+            "channel": args.channel,
+            "advanced_mode": None,
+            "settings": None,
+            "error": "internal_error: unexpected internal failure",
+        }
+        if args.json_output:
+            print(json.dumps(
+                _with_simulation_fields(payload, args.simulate), separators=(",", ":")
+            ))
+        else:
+            print(_with_simulation_notice(
+                "Error [internal_error]: unexpected internal failure.", args.simulate
+            ), file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+    payload = {
+        "success": True,
+        "action": "readback-advanced",
+        "channel": result.channel,
+        "backend": result.backend,
+        "transport": result.transport,
+        "manufacturer": result.identity.manufacturer,
+        "model": result.identity.model,
+        "advanced_mode": result.advanced_mode,
+        "settings": result.settings,
+        "error": None,
+    }
+    if args.json_output:
+        print(json.dumps(
+            _with_simulation_fields(payload, args.simulate), separators=(",", ":")
+        ))
+    else:
+        settings = ", ".join(
+            f"{key}={value}" for key, value in result.settings.items()
+        )
+        print(_with_simulation_notice(
+            f"Channel {result.channel} Advanced Mode: {result.advanced_mode}"
+            + (f"\n{settings}" if settings else ""), args.simulate
+        ))
+    return int(ExitCode.SUCCESS)
+
+
 def _run_read_errors(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target() if args.simulate else (args.resource, None)
@@ -3686,6 +3859,8 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
 
     if args.json_output:
         payload = _control_success_payload(args.command, result)
+        if getattr(args, "verify_readback", False):
+            payload["readback_verified"] = True
         print(
             json.dumps(
                 _with_simulation_fields(payload, args.simulate),
@@ -3695,7 +3870,12 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
     else:
         print(
             _with_simulation_notice(
-                _human_control_success(args.command, result),
+                _human_control_success(args.command, result)
+                + (
+                    "\nAdvanced Mode readback: PASS"
+                    if getattr(args, "verify_readback", False)
+                    else ""
+                ),
                 args.simulate,
             )
         )

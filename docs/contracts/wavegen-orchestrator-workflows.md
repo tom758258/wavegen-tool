@@ -34,7 +34,7 @@ The Worker has one active job slot. Orchestrators must handle `busy` and
 
 Manifest uses schema 2, declares Worker `v3-only` with `schema_versions=[3]`,
 `execution.model="multi_job"`, `execution.context_binding="per_command"`, and
-`common.async_jobs` contract version 1. The 16 domain commands are explicitly
+`common.async_jobs` contract version 1. The 17 domain commands are explicitly
 `async_job` in the Worker contract; no Manifest commands table is duplicated.
 Runtime features are fixed and match this declaration. No cancellation or
 streaming is adopted.
@@ -109,7 +109,28 @@ channel argument.
 
 The Worker command surface is intentionally narrower than the Direct CLI.
 List Sweep, modulation, burst, `configure-output`, `trigger`, resource listing,
-and arbitrary SCPI are not Worker commands.
+and arbitrary SCPI are not Worker commands. The independent read-only
+`readback-advanced` command is allowed; it does not enable Advanced Mode writes.
+
+For a read-only Advanced Mode inspection the orchestrator can submit:
+
+```json
+{
+  "schema_version": 3,
+  "command": "readback-advanced",
+  "arguments": {"channel": 1},
+  "job_id": "inspect-advanced-1",
+  "context": {
+    "mode": "simulate",
+    "planning_model_id": "keysight-33521b"
+  }
+}
+```
+
+HTTP 202 confirms job admission, not successful readback. Retrieve the
+completed job result and use `result.advanced_mode` and
+`result.settings`. The command never modifies instrument settings,
+and does not need `allow_output_writes`.
 
 ## Subprocess Example
 

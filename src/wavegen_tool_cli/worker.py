@@ -45,6 +45,7 @@ from wavegen_tool_core import (
     dry_run_triangle_sweep,
     identify_instrument,
     normalize_backend,
+    query_advanced_mode,
     query_status,
     read_error_queue,
     set_output,
@@ -465,6 +466,10 @@ class WorkerRuntime:
                 backend,
                 channel=arguments["channel"],
                 **core_kwargs,
+            )
+        if job.command == "readback-advanced":
+            return query_advanced_mode(
+                resource, backend, channel=arguments["channel"], **core_kwargs
             )
         if job.command == "read-errors":
             return read_error_queue(

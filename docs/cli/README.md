@@ -279,6 +279,25 @@ uv run wavegen-tool status `
 
 Options are `--simulate`, `--channel`, `--resource`, `--backend`, and `--json`.
 
+### `readback-advanced`
+
+Inspect the **currently active** Advanced Mode settings, without reconfiguring
+the instrument. The response includes `advanced_mode` and `settings`. When no
+Advanced Mode is enabled it returns `CW` with an empty settings object.
+Unknown or conflicting instrument responses fail rather than returning CW.
+
+```powershell
+uv run wavegen-tool readback-advanced --resource "$env:WAVEGEN_TOOL_RESOURCE" --channel 1 --json
+uv run wavegen-tool readback-advanced --simulate --model keysight-33512b --channel 2 --json
+```
+
+This is a read-only configuration inspection, not a waveform measurement or a
+comparison with a previous request. It never sets output, trigger, or waveform
+parameters. The `--simulate` Direct CLI command starts a fresh simulator on
+each invocation; use a persistent Worker simulator to test readback after a
+separate simulated configure job. The existing `--verify-readback` remains
+the opt-in configure-and-compare operation.
+
 ### `read-errors`
 
 Read and drain the instrument system error queue through one identified
@@ -733,6 +752,37 @@ deliberate action; always issue `output --state off` when finished. For a Bus
 List Sweep or Bus Burst/Sweep, `trigger` is also a separate action and may
 affect **every armed channel**, not only Channel 1.
 
+## Optional Advanced Mode Readback
+
+Supported Advanced Mode Direct CLI configurations accept `--verify-readback`. When enabled,
+the instrument's programmed mode settings are queried and compared in the same VISA
+session after configuration, with output remaining OFF. This covers AM/DSSC, FM,
+PM, FSK, BPSK, PWM, Sum, Counted/Gated Burst, linear/logarithmic Sweep, and List
+Sweep on their already supported carriers; it does not introduce new combinations.
+
+Ordinary static sine, square, ramp, triangle, pulse, or PRBS configuration
+without an Advanced Mode option rejects this flag before sending any settings.
+DC, noise, and output configuration do not accept this flag.
+
+Hardware-free simulator example:
+
+```powershell
+uv run wavegen-tool configure-sine --simulate --frequency-hz 1000 `
+  --amplitude-vpp 0.1 --am-frequency 10 --am-depth 80 `
+  --verify-readback --json
+```
+
+A successful executed verification adds `readback_verified: true` to Direct CLI
+JSON and `Advanced Mode readback: PASS` to text output. A mismatch, malformed
+response, or failed query returns a waveform verification error (exit code 29),
+with expected and actual values where available. Without the flag, executed
+results and queries are unchanged.
+
+The `--simulate` path checks an in-memory model only. The `--dry-run` path, even
+with `--verify-readback`, returns the normal offline plan and does not claim a
+readback was performed. Programmed-settings verification does not prove analog
+waveform accuracy or actual external trigger/gate behavior.
+
 ## JSON and Errors
 
 Use `--json` for one JSON object from a Direct CLI command. Do not parse
@@ -788,7 +838,7 @@ is serving; it does not mean that physical hardware is connected or identified.
 
 The authoritative Worker command set is:
 
-- `identify`, `status`, and `read-errors`;
+- `identify`, `status`, `readback-advanced`, and `read-errors`;
 - `configure-sine`, `configure-square`, `configure-ramp`,
   `configure-triangle`, `configure-pulse`, `configure-dc`, `configure-noise`,
   and `configure-prbs`;
@@ -800,7 +850,7 @@ The Worker does not expose Direct CLI resource listing, `trigger`,
 any other unlisted command. Worker command names use kebab-case and request
 argument fields use snake_case.
 
-`status`, all listed `configure-*` commands, and `output` accept optional
+`status`, `readback-advanced`, all listed `configure-*` commands, and `output` accept optional
 integer `channel`, defaulting to 1. Core validates the model-specific channel
 count. The two-channel 33510B and 33512B hardware-free paths accept Channels 1
 and 2; 33512B Product Live also admits both channels. The one-channel 33521B
@@ -809,7 +859,7 @@ Selected-channel Worker results retain the canonical Core `channel` field.
 
 Live Worker write safety is narrower than Direct CLI invocation:
 
-- identify/status/read-errors do not require `allow_output_writes`;
+- identify/status/read-errors/readback-advanced do not require `allow_output_writes`;
 - `configure-*` requires Worker startup with `--allow-output-writes`;
 - output-off is always allowed;
 - output-on requires both `--allow-output-writes` and per-request

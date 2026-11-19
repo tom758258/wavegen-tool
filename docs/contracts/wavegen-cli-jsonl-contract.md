@@ -49,6 +49,7 @@ Result families add fields appropriate to the command:
   command for live control. The list excludes serial, firmware, and raw IDN.
 - `identify` returns backend, transport, reported identity fields,
   `canonical_model_id`, and `model_supported`.
+- `readback-advanced` returns `advanced_mode`, a `settings` object with only active parameters, selected `channel`, and identity context. `CW` uses an empty settings object; standalone queries never claim `readback_verified`. The field `advanced_mode` is separate from `mode="simulate"` execution metadata.
 - `status` returns selected `channel`, identity context, output state,
   function, frequency or bit rate, amplitude, bandwidth, offset, and load.
 - `read-errors` returns bounded error entries, read counts, empty/limit flags,
@@ -67,12 +68,19 @@ symmetry, pulse-edge, PRBS, sweep timing/spacing/trigger, and List Sweep fields
 only when that Direct CLI command exposes them. This contract does not freeze
 every internal result dataclass field.
 
+For the existing Advanced Mode configuration commands, a successful executed
+operation with `--verify-readback` adds `readback_verified: true` to Direct CLI
+JSON. A failed comparison retains `success: false` and the existing waveform
+verification error category (exit 29). Default executed results and hardware-free
+dry-run plans never include that field. Normalized configuration results remain
+requested values and must not be mistaken for independent observations.
+
 ## Direct CLI Commands
 
 The public Direct CLI machine surface includes:
 
 - `manifest`, `capabilities`, and `list-resources`;
-- `identify`, `status`, and `read-errors`;
+- `identify`, `status`, `readback-advanced`, and `read-errors`;
 - `configure-sine`, `configure-square`, `configure-ramp`,
   `configure-triangle`, `configure-pulse`, `configure-dc`,
   `configure-noise`, and `configure-prbs`;
@@ -91,7 +99,7 @@ Worker events are `ready`, `job_accepted`, `job_started`, `job_finished`,
 exact integer-token `schema_version: 3`, `service: "wavegen-tool"`, `run_id`,
 and a UTC timestamp.
 
-All 16 Worker domain commands are async jobs. Every normal, controllable
+All 17 Worker domain commands are async jobs. Every normal, controllable
 termination emits `job_finished` with `state`, boolean `ok`, and required
 `result` and `error`. The terminal timestamp is fixed and shared with the
 HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and

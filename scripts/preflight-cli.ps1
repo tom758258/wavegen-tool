@@ -227,6 +227,12 @@ foreach ($targetProfile in $targets) {
                             if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or @($payload.commands).Count -eq 0) { throw 'Invalid hardware-free plan.' }
                         } elseif ($payload.simulated -ne $true -or $payload.model -cne $capabilityModel) { throw 'Unexpected simulator identity or mode.' }
                         if ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') { throw 'Configuration did not leave output off.' }
+                        if ('--verify-readback' -in $step.arguments -and $mode -eq 'simulate' -and $payload.readback_verified -ne $true) {
+                            throw 'Advanced Mode simulator readback was not verified.'
+                        }
+                        if ($mode -eq 'dry-run' -and 'readback_verified' -in $payload.PSObject.Properties.Name) {
+                            throw 'Dry-run cannot claim independent readback verification.'
+                        }
                     } catch { $reasons += $_.Exception.Message }
                     Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $(if ($null -ne $invocation) { $invocation.Process } else { $null })
                 }
