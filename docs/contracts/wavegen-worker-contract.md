@@ -203,7 +203,7 @@ and `autorange_enabled`. The last two are booleans.
 | Arbitrary command | Arguments in addition to the optional `channel` |
 | --- | --- |
 | `upload-arbitrary` | `name`, `path` as an absolute Worker-host-local CSV path |
-| `configure-arbitrary` | `name`, `sample_rate_hz`, `amplitude_vpp`, optional `offset_v` (default 0) and `load` (default `"50"`) |
+| `configure-arbitrary` | `name` (string), `sample_rate_hz` and `amplitude_vpp` (numbers), optional `offset_v` (number, default `0`) and `load` (string or number, default `"50"`) |
 | `configure-arbitrary-sequence` | `document` as a JSON object using the [sequence format](../cli/README.md#arbitrary-waveforms-and-sequences) |
 | `list-arbitrary-memory` | None |
 | `clear-arbitrary-memory` | Exact boolean `confirm_clear: true` |
@@ -214,6 +214,8 @@ the outcome. Sequence input is supplied directly in `document`. Upload
 results expose metadata such as name and sample count. Memory listing
 reports `names`, `free_points`, and `catalog_truncated`. Dry-run does
 not inspect device memory or verify references to loaded waveforms.
+Arbitrary execution is available in simulation. A live request that passes
+admission receives the Core unsupported-instrument error in the job result.
 
 `output` requires `enabled`, which must be a boolean. Optional
 `confirm_output`, when present, must also be a boolean. `confirm_output` is an
@@ -221,10 +223,10 @@ admission safety field and is not passed to Core.
 
 ## Live Write Safety
 
-The following safety gate applies only when `context.mode` is `live`:
+The following admission safety gate applies only when `context.mode` is `live`:
 
-- Read-only commands, including `list-arbitrary-memory`, are available without
-  `allow_output_writes`.
+- Read-only commands, including `list-arbitrary-memory`, can be admitted
+  without `allow_output_writes`.
 - Every `configure-*` command, `trigger`, `upload-arbitrary`, and
   `clear-arbitrary-memory` require `allow_output_writes=True`.
 - Clear also requires `confirm_clear: true` in live, simulate, and dry-run

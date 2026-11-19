@@ -1133,7 +1133,8 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
     assert event_names.count("job_finished") == 1
 
 
-def test_idle_worker_waits_for_http_stop_acknowledgment(monkeypatch):
+@pytest.mark.parametrize("disconnect", [False, True])
+def test_idle_worker_waits_for_http_stop_acknowledgment(monkeypatch, disconnect):
     runtime = WorkerRuntime(_worker_config())
     sending_response = threading.Event()
     release_response = threading.Event()
@@ -1141,8 +1142,11 @@ def test_idle_worker_waits_for_http_stop_acknowledgment(monkeypatch):
 
     def delay_stop_response(handler, status, payload):
         if handler.path == "/stop" and status == 202:
+            assert handler.connection.gettimeout() is not None
             sending_response.set()
             assert release_response.wait(timeout=2.0)
+            if disconnect:
+                raise BrokenPipeError("client disconnected during stop acknowledgement")
         send_json(handler, status, payload)
 
     monkeypatch.setattr(worker_module._WorkerRequestHandler, "_send_json", delay_stop_response)
@@ -1153,11 +1157,18 @@ def test_idle_worker_waits_for_http_stop_acknowledgment(monkeypatch):
             try:
                 assert sending_response.wait(timeout=1.0)
                 assert not runtime.wait(timeout=0.3)
+                assert _request(runtime, "GET", "/status")[1]["status"] == "stopping"
+                code, rejected = _request(runtime, "POST", "/command", _payload("status"))
+                assert (code, rejected["reason"]) == (409, "stopping")
             finally:
                 release_response.set()
-            assert response.result(timeout=1.0) == (
-                202, {"schema_version": 3, "run_id": runtime.run_id, "status": "accepted", "error": None}
-            )
+            if disconnect:
+                with pytest.raises(http.client.RemoteDisconnected):
+                    response.result(timeout=1.0)
+            else:
+                assert response.result(timeout=1.0) == (
+                    202, {"schema_version": 3, "run_id": runtime.run_id, "status": "accepted", "error": None}
+                )
             assert runtime.wait(timeout=2.0)
     finally:
         runtime.request_stop()
@@ -1343,7 +1354,9 @@ def test_worker_arbitrary_http_workflow_validates_files_in_accepted_jobs(tmp_pat
         csv_file.write_text("0\n" * 8, encoding="utf-8")
         planned = submit("upload-arbitrary", arguments, mode="dry_run")["result"]
         assert planned["executed"] is False and planned["sample_count"] == 8
-        assert submit("list-arbitrary-memory", {"channel": 2})["result"]["names"] == []
+        assert submit("list-arbitrary-memory", {"channel": 2})["result"]["names"] == [
+            r"INT:\BUILTIN\EXP_RISE.ARB"
+        ]
         uploaded = submit("upload-arbitrary", arguments)["result"]
         assert uploaded["executed"] is True and uploaded["sample_count"] == 8
         assert str(csv_file) not in json.dumps(uploaded)
@@ -1358,7 +1371,9 @@ def test_worker_arbitrary_http_workflow_validates_files_in_accepted_jobs(tmp_pat
         submit("trigger", {})
         assert runtime.simulator_state.ch2.arbitrary_bus_triggers == 1
         submit("clear-arbitrary-memory", {"channel": 2, "confirm_clear": True})
-        assert submit("list-arbitrary-memory", {"channel": 2})["result"]["names"] == []
+        assert submit("list-arbitrary-memory", {"channel": 2})["result"]["names"] == [
+            r"INT:\BUILTIN\EXP_RISE.ARB"
+        ]
     finally:
         runtime.request_stop()
         assert runtime.wait(timeout=2.0)

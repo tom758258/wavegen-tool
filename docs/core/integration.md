@@ -83,8 +83,9 @@ real-instrument validation.
 ## Arbitrary Operations
 
 `run_arbitrary(command, arguments, model=...)` plans without VISA. Use
-`resource=...` instead of `model` to execute through the admitted VISA
-session or an injected simulator factory. The command and argument keys use
+`resource=...` with a simulator factory to execute in simulation. Physical
+VISA execution is limited to Core's explicit contributor validation mode.
+The command and argument keys use
 the [Worker Arbitrary contract](../contracts/wavegen-worker-contract.md#command-arguments).
 Core opens the CSV for upload. Use `read_arbitrary_sequence_file(path)` when
 the sequence document comes from a local JSON file.
@@ -92,7 +93,8 @@ the sequence document comes from a local JSON file.
 Use the selected-channel memory catalog and free-point query for metadata.
 Uploads require the selected output to be off and do not change the selection.
 Configure and clear operations turn off the selected output. Confirm a clear
-with `confirm_clear=True`. Consult the
+with `confirm_clear=True`. A clear reloads the default Arbitrary waveform.
+Consult the
 [Keysight Trueform Programming Guide](https://www.keysight.com/us/en/assets/9018-03714/service-manuals/9018-03714.pdf)
 for the underlying DATA, FUNCtion, FORMat, and TRIGger command semantics.
 

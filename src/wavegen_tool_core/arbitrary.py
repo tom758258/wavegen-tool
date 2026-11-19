@@ -14,11 +14,13 @@ import sys
 
 from wavegen_tool_core.capabilities import WavegenCapabilities
 from wavegen_tool_core.errors import (
+    UnsupportedInstrumentError,
     VisaWriteError,
     WaveformParameterError,
     WaveformVerificationError,
 )
 from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_PRODUCT
+from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 from wavegen_tool_core.visa import (
     SYSTEM_ERROR_QUERY,
     IdentificationResult,
@@ -39,7 +41,7 @@ from wavegen_tool_core.visa import (
 )
 
 _MIN_POINTS = 8
-_MAX_POINTS = 16 * 1024 * 1024
+_MAX_POINTS = 16_000_000
 _MAX_CSV_ROW_BYTES = 256
 _MAX_SEQUENCE_BYTES = 128 * 1024
 _MAX_SEQUENCE_STEPS = 512
@@ -243,10 +245,18 @@ def _lookup(catalog: tuple[str, ...], name: str, *, waveform_only: bool = False)
     accepted = {name.casefold() + suffix for suffix in ("", ".arb", ".barb", ".seq")}
     if waveform_only:
         accepted.remove(name.casefold() + ".seq")
-    matches = [entry for entry in catalog if entry.casefold() in accepted]
+    # Catalog names can include the original instrument drive and directory.
+    matches = [
+        entry for entry in catalog if re.split(r"[:/\\]", entry)[-1].casefold() in accepted
+    ]
     if len(matches) > 1:
         raise WaveformVerificationError(f"Arbitrary memory contains ambiguous matches for {name}.")
-    return next(iter(matches), None)
+    entry = next(iter(matches), None)
+    if entry is not None and (not entry.isascii() or '"' in entry or ";" in entry):
+        raise WaveformVerificationError(
+            f"Arbitrary memory contains an unsafe catalog name for {name}."
+        )
+    return entry
 
 
 def _count_query(session: VisaSession, command: str) -> int:
@@ -440,7 +450,7 @@ def run_arbitrary(
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> dict[str, object]:
-    """Run an Arbitrary operation on explicit VISA or plan for a registered model."""
+    """Plan or simulate Arbitrary operations, or execute them in validation mode."""
     if command not in ARBITRARY_COMMANDS:
         raise WaveformParameterError("Unknown Arbitrary operation.")
     if (model is None) == (resource is None):
@@ -449,6 +459,14 @@ def run_arbitrary(
         )
     if arguments.keys() - (_ARGUMENT_FIELDS[command] | {"channel"}):
         raise WaveformParameterError("Unsupported argument for this Arbitrary operation.")
+    if (
+        resource is not None
+        and support_policy_mode == SUPPORT_POLICY_MODE_PRODUCT
+        and not isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
+    ):
+        raise UnsupportedInstrumentError(
+            "Arbitrary operations are outside Product Live feature scope."
+        )
     channel = _validate_channel(arguments.get("channel", 1))
     source = f"SOURce{channel}"
     playback = sequence = name = None

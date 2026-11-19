@@ -20,7 +20,7 @@ is a separate, bounded reset exception described below.
 - Supported AM, FM, PM, FSK, BPSK, PWM, and Sum configurations
 - Counted Burst, Gated Burst, linear/logarithmic frequency sweeps, and List Sweep
 - Named arbitrary-waveform CSV upload, playback, native sequences, and
-  selected-channel volatile memory management
+  selected-channel volatile memory management in dry-run and simulation
 - Selected-channel status, output configuration, output control, and bounded
   error-queue reads
 - Explicit USB or TCPIP/LAN Product Live access through admitted VISA backends

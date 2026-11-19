@@ -10,10 +10,12 @@ from wavegen_tool_core.errors import (
     WaveformParameterError,
     WaveformVerificationError,
 )
+from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_VALIDATION
 from wavegen_tool_core.simulator import SimulatedResource, SimulatedResourceManager
 
 
 MODEL = "keysight-33512b"
+DEFAULT_ARBITRARY = r"INT:\BUILTIN\EXP_RISE.ARB"
 SAMPLES = (-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1)
 PLAYBACK = {"name": "WAVE", "sample_rate_hz": 1e6, "amplitude_vpp": 1.0}
 
@@ -71,7 +73,10 @@ def fake_visa(monkeypatch):
 
     def run(command, **arguments):
         commands.clear()
-        return run_arbitrary(command, arguments, resource=state.resource_name)
+        return run_arbitrary(
+            command, arguments, resource=state.resource_name,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        )
 
     return state, commands, sessions, run
 
@@ -94,10 +99,10 @@ def test_binary_upload_uses_instrument_byte_order_without_selecting(
     result = run("upload-arbitrary", name="WAVE", path=csv_path, channel=2)
     block = b"SOURce2:DATA:ARBitrary WAVE,#232" + struct.pack(f"{endian}8f", *SAMPLES) + b"\r\n"
     assert [message for message in commands if isinstance(message, bytes)] == [block]
-    assert state.ch2.selected_arbitrary is None
+    assert state.ch2.selected_arbitrary == DEFAULT_ARBITRARY
     assert state.ch2.active_function == "SIN"
-    assert state.ch2.arbitrary_points == {"WAVE": 8}
-    assert not state.ch1.arbitrary_points
+    assert state.ch2.arbitrary_points == {DEFAULT_ARBITRARY: 40, "WAVE": 8}
+    assert state.ch1.arbitrary_points == {DEFAULT_ARBITRARY: 40}
     assert not sessions[-1].writes[:-1]
     assert result["sample_count"] == 8 and "path" not in result and "samples" not in result
 
@@ -126,7 +131,7 @@ def test_upload_failure_reports_uncertain_memory_without_clearing(
     monkeypatch.setattr(SimulatedResource, "write_raw", failed_write)
     with pytest.raises(VisaWriteError, match="memory state may be uncertain"):
         run("upload-arbitrary", name="WAVE", path=csv_path)
-    assert state.ch1.arbitrary_points == {"WAVE": 8}
+    assert state.ch1.arbitrary_points["WAVE"] == 8
     assert sum(isinstance(message, bytes) for message in commands) == 1
     assert all("CLEar" not in write for write in sessions[-1].writes)
     assert sessions[-1].closed
@@ -141,8 +146,10 @@ def test_invalid_csv_rejected_before_visa(tmp_path, row):
 
 
 def test_file_bounds_and_model_admission(tmp_path, csv_path, fake_visa, monkeypatch):
-    _state, _commands, sessions, run = fake_visa
+    state, _commands, sessions, run = fake_visa
     args = {"name": "WAVE", "path": tmp_path / "missing.csv"}
+    with pytest.raises(UnsupportedInstrumentError, match="Product Live"):
+        run_arbitrary("upload-arbitrary", args, resource=state.resource_name)
     with pytest.raises(WaveformParameterError, match="UTF-8"):
         run("upload-arbitrary", **args)
     with pytest.raises(WaveformParameterError, match="Arbitrary name"):
@@ -171,7 +178,7 @@ def test_file_bounds_and_model_admission(tmp_path, csv_path, fake_visa, monkeypa
 def test_upload_respects_memory_allocation_and_channel_safety(csv_path, fake_visa, guard):
     state, _commands, sessions, run = fake_visa
     if guard == "memory":
-        state.ch2.arbitrary_points["OLD"] = 999_936  # 64 free points, below one block.
+        state.ch2.arbitrary_points["OLD"] = 999_808  # 64 free points, below one block.
     elif guard == "coupling":
         state.voltage_coupling = True
     elif guard == "output":
@@ -200,8 +207,8 @@ def test_single_waveform_and_confirmed_clear_keep_channel_isolation(csv_path, fa
     assert status.frequency_hz is None
 
     result = run("list-arbitrary-memory", channel=2)
-    assert result["names"] == ("WAVE",)
-    assert result["free_points"] == 999_872
+    assert result["names"] == (DEFAULT_ARBITRARY, "WAVE")
+    assert result["free_points"] == 999_744
     assert sessions[-1].writes == []
     with pytest.raises(WaveformParameterError, match="explicit confirmation"):
         run("clear-arbitrary-memory", channel=2)
@@ -209,7 +216,36 @@ def test_single_waveform_and_confirmed_clear_keep_channel_isolation(csv_path, fa
     run("clear-arbitrary-memory", channel=2, confirm_clear=True)
     assert sessions[-1].writes == ["OUTPut2 OFF", "SOURce2:DATA:VOLatile:CLEar"]
     assert state.ch1.output_enabled is True
-    assert not state.ch2.arbitrary_points
+    assert state.ch2.arbitrary_points == {DEFAULT_ARBITRARY: 40}
+    assert state.ch2.selected_arbitrary == DEFAULT_ARBITRARY
+
+
+def test_catalog_resolves_loaded_paths_in_the_selected_channel(csv_path, fake_visa):
+    state, commands, sessions, run = fake_visa
+    loaded = r"USB:\XYZ\A.ARB"
+    state.ch2.arbitrary_points[loaded] = 40
+    playback = {**PLAYBACK, "name": "a", "channel": 2}
+    assert loaded in run("list-arbitrary-memory", channel=2)["names"]
+    run("configure-arbitrary", **playback)
+    assert f'SOURce2:FUNCtion:ARBitrary "{loaded}"' in commands
+    step = {"waveform": "A", "play_control": "once"}
+    run("configure-arbitrary-sequence", document=_sequence(steps=[step]), channel=2)
+    assert f'SOURce2:DATA:ATTRibute:POINts? "{loaded}"' in commands
+    assert state.ch2.arbitrary_sequences["SEQ"][0][0] == loaded
+
+    with pytest.raises(WaveformParameterError, match="already exists"):
+        run("upload-arbitrary", name="A", path=csv_path, channel=2)
+    with pytest.raises(WaveformParameterError, match="missing"):
+        run("configure-arbitrary", **{**playback, "channel": 1})
+    state.ch2.arbitrary_points[r"INT:\Another Folder\A.BARB"] = 40
+    with pytest.raises(WaveformVerificationError, match="ambiguous"):
+        run("configure-arbitrary", **playback)
+    assert sessions[-1].writes == []
+
+    state.ch2.arbitrary_points[r"USB:\X;\B.ARB"] = 40
+    with pytest.raises(WaveformVerificationError, match="unsafe catalog"):
+        run("configure-arbitrary", **{**playback, "name": "B"})
+    assert sessions[-1].writes == []
 
 
 @pytest.mark.parametrize("trigger_source", ["bus", "external"])
@@ -265,7 +301,7 @@ def test_sequence_model_and_memory_errors_fail_before_writes(csv_path, fake_visa
         )
     assert not sessions[-1].writes
     state.model_id = "keysight-33510b"
-    with pytest.raises(UnsupportedInstrumentError):
+    with pytest.raises(WaveformParameterError, match="standard Arbitrary"):
         run("list-arbitrary-memory")
     assert not sessions[-1].writes
 
@@ -297,3 +333,22 @@ def test_dry_run_sequence_maximum_steps():
     assert result["step_count"] == 512
     assert result["executed"] is False
     assert "SOURce1:FUNCtion:ARBitrary:ADVance SRATe" in result["commands"]
+
+
+def test_simulator_sequence_capacity_is_shared_per_channel_and_reset_by_clear(fake_visa):
+    state, _commands, _sessions, run = fake_visa
+    step = {"waveform": "EXP_RISE", "play_control": "once"}
+    run("configure-arbitrary-sequence", document=_sequence(steps=[step] * 512), channel=2)
+    extra = _sequence(name="EXTRA", steps=[step])
+    with pytest.raises(VisaWriteError):
+        run("configure-arbitrary-sequence", document=extra, channel=2)
+    assert "EXTRA.seq" not in run("list-arbitrary-memory", channel=2)["names"]
+    assert state.ch2.selected_arbitrary == "SEQ"
+
+    run("configure-arbitrary-sequence", document=extra, channel=1)
+    run("clear-arbitrary-memory", channel=2, confirm_clear=True)
+    assert run("list-arbitrary-memory", channel=2)["names"] == (DEFAULT_ARBITRARY,)
+    assert state.ch2.selected_arbitrary == DEFAULT_ARBITRARY
+    run("configure-arbitrary-sequence", document=extra, channel=2)
+    assert "EXTRA.seq" in run("list-arbitrary-memory", channel=1)["names"]
+    assert "EXTRA.seq" in run("list-arbitrary-memory", channel=2)["names"]

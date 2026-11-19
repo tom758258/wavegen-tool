@@ -182,6 +182,7 @@ class WorkerRuntime:
         self._last_job: JobRecord | None = None
         self._fatal_error: dict[str, object] | None = None
         self._stop_requested = False
+        self._stop_ack_pending = False
         self._accepted_jobs = 0
         self._succeeded_jobs = 0
         self._failed_jobs = 0
@@ -281,14 +282,21 @@ class WorkerRuntime:
         """Request a cooperative stop and send any HTTP acknowledgment before shutdown."""
 
         with self._condition:
-            if not self._stop_requested:
+            first_request = not self._stop_requested
+            if first_request:
                 self._stop_requested = True
                 self._service_status = "stopping"
-                self._condition.notify_all()
+                self._stop_ack_pending = True
+        try:
+            if first_request:
                 self._emit_event("stop_requested")
-            # The runner cannot leave its wait loop until the acknowledgment is sent.
             if acknowledge is not None:
                 acknowledge()
+        finally:
+            if first_request:
+                with self._condition:
+                    self._stop_ack_pending = False
+                    self._condition.notify_all()
 
     def admit(
         self, command: ValidatedWorkerCommand
@@ -395,7 +403,9 @@ class WorkerRuntime:
         try:
             while True:
                 with self._condition:
-                    while self._active_job is None and not self._stop_requested:
+                    while self._active_job is None and (
+                        not self._stop_requested or self._stop_ack_pending
+                    ):
                         self._condition.wait()
                     if self._active_job is None:
                         break
@@ -1119,15 +1129,20 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             return
 
         def acknowledge() -> None:
-            self._send_json(
-                202,
-                {
-                    "schema_version": WORKER_SCHEMA_VERSION,
-                    "status": "accepted",
-                    "run_id": self.server.runtime.run_id,
-                    "error": None,
-                },
-            )
+            try:
+                self.connection.settimeout(1.0)
+                self._send_json(
+                    202,
+                    {
+                        "schema_version": WORKER_SCHEMA_VERSION,
+                        "status": "accepted",
+                        "run_id": self.server.runtime.run_id,
+                        "error": None,
+                    },
+                )
+            except OSError:
+                # A disconnected or unresponsive client cannot cancel an accepted stop.
+                pass
 
         self.server.runtime.request_stop(acknowledge)
 

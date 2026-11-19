@@ -17,6 +17,9 @@ from wavegen_tool_core.identity import (
 
 SIMULATED_33521B_RESOURCE = "USB0::SIM::33521B::INSTR"
 _ARBITRARY_CAPACITY = 1_000_000
+_ARBITRARY_SEQUENCE_CAPACITY = 512
+_DEFAULT_ARBITRARY_NAME = r"INT:\BUILTIN\EXP_RISE.ARB"
+_DEFAULT_ARBITRARY_POINTS = 40
 SIMULATED_33521B_IDN = "KEYSIGHT TECHNOLOGIES,33521B,SIM000001,1.0"
 
 
@@ -114,6 +117,13 @@ class SimulatedChannelState:
             (points + 127) // 128 * 128 for points in self.arbitrary_points.values()
         )
 
+    def clear_arbitrary_memory(self) -> None:
+        self.arbitrary_points.clear()
+        self.arbitrary_points[_DEFAULT_ARBITRARY_NAME] = _DEFAULT_ARBITRARY_POINTS
+        self.arbitrary_sequences.clear()
+        self.selected_arbitrary = _DEFAULT_ARBITRARY_NAME
+        self.arbitrary_bus_triggers = 0
+
 
 class Simulated33521BState:
     """Process-local state for registered simulated models (CH1 & CH2)."""
@@ -191,6 +201,10 @@ class Simulated33521BState:
         self.error_queue = error_queue if error_queue is not None else []
         self.model_id = model_id
         _require_model_info(self.model_id)
+        capabilities = capabilities_for_model_id(self.model_id)
+        if capabilities is not None and capabilities.max_arbitrary_sample_rate_hz is not None:
+            for channel_number in range(1, capabilities.channel_count + 1):
+                self.channels[channel_number].clear_arbitrary_memory()
 
     @property
     def ch1(self) -> SimulatedChannelState:
@@ -521,9 +535,12 @@ class SimulatedResource:
             channel.arbitrary_points[name] = points
         else:
             name, *fields = next(csv.reader([message[header_end:payload_end].decode("ascii")]))
-            if not fields or len(fields) % 5 or len(fields) > 512 * 5:
+            if not fields or len(fields) % 5:
                 raise ValueError("Invalid simulated Arbitrary sequence descriptor.")
             self._check_arbitrary_duplicate(channel, name)
+            used_steps = sum(len(steps) for steps in channel.arbitrary_sequences.values())
+            if used_steps + len(fields) // 5 > _ARBITRARY_SEQUENCE_CAPACITY:
+                raise ValueError("Simulated Arbitrary sequence memory has insufficient free steps.")
             steps = []
             for waveform, count, mode, marker, point in zip(
                 fields[::5], fields[1::5], fields[2::5], fields[3::5], fields[4::5]
@@ -609,10 +626,7 @@ class SimulatedResource:
 
         source = f"SOURce{prefix_ch}"
         if command == f"{source}:DATA:VOLatile:CLEar":
-            ch_state.arbitrary_points.clear()
-            ch_state.arbitrary_sequences.clear()
-            ch_state.selected_arbitrary = None
-            ch_state.arbitrary_bus_triggers = 0
+            ch_state.clear_arbitrary_memory()
             return
         if command.startswith(f"{source}:FUNCtion:ARBitrary "):
             name = command.split(" ", 1)[1].strip('"')

@@ -636,21 +636,20 @@ sweep, hold, and return time.
 
 ## Arbitrary Waveforms and Sequences
 
-33512B supports Arbitrary on Channels 1 and 2, and 33521B supports it on
-Channel 1. Core rejects Arbitrary on the standard 33510B profile. See
-[Supported Models](../core/supported-models.md) for connection scope.
+Arbitrary commands are available in dry-run and simulator modes for 33512B
+Channels 1 and 2 and 33521B Channel 1. See
+[Supported Models](../core/supported-models.md) for the Product Live scope.
 
 Create a UTF-8 CSV of at least eight samples with one numeric value per row
 and no header. Values must be finite and within `[-1, 1]`. Use a name that
 starts with an ASCII letter and contains at most 12 letters, digits, or
-underscores. Upload with the selected output off, then configure playback
-using the loaded name. The following live examples use the operator-set
-`WAVEGEN_TOOL_RESOURCE`.
+underscores. A CSV may contain at most 16,000,000 samples. Upload with the
+selected output off, then configure playback using the loaded name.
 
 ```console
-wavegen-tool upload-arbitrary --name WAVE_A --file wave-a.csv
-wavegen-tool list-arbitrary-memory
-wavegen-tool configure-arbitrary --name WAVE_A --sample-rate-hz 1000000 --amplitude-vpp 1
+wavegen-tool upload-arbitrary --name WAVE_A --file wave-a.csv --dry-run
+wavegen-tool list-arbitrary-memory --simulate
+wavegen-tool configure-arbitrary --name WAVE_A --sample-rate-hz 1000000 --amplitude-vpp 1 --dry-run
 ```
 
 Upload only stores the segment. Configuration selects it and leaves the
@@ -658,8 +657,11 @@ output off. Arb playback uses Sa/s and the instrument's current filter
 settings. Core checks the instrument's free points and accounts for 128-point
 allocation. A duplicate name is rejected. To remove **all** volatile segments
 and sequences on the selected channel, use
-`wavegen-tool clear-arbitrary-memory --confirm-clear`. This also turns off
-the selected output.
+`wavegen-tool clear-arbitrary-memory --simulate --confirm-clear`. Clear turns
+off the selected output and reloads the default Arbitrary waveform.
+For a loaded file shown as a path in the catalog, use its base name without
+the extension in playback or Sequence steps. Matching is case-insensitive,
+and an ambiguous base name is rejected.
 
 Use `configure-arbitrary-sequence --file sequence.json` with a version 1
 document. For example, upload each named segment before applying this
@@ -682,7 +684,8 @@ configuration.
 }
 ```
 
-A sequence accepts 1–512 steps. Use `once` for one playback, `repeat` with
+A sequence accepts 1–512 steps. Each channel has space for 512 steps across
+its stored sequences. Use `once` for one playback, `repeat` with
 `repeat_count` from 1 to 1,000,000, `onceWaitTrig` to wait after playing, or
 `repeatTilTrig` to repeat until triggered. The marker is fixed to
 `lowAtStart`. For external triggering, set `trigger_source` to `"external"`
@@ -905,9 +908,9 @@ domain commands and their request fields. Worker command names use kebab-case
 and request argument fields use snake_case. Selected-channel results retain
 Core's integer `channel`, defaulting to 1. A Bus `trigger` applies instrument-wide.
 
-Live waveform configuration, trigger, Arbitrary upload, and memory clear
-require Worker startup with `--allow-output-writes`. Clear also requires
-`confirm_clear: true` in the request. Output-on requires both
+Live waveform configuration and trigger require Worker startup with
+`--allow-output-writes`. Simulated Arbitrary clear requires `confirm_clear: true`
+in the request. Output-on requires both
 `--allow-output-writes` and `confirm_output: true`. Read-only commands and
 explicit output-off are available without the startup flag.
 

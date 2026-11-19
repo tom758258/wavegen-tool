@@ -660,6 +660,12 @@ def _validate_arbitrary_fields(command: str, arguments: Mapping[str, object]) ->
             raise WorkerRequestValidationError(
                 "invalid_arguments", "path must be a Worker-host-local absolute path."
             )
+    elif command == "configure-arbitrary":
+        for field in ("sample_rate_hz", "amplitude_vpp", "offset_v"):
+            if field in arguments and type(arguments[field]) not in (int, float):
+                raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a number.")
+        if "load" in arguments and type(arguments["load"]) not in (str, int, float):
+            raise WorkerRequestValidationError("invalid_arguments", "load must be a string or number.")
     elif command == "configure-arbitrary-sequence" and not isinstance(arguments["document"], Mapping):
         raise WorkerRequestValidationError("invalid_arguments", "document must be a JSON object.")
     elif command == "clear-arbitrary-memory" and arguments["confirm_clear"] is not True:

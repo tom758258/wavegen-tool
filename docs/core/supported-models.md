@@ -23,10 +23,6 @@ does not alter the default Product policy or make the model Product Live.
 Evidence handling and support decisions are documented in
 [Contributing](../CONTRIBUTING.md).
 
-Arbitrary playback and native sequences are available for 33512B (160 MSa/s)
-and 33521B (250 MSa/s). Actual limits depend on the instrument's filter and
-volatile memory availability. The standard 33510B profile rejects Arbitrary.
-
 ## Exact Live Identity
 
 Core recognizes these manufacturer fields:
@@ -54,6 +50,10 @@ rejected for the one-channel 33521B in dry-run, simulator, and live paths.
 Dry-run does not execute VISA I/O. Simulator results are deterministic test
 behavior, not evidence that a physical model, backend, connection, or command
 family has been validated.
+
+Arbitrary commands support dry-run and simulation for 33512B Channels 1 and 2
+(160 MSa/s) and 33521B Channel 1 (250 MSa/s). The standard 33510B profile
+rejects Arbitrary.
 
 ## Product Live Connection Scope
 
@@ -87,10 +87,10 @@ request validation and safety rules documented for:
 - supported AM, FM, PM, FSK, BPSK, PWM, and Sum carrier combinations;
 - Counted Burst and Gated Burst on supported carriers;
 - sine, square, ramp, and triangle ordinary and List Sweeps;
-- selected-channel Arbitrary upload, playback configuration, sequence
-  configuration, and volatile memory operations;
 - selected-channel status, output configuration, and output control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
+
+Core rejects Arbitrary operations in Product Live mode.
 
 This overview does not remove command-specific limits. An invalid carrier,
 option combination, channel, value, trigger source, or safety state still fails
