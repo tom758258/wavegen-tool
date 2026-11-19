@@ -7885,6 +7885,257 @@ def _run_on_supported_instrument(
 
 
 
+
+@dataclass(frozen=True)
+class AdvancedModeReadbackResult:
+    """Current effective Advanced Mode settings, independently queried."""
+
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    channel: int
+    advanced_mode: str
+    settings: dict[str, object]
+
+
+def query_advanced_mode(
+    resource: str,
+    backend: str | None = None,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> AdvancedModeReadbackResult:
+    """Read the active mode without sending any state-changing SCPI."""
+
+    def operation(
+        session: VisaSession, context: IdentificationResult
+    ) -> tuple[int, str, dict[str, object]]:
+        capabilities = _capabilities_for_identity(context.identity)
+        selected = _validate_channel(
+            channel, capabilities, context.identity.model
+        )
+        prefix = f"SOURce{selected}:"
+        fields: dict[str, object] = {}
+
+        def raw(header: str) -> str:
+            command = f"{header}?"
+            try:
+                response = session.query(command)
+            except Exception as exc:
+                raise StatusQueryError(
+                    f"Advanced Mode query {command} failed or timed out.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                ) from exc
+            if not isinstance(response, str) or not response.strip():
+                raise StatusQueryError(
+                    f"Advanced Mode query {command} returned an invalid response.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            return response.strip()
+
+        def choice(header: str, allowed: frozenset[str]) -> str:
+            value = _canonical_readback_enum(raw(header))
+            if value not in allowed:
+                raise StatusQueryError(
+                    f"Advanced Mode query {header}? returned an unknown value.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            return value.lower()
+
+        def number(header: str) -> float:
+            try:
+                value = float(raw(header))
+            except ValueError as exc:
+                raise StatusQueryError(
+                    f"Advanced Mode query {header}? returned an invalid number.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                ) from exc
+            if not math.isfinite(value):
+                raise StatusQueryError(
+                    f"Advanced Mode query {header}? returned a non-finite number.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            return value
+
+        source_values = frozenset({"INTERNAL", "EXTERNAL", "CH1", "CH2"})
+        modes = [
+            prefix_name
+            for prefix_name in _ADVANCED_MODULATION_PREFIXES
+            if choice(prefix + prefix_name + ":STATe", frozenset({"ON", "OFF"}))
+            == "on"
+        ]
+        frequency_mode = choice(
+            prefix + "FREQuency:MODE", frozenset({"CW", "LIST", "SWEEP"})
+        )
+        if len(modes) > 1 or (modes and frequency_mode != "cw"):
+            raise StatusQueryError(
+                "Advanced Mode instrument state is ambiguous.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        active = modes[0] if modes else None
+        if active is None:
+            if frequency_mode == "cw":
+                return selected, "CW", fields
+            active = frequency_mode.upper()
+
+        if active in {"AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM"}:
+            source = choice(prefix + active + ":SOURce", source_values)
+            fields["source"] = source
+            if source == "internal":
+                if active not in {"FSKey", "BPSK"}:
+                    fields["internal_function"] = choice(
+                        prefix + active + ":INTernal:FUNCtion",
+                        frozenset({
+                            "SINUSOID", "SQUARE", "TRIANGLE", "RAMP",
+                            "NOISE", "PRBS", "ARB", "NRAMP", "UPRAMP", "DOWNRAMP",
+                        }),
+                    )
+                    fields["internal_frequency_hz"] = number(
+                        prefix + active + ":INTernal:FREQuency"
+                    )
+                else:
+                    fields["rate_hz"] = number(
+                        prefix + active + ":INTernal:RATE"
+                    )
+            specific = {
+                "AM": ("depth_percent", "DEPTh"),
+                "FM": ("deviation_hz", "DEViation"),
+                "PM": ("deviation_deg", "DEViation"),
+                "FSKey": ("hop_frequency_hz", "FREQuency"),
+                "BPSK": ("phase_shift_deg", "PHASe"),
+                "PWM": ("deviation_s", "DEViation"),
+                "SUM": ("amplitude_percent", "AMPLitude"),
+            }
+            field, suffix = specific[active]
+            fields[field] = number(prefix + active + ":" + suffix)
+            if active == "AM":
+                dssc = choice(prefix + "AM:DSSC", frozenset({"ON", "OFF"}))
+                return selected, "AM-DSSC" if dssc == "on" else "AM", fields
+            return selected, "FSK" if active == "FSKey" else active, fields
+
+        if active == "BURSt":
+            burst_mode = choice(
+                prefix + "BURSt:MODE", frozenset({"TRIGGERED", "GATED"})
+            )
+            fields["burst_mode"] = "counted" if burst_mode == "triggered" else "gated"
+            if burst_mode == "gated":
+                fields["gate_polarity"] = choice(
+                    prefix + "BURSt:GATE:POLarity",
+                    frozenset({"NORMAL", "INVERTED"}),
+                )
+            else:
+                count = number(prefix + "BURSt:NCYCles")
+                if count < 1 or not count.is_integer():
+                    raise StatusQueryError(
+                        "Advanced Mode Burst cycle count is not a positive integer.",
+                        backend=context.backend,
+                        transport=context.transport,
+                        identity=context.identity,
+                    )
+                fields["count"] = int(count)
+                fields["phase_deg"] = number(prefix + "BURSt:PHASe")
+                trigger = choice(
+                    f"TRIGger{selected}:SOURce",
+                    frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
+                )
+                fields["trigger_source"] = trigger
+                if trigger == "immediate":
+                    fields["period_s"] = number(prefix + "BURSt:INTernal:PERiod")
+                elif trigger == "timer":
+                    fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
+                elif trigger == "external":
+                    fields["trigger_slope"] = choice(
+                        f"TRIGger{selected}:SLOPe",
+                        frozenset({"POSITIVE", "NEGATIVE"}),
+                    )
+            return selected, "BURST", fields
+
+        if active == "SWEEP":
+            fields["start_frequency_hz"] = number(prefix + "FREQuency:STARt")
+            fields["stop_frequency_hz"] = number(prefix + "FREQuency:STOP")
+            fields["spacing"] = choice(
+                prefix + "SWEep:SPACing",
+                frozenset({"LINEAR", "LOGARITHMIC"}),
+            )
+            fields["sweep_time_s"] = number(prefix + "SWEep:TIME")
+            fields["hold_time_s"] = number(prefix + "SWEep:HTIMe")
+            fields["return_time_s"] = number(prefix + "SWEep:RTIMe")
+        elif active == "LIST":
+            response = raw(prefix + "LIST:FREQuency")
+            try:
+                values = [float(part.strip()) for part in response.split(",")]
+            except ValueError as exc:
+                raise StatusQueryError(
+                    "Advanced Mode LIST frequencies are invalid.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                ) from exc
+            if not values or not all(math.isfinite(x) and x > 0 for x in values):
+                raise StatusQueryError(
+                    "Advanced Mode LIST frequencies are invalid.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            fields["frequencies_hz"] = values
+            fields["dwell_s"] = number(prefix + "LIST:DWELl")
+        else:
+            raise StatusQueryError(
+                "Advanced Mode frequency mode is unsupported.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        trigger = choice(
+            f"TRIGger{selected}:SOURce",
+            frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
+        )
+        fields["trigger_source"] = trigger
+        if trigger == "timer":
+            fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
+        elif trigger == "external":
+            fields["trigger_slope"] = choice(
+                f"TRIGger{selected}:SLOPe",
+                frozenset({"POSITIVE", "NEGATIVE"}),
+            )
+        return selected, active, fields
+
+    context, values = _run_on_supported_instrument(
+        resource,
+        backend,
+        operation,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+    )
+    selected, mode, settings = values
+    return AdvancedModeReadbackResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        channel=selected,
+        advanced_mode=mode,
+        settings=settings,
+    )
+
+
 _ADVANCED_MODULATION_PREFIXES = (
     "AM",
     "FM",
@@ -7954,6 +8205,10 @@ _READBACK_ENUM_ALIASES = {
     "INT": "INTERNAL",
     "EXT": "EXTERNAL",
     "SIN": "SINUSOID",
+    "SQU": "SQUARE",
+    "TRI": "TRIANGLE",
+    "NOIS": "NOISE",
+    "NRAM": "NRAMP",
     "SINE": "SINUSOID",
     "TRIG": "TRIGGERED",
     "GAT": "GATED",

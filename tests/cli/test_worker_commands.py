@@ -34,6 +34,7 @@ def _sine_arguments() -> dict[str, object]:
     [
         ("identify", {}, {}),
         ("status", {}, {}),
+        ("readback-advanced", {}, {}),
         ("read-errors", {}, {"max_reads": 20}),
         (
             "configure-sine",
@@ -725,6 +726,7 @@ def test_worker_command_set_is_not_expanded():
         "identify",
         "status",
         "read-errors",
+        "readback-advanced",
         "configure-sine",
         "configure-sine-sweep",
         "configure-square-sweep",
@@ -739,3 +741,19 @@ def test_worker_command_set_is_not_expanded():
         "configure-prbs",
         "output",
     }
+
+def test_worker_advanced_readback_is_readonly_and_has_no_dry_run():
+    validated = validate_worker_command_request(
+        _payload("readback-advanced", {"channel": 2}),
+        worker_mode="live",
+        allow_output_writes=False,
+    )
+    assert validated.arguments["channel"] == 2
+    with pytest.raises(WorkerRequestValidationError) as raised:
+        validate_worker_command_request(
+            _payload("readback-advanced", context={
+                "mode": "dry_run", "planning_model_id": "keysight-33512b",
+            }),
+            worker_mode="live", allow_output_writes=False,
+        )
+    assert raised.value.code == "unsupported_command"

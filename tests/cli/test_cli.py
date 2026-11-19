@@ -4598,3 +4598,25 @@ def test_cli_advanced_readback_failure_uses_existing_exit_code(monkeypatch, caps
     assert status == ExitCode.WAVEFORM_VERIFICATION_ERROR
     assert payload["success"] is False
     assert "expected 80, actual 50" in payload["error"]
+
+def test_cli_independent_readback_cw_simulated_json(capsys):
+    status = main([
+        "readback-advanced", "--simulate", "--model", "keysight-33512b",
+        "--channel", "2", "--json",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert status == ExitCode.SUCCESS
+    assert payload["success"] is True
+    assert payload["advanced_mode"] == "CW"
+    assert payload["settings"] == {}
+    assert payload["mode"] == "simulate"
+    assert payload["channel"] == 2
+    assert "readback_verified" not in payload
+
+
+def test_cli_independent_readback_rejects_ch2_on_33521b(capsys):
+    status = main(["readback-advanced", "--simulate", "--channel", "2", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert status == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+    assert payload["advanced_mode"] is None

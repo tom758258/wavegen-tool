@@ -74,6 +74,7 @@ from wavegen_tool_core import (
     identify_instrument,
     list_resources,
     normalize_serial_baud_rate,
+    query_advanced_mode,
     query_status,
     read_error_queue,
     resolve_voltage_inputs,
@@ -774,6 +775,20 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit exactly one JSON object.",
     )
+
+    readback_parser = subparsers.add_parser(
+        "readback-advanced",
+        help="Read the current active Advanced Mode without changing the instrument.",
+    )
+    _add_simulate_argument(readback_parser)
+    _add_channel_argument(readback_parser)
+    _add_validation_only_live_arguments(readback_parser)
+    readback_parser.add_argument(
+        "--resource",
+        help="Explicit VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
+    )
+    readback_parser.add_argument("--backend", default="system")
+    readback_parser.add_argument("--json", action="store_true", dest="json_output")
 
     read_errors_parser = subparsers.add_parser(
         "read-errors",
@@ -1998,11 +2013,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     validation_only_live_commands = {
         "identify",
         "status",
+        "readback-advanced",
         "read-errors",
         "output",
         "trigger",
     }
-    standalone_simulator_model_commands = {"status", "output", "trigger"}
+    standalone_simulator_model_commands = {"status", "readback-advanced", "output", "trigger"}
     if (
         args.command in waveform_commands
         and args.dry_run
@@ -2074,7 +2090,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
     if (
-        args.command in {"identify", "status", "output", "read-errors", "trigger"}
+        args.command in {"identify", "status", "readback-advanced", "output", "read-errors", "trigger"}
         and not args.simulate
         and args.resource is None
     ):
@@ -2121,6 +2137,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_trigger(args)
     if args.command == "status":
         return _run_status(args)
+    if args.command == "readback-advanced":
+        return _run_readback_advanced(args)
     if args.command == "read-errors":
         return _run_read_errors(args)
     return _run_identify(args)
@@ -3660,6 +3678,81 @@ def _run_status(args: argparse.Namespace) -> int:
                 args.simulate,
             )
         )
+    return int(ExitCode.SUCCESS)
+
+
+def _run_readback_advanced(args: argparse.Namespace) -> int:
+    resource, factory = (
+        _simulated_target(args.model or CANONICAL_MODEL_ID)
+        if args.simulate else (args.resource, None)
+    )
+    try:
+        result = query_advanced_mode(
+            resource,
+            args.backend,
+            channel=args.channel,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        )
+    except WavegenError as exc:
+        payload = {
+            "success": False,
+            "action": "readback-advanced",
+            "channel": args.channel,
+            "advanced_mode": None,
+            "settings": None,
+            "error": _error_text(exc),
+        }
+        if args.json_output:
+            print(json.dumps(
+                _with_simulation_fields(payload, args.simulate), separators=(",", ":")
+            ))
+        else:
+            print(_with_simulation_notice(_human_error(exc), args.simulate),
+                  file=sys.stderr)
+        return int(_exit_code_for_error(exc))
+    except Exception:
+        payload = {
+            "success": False,
+            "action": "readback-advanced",
+            "channel": args.channel,
+            "advanced_mode": None,
+            "settings": None,
+            "error": "internal_error: unexpected internal failure",
+        }
+        if args.json_output:
+            print(json.dumps(
+                _with_simulation_fields(payload, args.simulate), separators=(",", ":")
+            ))
+        else:
+            print(_with_simulation_notice(
+                "Error [internal_error]: unexpected internal failure.", args.simulate
+            ), file=sys.stderr)
+        return int(ExitCode.INTERNAL_ERROR)
+    payload = {
+        "success": True,
+        "action": "readback-advanced",
+        "channel": result.channel,
+        "backend": result.backend,
+        "transport": result.transport,
+        "manufacturer": result.identity.manufacturer,
+        "model": result.identity.model,
+        "advanced_mode": result.advanced_mode,
+        "settings": result.settings,
+        "error": None,
+    }
+    if args.json_output:
+        print(json.dumps(
+            _with_simulation_fields(payload, args.simulate), separators=(",", ":")
+        ))
+    else:
+        settings = ", ".join(
+            f"{key}={value}" for key, value in result.settings.items()
+        )
+        print(_with_simulation_notice(
+            f"Channel {result.channel} Advanced Mode: {result.advanced_mode}"
+            + (f"\n{settings}" if settings else ""), args.simulate
+        ))
     return int(ExitCode.SUCCESS)
 
 

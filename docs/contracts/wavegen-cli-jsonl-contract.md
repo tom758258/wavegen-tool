@@ -49,6 +49,7 @@ Result families add fields appropriate to the command:
   command for live control. The list excludes serial, firmware, and raw IDN.
 - `identify` returns backend, transport, reported identity fields,
   `canonical_model_id`, and `model_supported`.
+- `readback-advanced` returns `advanced_mode`, a `settings` object with only active parameters, selected `channel`, and identity context. `CW` uses an empty settings object; standalone queries never claim `readback_verified`. The field `advanced_mode` is separate from `mode="simulate"` execution metadata.
 - `status` returns selected `channel`, identity context, output state,
   function, frequency or bit rate, amplitude, bandwidth, offset, and load.
 - `read-errors` returns bounded error entries, read counts, empty/limit flags,
@@ -79,7 +80,7 @@ requested values and must not be mistaken for independent observations.
 The public Direct CLI machine surface includes:
 
 - `manifest`, `capabilities`, and `list-resources`;
-- `identify`, `status`, and `read-errors`;
+- `identify`, `status`, `readback-advanced`, and `read-errors`;
 - `configure-sine`, `configure-square`, `configure-ramp`,
   `configure-triangle`, `configure-pulse`, `configure-dc`,
   `configure-noise`, and `configure-prbs`;
@@ -98,7 +99,7 @@ Worker events are `ready`, `job_accepted`, `job_started`, `job_finished`,
 exact integer-token `schema_version: 3`, `service: "wavegen-tool"`, `run_id`,
 and a UTC timestamp.
 
-All 16 Worker domain commands are async jobs. Every normal, controllable
+All 17 Worker domain commands are async jobs. Every normal, controllable
 termination emits `job_finished` with `state`, boolean `ok`, and required
 `result` and `error`. The terminal timestamp is fixed and shared with the
 HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and

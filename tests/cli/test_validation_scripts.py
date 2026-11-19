@@ -455,6 +455,15 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     assert {case["channel"] for case in inventory} == set(channels)
     assert all(case["required"] for case in inventory)
     assert {case["name"] for case in inventory} <= set(report["planned_cases"])
+    assert "readback-advanced" not in {case["name"] for case in inventory}
+    for case in inventory:
+        for step in case["steps"]:
+            if "--verify-readback" in step["arguments"]:
+                assert step["advanced_expected"]["advanced_mode"] != "CW"
+    assert next(
+        case for case in inventory
+        if case["name"] == "ch1/list-transition-cw-recovery"
+    )["steps"][-1]["advanced_expected"]["advanced_mode"] == "CW"
     transition = next(case for case in inventory if case["name"] == "ch1/list-transition-cw-recovery")
     assert [step["arguments"][0] for step in transition["steps"]] == [
         "configure-sine-list-sweep", "configure-square-list-sweep",

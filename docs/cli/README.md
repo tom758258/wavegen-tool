@@ -279,6 +279,25 @@ uv run wavegen-tool status `
 
 Options are `--simulate`, `--channel`, `--resource`, `--backend`, and `--json`.
 
+### `readback-advanced`
+
+Inspect the **currently active** Advanced Mode settings, without reconfiguring
+the instrument. The response includes `advanced_mode` and `settings`. When no
+Advanced Mode is enabled it returns `CW` with an empty settings object.
+Unknown or conflicting instrument responses fail rather than returning CW.
+
+```powershell
+uv run wavegen-tool readback-advanced --resource "$env:WAVEGEN_TOOL_RESOURCE" --channel 1 --json
+uv run wavegen-tool readback-advanced --simulate --model keysight-33512b --channel 2 --json
+```
+
+This is a read-only configuration inspection, not a waveform measurement or a
+comparison with a previous request. It never sets output, trigger, or waveform
+parameters. The `--simulate` Direct CLI command starts a fresh simulator on
+each invocation; use a persistent Worker simulator to test readback after a
+separate simulated configure job. The existing `--verify-readback` remains
+the opt-in configure-and-compare operation.
+
 ### `read-errors`
 
 Read and drain the instrument system error queue through one identified
@@ -819,7 +838,7 @@ is serving; it does not mean that physical hardware is connected or identified.
 
 The authoritative Worker command set is:
 
-- `identify`, `status`, and `read-errors`;
+- `identify`, `status`, `readback-advanced`, and `read-errors`;
 - `configure-sine`, `configure-square`, `configure-ramp`,
   `configure-triangle`, `configure-pulse`, `configure-dc`, `configure-noise`,
   and `configure-prbs`;
@@ -831,7 +850,7 @@ The Worker does not expose Direct CLI resource listing, `trigger`,
 any other unlisted command. Worker command names use kebab-case and request
 argument fields use snake_case.
 
-`status`, all listed `configure-*` commands, and `output` accept optional
+`status`, `readback-advanced`, all listed `configure-*` commands, and `output` accept optional
 integer `channel`, defaulting to 1. Core validates the model-specific channel
 count. The two-channel 33510B and 33512B hardware-free paths accept Channels 1
 and 2; 33512B Product Live also admits both channels. The one-channel 33521B
@@ -840,7 +859,7 @@ Selected-channel Worker results retain the canonical Core `channel` field.
 
 Live Worker write safety is narrower than Direct CLI invocation:
 
-- identify/status/read-errors do not require `allow_output_writes`;
+- identify/status/read-errors/readback-advanced do not require `allow_output_writes`;
 - `configure-*` requires Worker startup with `--allow-output-writes`;
 - output-off is always allowed;
 - output-on requires both `--allow-output-writes` and per-request

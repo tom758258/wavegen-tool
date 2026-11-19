@@ -411,6 +411,83 @@ function New-ValidationRunDirectory {
     }
 }
 
+
+function Get-AdvancedOption {
+    param([string[]]$Arguments, [string]$Flag)
+    $index = [array]::IndexOf($Arguments, $Flag)
+    if ($index -lt 0 -or $index + 1 -ge $Arguments.Count) { return $null }
+    return $Arguments[$index + 1]
+}
+
+function Get-AdvancedReadbackExpectation {
+    param([string[]]$Arguments)
+    $settings = @{}
+    $mode = $null
+    $modulations = @(
+        @{ flag = '--am-depth'; name = 'AM'; field = 'depth_percent'; freq = '--am-frequency' },
+        @{ flag = '--fm-deviation'; name = 'FM'; field = 'deviation_hz'; freq = '--fm-frequency' },
+        @{ flag = '--pm-deviation-deg'; name = 'PM'; field = 'deviation_deg'; freq = '--pm-frequency' },
+        @{ flag = '--fsk-hop-frequency'; name = 'FSK'; field = 'hop_frequency_hz'; freq = '--fsk-rate' },
+        @{ flag = '--bpsk-phase-shift-deg'; name = 'BPSK'; field = 'phase_shift_deg'; freq = '--bpsk-rate' },
+        @{ flag = '--pwm-deviation-s'; name = 'PWM'; field = 'deviation_s'; freq = '--pwm-frequency' },
+        @{ flag = '--sum-amplitude-percent'; name = 'SUM'; field = 'amplitude_percent'; freq = '--sum-frequency' }
+    )
+    foreach ($mod in $modulations) {
+        $value = Get-AdvancedOption $Arguments $mod.flag
+        if ($null -eq $value) { continue }
+        $mode = $mod.name
+        if ($mode -eq 'AM' -and (Get-AdvancedOption $Arguments '--am-type') -eq 'dssc') { $mode = 'AM-DSSC' }
+        $settings.source = 'internal'
+        $settings[$mod.field] = [double]$value
+        $freq = Get-AdvancedOption $Arguments $mod.freq
+        if ($null -ne $freq) {
+            $field = if ($mod.name -in @('FSK', 'BPSK')) { 'rate_hz' } else { 'internal_frequency_hz' }
+            $settings[$field] = [double]$freq
+        }
+        break
+    }
+    if ($null -eq $mode -and '--gated-burst' -in $Arguments) {
+        $mode = 'BURST'
+        $settings.burst_mode = 'gated'
+        $settings.gate_polarity = [string](Get-AdvancedOption $Arguments '--gate-polarity')
+    } elseif ($null -eq $mode -and '--burst-count' -in $Arguments) {
+        $mode = 'BURST'
+        $settings.burst_mode = 'counted'
+        $settings.count = [int](Get-AdvancedOption $Arguments '--burst-count')
+        $trigger = Get-AdvancedOption $Arguments '--burst-trigger-source'
+        if ($null -eq $trigger) { $trigger = 'immediate' }
+        $settings.trigger_source = $trigger
+        $period = Get-AdvancedOption $Arguments '--burst-period-s'
+        if ($null -ne $period) { $settings.period_s = [double]$period }
+        $timer = Get-AdvancedOption $Arguments '--burst-trigger-timer-s'
+        if ($null -ne $timer) { $settings.trigger_timer_s = [double]$timer }
+        $slope = Get-AdvancedOption $Arguments '--burst-trigger-slope'
+        if ($null -ne $slope) { $settings.trigger_slope = $slope }
+    } elseif ($null -eq $mode -and $Arguments[0] -like '*-list-sweep') {
+        $mode = 'LIST'
+        $frequencies = Get-AdvancedOption $Arguments '--frequencies-hz'
+        $settings.frequencies_hz = @($frequencies.Split(',') | ForEach-Object { [double]$_ })
+        $dwell = Get-AdvancedOption $Arguments '--dwell-s'
+        if ($null -ne $dwell) { $settings.dwell_s = [double]$dwell }
+        $trigger = Get-AdvancedOption $Arguments '--trigger-source'
+        $settings.trigger_source = if ($null -ne $trigger) { $trigger } else { 'immediate' }
+    } elseif ($null -eq $mode -and $Arguments[0] -like '*-sweep') {
+        $mode = 'SWEEP'
+        $settings.spacing = [string](Get-AdvancedOption $Arguments '--spacing')
+        $settings.start_frequency_hz = [double](Get-AdvancedOption $Arguments '--start-frequency-hz')
+        $settings.stop_frequency_hz = [double](Get-AdvancedOption $Arguments '--stop-frequency-hz')
+        $settings.sweep_time_s = [double](Get-AdvancedOption $Arguments '--sweep-time-s')
+        $trigger = Get-AdvancedOption $Arguments '--trigger-source'
+        $settings.trigger_source = if ($null -ne $trigger) { $trigger } else { 'immediate' }
+        foreach ($pair in @(@('--hold-time-s', 'hold_time_s'), @('--return-time-s', 'return_time_s'), @('--trigger-timer-s', 'trigger_timer_s'))) {
+            $value = Get-AdvancedOption $Arguments $pair[0]
+            if ($null -ne $value) { $settings[$pair[1]] = [double]$value }
+        }
+    }
+    if ($null -eq $mode) { $mode = 'CW' }
+    return [pscustomobject]@{ advanced_mode = $mode; settings = $settings }
+}
+
 function Get-FullValidationInventory {
     param([Parameter(Mandatory = $true)][int[]]$Channels)
 
@@ -588,6 +665,11 @@ function Get-FullValidationInventory {
             if ($recipe.family -eq 'list-sweep' -and $command -notlike '*-list-sweep') { continue }
             $step.arguments = @($step.arguments) + @('--verify-readback')
             $step.result['readback_verified'] = $true
+            $step | Add-Member -NotePropertyName advanced_expected -NotePropertyValue (Get-AdvancedReadbackExpectation -Arguments $step.arguments)
+        }
+        if ($recipe.name -eq 'list-transition-cw-recovery') {
+            $last = $recipe.steps[-1]
+            $last | Add-Member -NotePropertyName advanced_expected -NotePropertyValue (Get-AdvancedReadbackExpectation -Arguments $last.arguments)
         }
     }
     foreach ($channel in $Channels) {

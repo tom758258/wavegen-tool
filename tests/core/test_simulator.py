@@ -37,6 +37,7 @@ from wavegen_tool_core import (
     configure_triangle_sweep,
     identify_instrument,
     list_resources,
+    query_advanced_mode,
     query_status,
     send_bus_trigger,
     set_output,
@@ -1432,6 +1433,12 @@ def test_advanced_mode_readback_verifies_simulated_settings(
 
     assert result.output_state == "off"
     assert state.ch1.output_enabled is False
+    current = query_advanced_mode(
+        factory.resource_name, resource_manager_factory=factory
+    )
+    assert current.advanced_mode != "CW"
+    assert current.settings
+    assert state.ch1.output_enabled is False
 
 
 def test_advanced_mode_readback_respects_selected_channel() -> None:
@@ -1450,3 +1457,22 @@ def test_advanced_mode_readback_respects_selected_channel() -> None:
     assert result.channel == 2
     assert state.ch2.am_enabled is True
     assert state.ch1.am_enabled is False
+
+def test_independent_advanced_readback_ch2_and_cw_state():
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+    configure_sine(
+        factory.resource_name, 1000, 0.1, am=AMConfig(10, 35),
+        channel=2, resource_manager_factory=factory,
+    )
+    one = query_advanced_mode(
+        factory.resource_name, channel=1, resource_manager_factory=factory
+    )
+    two = query_advanced_mode(
+        factory.resource_name, channel=2, resource_manager_factory=factory
+    )
+    assert one.advanced_mode == "CW" and one.settings == {}
+    assert two.advanced_mode == "AM"
+    assert two.settings["depth_percent"] == 35
+    assert state.ch1.am_enabled is False
+    assert state.ch2.am_enabled is True

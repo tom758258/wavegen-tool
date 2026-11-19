@@ -5932,3 +5932,69 @@ def test_advanced_mode_burst_count_readback_is_exact(reported_count, should_fail
     assert "SOURce1:BURSt:NCYCles?" in session.queries
     assert "OUTPut1 ON" not in session.writes
     assert session.close_calls == manager.close_calls == 1
+
+@pytest.mark.parametrize(
+    ("enabled", "expected_mode"),
+    [(None, "CW"), ("AM", "AM")],
+)
+def test_independent_advanced_readback_only_queries_active_mode(enabled, expected_mode):
+    replies = {
+        f"SOURce1:{key}:STATe?": "1" if key == enabled else "0"
+        for key in ("AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM", "BURSt")
+    }
+    replies["SOURce1:FREQuency:MODE?"] = "CW"
+    if enabled == "AM":
+        replies.update({
+            "SOURce1:AM:SOURce?": "INT",
+            "SOURce1:AM:INTernal:FUNCtion?": "SIN",
+            "SOURce1:AM:INTernal:FREQuency?": "10",
+            "SOURce1:AM:DEPTh?": "50",
+            "SOURce1:AM:DSSC?": "0",
+        })
+    session = FakeSession(responses_by_command=replies)
+    manager = FakeManager(session)
+    result = visa_module.query_advanced_mode(
+        USB_RESOURCE, resource_manager_factory=RecordingFactory(manager)
+    )
+    assert result.advanced_mode == expected_mode
+    if enabled == "AM":
+        assert result.settings["depth_percent"] == 50.0
+        assert result.settings["source"] == "internal"
+    else:
+        assert result.settings == {}
+        assert all("DEPTh?" not in query for query in session.queries)
+    assert session.writes == []
+    assert session.close_calls == manager.close_calls == 1
+
+
+def test_independent_advanced_readback_fails_ambiguous_and_invalid_mode():
+    replies = {
+        f"SOURce1:{key}:STATe?": "1" if key in {"AM", "FM"} else "0"
+        for key in ("AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM", "BURSt")
+    }
+    replies["SOURce1:FREQuency:MODE?"] = "CW"
+    session = FakeSession(responses_by_command=replies)
+    with pytest.raises(StatusQueryError, match="ambiguous"):
+        visa_module.query_advanced_mode(
+            USB_RESOURCE, resource_manager_factory=RecordingFactory(FakeManager(session))
+        )
+    assert session.writes == []
+    replies["SOURce1:AM:STATe?"] = "wrong"
+    with pytest.raises(StatusQueryError, match="unknown value"):
+        visa_module.query_advanced_mode(
+            USB_RESOURCE,
+            resource_manager_factory=RecordingFactory(
+                FakeManager(FakeSession(responses_by_command=replies))
+            ),
+        )
+
+
+def test_independent_advanced_readback_query_timeout_does_not_write():
+    session = FakeSession(query_errors_by_command={
+        "SOURce1:AM:STATe?": TimeoutError(),
+    })
+    with pytest.raises(StatusQueryError, match="failed or timed out"):
+        visa_module.query_advanced_mode(
+            USB_RESOURCE, resource_manager_factory=RecordingFactory(FakeManager(session))
+        )
+    assert session.writes == []

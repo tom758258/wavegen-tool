@@ -248,6 +248,35 @@ function Assert-FullReadback {
     }
 }
 
+function Assert-AdvancedModeReadback {
+    param($Payload, $Expected)
+    if ($Payload.advanced_mode -cne $Expected.advanced_mode) {
+        throw "Advanced Mode independent readback returned $($Payload.advanced_mode), expected $($Expected.advanced_mode)."
+    }
+    foreach ($key in $Expected.settings.Keys) {
+        if ($key -notin $Payload.settings.PSObject.Properties.Name) {
+            throw "Missing Advanced Mode setting: $key."
+        }
+        $wanted = $Expected.settings[$key]
+        $actual = $Payload.settings.$key
+        if ($wanted -is [array]) {
+            $values = @($actual)
+            if ($values.Count -ne $wanted.Count) { throw "Readback list length mismatch: $key." }
+            for ($i = 0; $i -lt $wanted.Count; $i++) {
+                if (-not (Test-CloseNumber -Actual ([double]$values[$i]) -Expected ([double]$wanted[$i]) -AbsoluteTolerance 0.000000000001 -RelativeTolerance 0.0001)) {
+                    throw "Readback list mismatch: $key."
+                }
+            }
+        } elseif ($wanted -is [string]) {
+            if ([string]$actual -cne $wanted) { throw "Readback setting mismatch: $key." }
+        } elseif ($key -eq 'count') {
+            if ($actual -isnot [int] -or $actual -ne $wanted) { throw "Readback count mismatch." }
+        } elseif (-not (Test-CloseNumber -Actual ([double]$actual) -Expected ([double]$wanted) -AbsoluteTolerance 0.000000000001 -RelativeTolerance 0.0001)) {
+            throw "Readback numeric mismatch: $key."
+        }
+    }
+}
+
 function Assert-FullErrorQueue {
     param([string]$Name)
     $payload = Invoke-FullCommand -Name $Name -Arguments @('read-errors', '--max-reads', '20')
@@ -382,6 +411,10 @@ function Invoke-FullLiveCases {
                     $commandChannel = if ($command -eq 'trigger') { 0 } else { $channel }
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
                     Assert-FullReadback -Payload $result -Expected $step.result
+                    if ('advanced_expected' -in $step.PSObject.Properties.Name) {
+                        $advanced = Invoke-FullCommand -Name "$name-advanced-readback" -Arguments @('readback-advanced') -Channel $channel
+                        Assert-AdvancedModeReadback -Payload $advanced -Expected $step.advanced_expected
+                    }
                     $expected = @{ output_state = 'off' }
                     foreach ($key in $step.readback.Keys) { $expected[$key] = $step.readback[$key] }
                     $payload = Invoke-FullCommand -Name "$name-readback" -Arguments @('status') -Channel $channel
