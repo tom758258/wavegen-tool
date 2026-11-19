@@ -8221,6 +8221,8 @@ _READBACK_ENUM_ALIASES = {
     "LIN": "LINEAR",
     "LOG": "LOGARITHMIC",
     "SWE": "SWEEP",
+    "FIX": "CW",
+    "FIXED": "CW",
     "1": "ON",
     "0": "OFF",
 }

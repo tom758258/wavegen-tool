@@ -5934,15 +5934,24 @@ def test_advanced_mode_burst_count_readback_is_exact(reported_count, should_fail
     assert session.close_calls == manager.close_calls == 1
 
 @pytest.mark.parametrize(
-    ("enabled", "expected_mode"),
-    [(None, "CW"), ("AM", "AM")],
+    ("enabled", "expected_mode", "frequency_response"),
+    [
+        (None, "CW", "CW"),
+        (None, "CW", "FIX"),
+        (None, "CW", "FIXED"),
+        ("AM", "AM", "CW"),
+        ("AM", "AM", "FIX"),
+        ("AM", "AM", "FIXED"),
+    ],
 )
-def test_independent_advanced_readback_only_queries_active_mode(enabled, expected_mode):
+def test_independent_advanced_readback_only_queries_active_mode(
+    enabled, expected_mode, frequency_response
+):
     replies = {
         f"SOURce1:{key}:STATe?": "1" if key == enabled else "0"
         for key in ("AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM", "BURSt")
     }
-    replies["SOURce1:FREQuency:MODE?"] = "CW"
+    replies["SOURce1:FREQuency:MODE?"] = frequency_response
     if enabled == "AM":
         replies.update({
             "SOURce1:AM:SOURce?": "INT",

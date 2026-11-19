@@ -1365,26 +1365,28 @@ def test_configure_output_ch2_isolation():
 
 
 @pytest.mark.parametrize(
-    ("configure", "args", "options"),
+    ("configure", "args", "options", "expected_mode"),
     [
-        (configure_sine, (1000, 0.1), {"am": AMConfig(10, 20)}),
-        (configure_sine, (1000, 0.1), {"am": AMConfig(10, 20, "dssc")}),
-        (configure_sine, (1000, 0.1), {"fm": FMConfig(10, 100)}),
-        (configure_sine, (1000, 0.1), {"pm": PMConfig(10, 30)}),
-        (configure_sine, (1000, 0.1), {"fsk": FSKConfig(2000, 10)}),
-        (configure_sine, (1000, 0.1), {"bpsk": BPSKConfig(90, 10)}),
-        (configure_pulse, (1000, 0.1, 0.0001), {"pwm": PWMConfig(10, 0.00002)}),
-        (configure_sine, (1000, 0.1), {"sum": SumConfig(10, 10)}),
-        (configure_sine, (1000, 0.1), {"burst": CountedBurstConfig(3, 0.1)}),
+        (configure_sine, (1000, 0.1), {"am": AMConfig(10, 20)}, "AM"),
+        (configure_sine, (1000, 0.1), {"am": AMConfig(10, 20, "dssc")}, "AM-DSSC"),
+        (configure_sine, (1000, 0.1), {"fm": FMConfig(10, 100)}, "FM"),
+        (configure_sine, (1000, 0.1), {"pm": PMConfig(10, 30)}, "PM"),
+        (configure_sine, (1000, 0.1), {"fsk": FSKConfig(2000, 10)}, "FSK"),
+        (configure_sine, (1000, 0.1), {"bpsk": BPSKConfig(90, 10)}, "BPSK"),
+        (configure_pulse, (1000, 0.1, 0.0001), {"pwm": PWMConfig(10, 0.00002)}, "PWM"),
+        (configure_sine, (1000, 0.1), {"sum": SumConfig(10, 10)}, "SUM"),
+        (configure_sine, (1000, 0.1), {"burst": CountedBurstConfig(3, 0.1)}, "BURST"),
         (
             configure_sine,
             (1000, 0.1),
             {"burst": CountedBurstConfig(3, trigger_source="bus")},
+            "BURST",
         ),
         (
             configure_sine,
             (1000, 0.1),
             {"burst": CountedBurstConfig(3, trigger_source="external")},
+            "BURST",
         ),
         (
             configure_sine,
@@ -1392,34 +1394,39 @@ def test_configure_output_ch2_isolation():
             {"burst": CountedBurstConfig(
                 3, trigger_source="timer", trigger_timer_s=1
             )},
+            "BURST",
         ),
-        (configure_square, (1000, 0.1), {"burst": GatedBurstConfig("inverted")}),
-        (configure_sine_sweep, (1000, 2000, "linear", 1, 0.1), {}),
-        (configure_sine_sweep, (1000, 2000, "logarithmic", 1, 0.1), {}),
+        (configure_square, (1000, 0.1), {"burst": GatedBurstConfig("inverted")}, "BURST"),
+        (configure_sine_sweep, (1000, 2000, "linear", 1, 0.1), {}, "SWEEP"),
+        (configure_sine_sweep, (1000, 2000, "logarithmic", 1, 0.1), {}, "SWEEP"),
         (
             configure_sine_sweep,
             (1000, 2000, "linear", 1, 0.1),
             {"trigger_source": "timer", "trigger_timer_s": 2},
+            "SWEEP",
         ),
         (
             configure_sine_list_sweep,
             ((1000, 2000, 1000), 0.1),
             {"dwell_s": 0.01},
+            "LIST",
         ),
         (
             configure_sine_list_sweep,
             ((2, 5, 8), 0.1),
             {"trigger_source": "bus"},
+            "LIST",
         ),
         (
             configure_prbs,
             (10000, 0.1),
             {"burst": CountedBurstConfig(3, trigger_source="bus")},
+            "BURST",
         ),
     ],
 )
 def test_advanced_mode_readback_verifies_simulated_settings(
-    configure, args, options
+    configure, args, options, expected_mode
 ) -> None:
     state = Simulated33521BState()
     factory = SimulatedResourceManagerFactory(state)
@@ -1436,7 +1443,7 @@ def test_advanced_mode_readback_verifies_simulated_settings(
     current = query_advanced_mode(
         factory.resource_name, resource_manager_factory=factory
     )
-    assert current.advanced_mode != "CW"
+    assert current.advanced_mode == expected_mode
     assert current.settings
     assert state.ch1.output_enabled is False
 
