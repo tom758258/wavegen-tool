@@ -92,6 +92,10 @@ the sequence document comes from a local JSON file.
 
 Use the selected-channel memory catalog and free-point query for metadata.
 Uploads require the selected output to be off and do not change the selection.
+For USB waveform uploads, Core adds time based on the encoded binary block size
+to the VISA timeout for both the write and the completion query. Core restores
+the original timeout before reading back the upload or handling a transfer
+failure.
 Configure and clear operations turn off the selected output. Confirm a clear
 with `confirm_clear=True`. A clear reloads the default Arbitrary waveform.
 Consult the

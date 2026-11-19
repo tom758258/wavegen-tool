@@ -50,31 +50,37 @@ def fake_visa(monkeypatch):
     sessions = []
 
     class FakeSession(SimulatedResource):
+        def __init__(self):
+            super().__init__(state)
+            self.io_timeouts = []
+
         def write(self, command):
             commands.append(command)
             return super().write(command)
 
         def query(self, command):
             commands.append(command)
+            self.io_timeouts.append((command, self.timeout))
             return super().query(command)
 
         def write_raw(self, message):
             commands.append(message)
+            self.io_timeouts.append((message, self.timeout))
             return super().write_raw(message)
 
     class FakeManager(SimulatedResourceManager):
         def open_resource(self, _resource_name):
-            session = FakeSession(state)
+            session = FakeSession()
             session.write_termination = "\r\n"
             sessions.append(session)
             return session
 
     monkeypatch.setattr(visa, "create_resource_manager", lambda _backend: FakeManager(state))
 
-    def run(command, **arguments):
+    def run(command, *, resource=None, **arguments):
         commands.clear()
         return run_arbitrary(
-            command, arguments, resource=state.resource_name,
+            command, arguments, resource=resource or state.resource_name,
             support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
         )
 
@@ -111,7 +117,43 @@ def test_binary_upload_uses_instrument_byte_order_without_selecting(
     assert not sessions[-1].writes
 
 
-@pytest.mark.parametrize("failure", ["short write", "SCPI error"])
+@pytest.mark.parametrize(
+    "resource",
+    [
+        pytest.param(None, id="usb"),
+        pytest.param("TCPIP0::192.0.2.10::inst0::INSTR", id="lan"),
+    ],
+)
+def test_upload_timeout_scales_with_binary_size_on_usb(tmp_path, fake_visa, resource):
+    _state, _commands, sessions, run = fake_visa
+    transfer_timeouts = []
+    path = tmp_path / "transfer.csv"
+    for name, sample_count in (("SMALL", 4_096), ("NORMAL", 250_000)):
+        path.write_bytes(b"0\n" * sample_count)
+        run("upload-arbitrary", name=name, path=path, resource=resource)
+        session = sessions[-1]
+        write_timeout, completion_timeout = [
+            timeout
+            for message, timeout in session.io_timeouts
+            if isinstance(message, bytes) or message == "*OPC?"
+        ]
+        assert write_timeout == completion_timeout
+        transfer_timeouts.append(write_timeout)
+        assert all(
+            timeout == visa.DEFAULT_TIMEOUT_MS
+            for command, timeout in session.io_timeouts
+            if isinstance(command, str) and command != "*OPC?"
+        )
+        assert session.timeout == visa.DEFAULT_TIMEOUT_MS
+    small, normal = transfer_timeouts
+    if resource is None:
+        assert visa.DEFAULT_TIMEOUT_MS < small < normal
+        assert normal >= 15_000
+    else:
+        assert small == normal == visa.DEFAULT_TIMEOUT_MS
+
+
+@pytest.mark.parametrize("failure", ["short write", "completion timeout", "SCPI error"])
 def test_upload_failure_reports_uncertain_memory_without_clearing(
     csv_path,
     fake_visa,
@@ -125,8 +167,17 @@ def test_upload_failure_reports_uncertain_memory_without_clearing(
         count = original(session, message)
         if failure == "SCPI error":
             state.error_queue.append('-222,"Value out of range"')
-            return count
-        return count - 1
+        return count - 1 if failure == "short write" else count
+
+    if failure == "completion timeout":
+        original_query = SimulatedResource.query
+
+        def failed_completion(session, command):
+            if command == "*OPC?":
+                raise TimeoutError
+            return original_query(session, command)
+
+        monkeypatch.setattr(SimulatedResource, "query", failed_completion)
 
     monkeypatch.setattr(SimulatedResource, "write_raw", failed_write)
     with pytest.raises(VisaWriteError, match="memory state may be uncertain"):
@@ -134,6 +185,7 @@ def test_upload_failure_reports_uncertain_memory_without_clearing(
     assert state.ch1.arbitrary_points["WAVE"] == 8
     assert sum(isinstance(message, bytes) for message in commands) == 1
     assert all("CLEar" not in write for write in sessions[-1].writes)
+    assert sessions[-1].timeout == visa.DEFAULT_TIMEOUT_MS
     assert sessions[-1].closed
 
 

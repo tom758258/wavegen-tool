@@ -21,6 +21,7 @@ from wavegen_tool_core.errors import (
 )
 from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_PRODUCT
 from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
+from wavegen_tool_core.transport import USB_TRANSPORT
 from wavegen_tool_core.visa import (
     SYSTEM_ERROR_QUERY,
     IdentificationResult,
@@ -42,6 +43,9 @@ from wavegen_tool_core.visa import (
 
 _MIN_POINTS = 8
 _MAX_POINTS = 16_000_000
+# The 33500B datasheet measures a 1 MSa USB binary transfer at 13 s.
+# Budget about 40 s for that amount of Float32 data, plus the session's base timeout.
+_USB_UPLOAD_BYTES_PER_MS = 100
 _MAX_CSV_ROW_BYTES = 256
 _MAX_SEQUENCE_BYTES = 128 * 1024
 _MAX_SEQUENCE_STEPS = 512
@@ -281,9 +285,13 @@ def _require_no_error(session: VisaSession, *, before_write: bool = False) -> No
         raise WaveformVerificationError(f"Instrument {condition} SCPI error {error.code}.")
 
 
-def _complete_write(session: VisaSession) -> None:
+def _wait_for_completion(session: VisaSession) -> None:
     if session.query("*OPC?").strip() != "1":
         raise WaveformVerificationError("Arbitrary operation did not confirm completion.")
+
+
+def _complete_write(session: VisaSession) -> None:
+    _wait_for_completion(session)
     _require_no_error(session)
 
 
@@ -292,11 +300,14 @@ def _require_output_off(session: VisaSession, channel: int) -> None:
         raise WaveformVerificationError("Selected output must be OFF for this Arbitrary operation.")
 
 
-def _write_block(session: VisaSession, prefix: str, payload: bytes) -> None:
+def _binary_block(session: VisaSession, prefix: str, payload: bytes) -> bytes:
     length = str(len(payload))
     header = f"{prefix}#{len(length)}{length}".encode("ascii")
     termination = (session.write_termination or "\n").encode("ascii")
-    message = header + payload + termination
+    return header + payload + termination
+
+
+def _write_block(session: VisaSession, message: bytes) -> None:
     if session.write_raw(message) != len(message):
         raise OSError("Short VISA binary write.")
 
@@ -360,6 +371,8 @@ def _upload(
     channel: int,
     name: str,
     samples: array,
+    *,
+    transport: str,
 ) -> None:
     free = _count_query(session, f"{source}:DATA:VOLatile:FREe?")
     allocated_points = (len(samples) + 127) // 128 * 128
@@ -376,8 +389,20 @@ def _upload(
         samples.byteswap()
     _require_no_error(session, before_write=True)
     try:
-        _write_block(session, f"{source}:DATA:ARBitrary {name},", samples.tobytes())
-        _complete_write(session)
+        message = _binary_block(session, f"{source}:DATA:ARBitrary {name},", samples.tobytes())
+        original_timeout = session.timeout if transport == USB_TRANSPORT else None
+        try:
+            if original_timeout is not None:
+                # The CSV point limit also bounds the extra time.
+                bytes_per_ms = _USB_UPLOAD_BYTES_PER_MS
+                transfer_ms = (len(message) + bytes_per_ms - 1) // bytes_per_ms
+                session.timeout = original_timeout + transfer_ms
+            _write_block(session, message)
+            _wait_for_completion(session)
+        finally:
+            if original_timeout is not None:
+                session.timeout = original_timeout
+        _require_no_error(session)
         if _count_query(session, f'{source}:DATA:ATTRibute:POINts? "{name}"') != len(samples):
             raise WaveformVerificationError("Uploaded point count did not match.")
     except Exception as exc:
@@ -426,7 +451,10 @@ def _apply_playback(
     _require_output_off(session, channel)
     if sequence is not None:
         try:
-            _write_block(session, f"{source}:DATA:SEQuence ", sequence.descriptor(name, waveforms))
+            message = _binary_block(
+                session, f"{source}:DATA:SEQuence ", sequence.descriptor(name, waveforms)
+            )
+            _write_block(session, message)
             _complete_write(session)
         except Exception as exc:
             raise VisaWriteError(
@@ -543,7 +571,7 @@ def run_arbitrary(
                 f"Arbitrary name {name} already exists. Explicitly clear volatile memory before reusing it."
             )
         if samples is not None:
-            _upload(session, source, channel, name, samples)
+            _upload(session, source, channel, name, samples, transport=context.transport)
             result["output_state"] = "off"
         else:
             _apply_playback(session, source, channel, catalog, playback, sequence)
