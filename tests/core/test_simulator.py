@@ -622,8 +622,9 @@ def test_simulator_fails_closed_for_unknown_operations_and_closed_sessions() -> 
     session = manager.open_resource(SIMULATED_33521B_RESOURCE)
     with pytest.raises(ValueError, match="Unsupported simulated SCPI write"):
         session.write("*RST")
+    assert session.query("*OPC?") == "1"
     with pytest.raises(ValueError, match="Unsupported simulated SCPI query"):
-        session.query("*OPC?")
+        session.query("*TST?")
     session.close()
     with pytest.raises(RuntimeError, match="session is closed"):
         session.write("OUTPut1 OFF")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from http.client import HTTPConnection
@@ -277,18 +277,18 @@ class WorkerRuntime:
             self._emit_summary()
         return done
 
-    def request_stop(self) -> None:
-        """Request a cooperative stop without running a domain command."""
+    def request_stop(self, acknowledge: Callable[[], None] | None = None) -> None:
+        """Request a cooperative stop and send any HTTP acknowledgment before shutdown."""
 
-        emit = False
         with self._condition:
             if not self._stop_requested:
                 self._stop_requested = True
                 self._service_status = "stopping"
-                emit = True
                 self._condition.notify_all()
-        if emit:
-            self._emit_event("stop_requested")
+                self._emit_event("stop_requested")
+            # The runner cannot leave its wait loop until the acknowledgment is sent.
+            if acknowledge is not None:
+                acknowledge()
 
     def admit(
         self, command: ValidatedWorkerCommand
@@ -1117,16 +1117,19 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                 ),
             )
             return
-        self.server.runtime.request_stop()
-        self._send_json(
-            202,
-            {
-                "schema_version": WORKER_SCHEMA_VERSION,
-                "status": "accepted",
-                "run_id": self.server.runtime.run_id,
-                "error": None,
-            },
-        )
+
+        def acknowledge() -> None:
+            self._send_json(
+                202,
+                {
+                    "schema_version": WORKER_SCHEMA_VERSION,
+                    "status": "accepted",
+                    "run_id": self.server.runtime.run_id,
+                    "error": None,
+                },
+            )
+
+        self.server.runtime.request_stop(acknowledge)
 
     def _read_json(self, *, allow_empty: bool = False) -> tuple[object, str | None]:
         try:

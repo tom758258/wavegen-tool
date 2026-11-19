@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import http.client
 import json
 import threading
@@ -1130,6 +1131,37 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
     assert events[-1]["ok"] is True and events[-1]["fatal_error"] is None
     assert event_names.count("stop_requested") == 1
     assert event_names.count("job_finished") == 1
+
+
+def test_idle_worker_waits_for_http_stop_acknowledgment(monkeypatch):
+    runtime = WorkerRuntime(_worker_config())
+    sending_response = threading.Event()
+    release_response = threading.Event()
+    send_json = worker_module._WorkerRequestHandler._send_json
+
+    def delay_stop_response(handler, status, payload):
+        if handler.path == "/stop" and status == 202:
+            sending_response.set()
+            assert release_response.wait(timeout=2.0)
+        send_json(handler, status, payload)
+
+    monkeypatch.setattr(worker_module._WorkerRequestHandler, "_send_json", delay_stop_response)
+    runtime.start()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            response = executor.submit(_request, runtime, "POST", "/stop", {})
+            try:
+                assert sending_response.wait(timeout=1.0)
+                assert not runtime.wait(timeout=0.3)
+            finally:
+                release_response.set()
+            assert response.result(timeout=1.0) == (
+                202, {"schema_version": 3, "run_id": runtime.run_id, "status": "accepted", "error": None}
+            )
+            assert runtime.wait(timeout=2.0)
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
 
 
 def test_worker_serialization_keeps_core_channel_field_in_worker_results():
