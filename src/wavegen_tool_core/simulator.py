@@ -1010,6 +1010,8 @@ class SimulatedResource:
             "VOLTage:COUPle?",
         }:
             return "1" if self.state.voltage_coupling else "0"
+        if command == "RATE:COUPle:STATe?":
+            return "0"  # Simulated Arbitrary sample rates are independent.
         if command in {
             "SOURce1:TRACk?",
             "SOURce2:TRACk?",

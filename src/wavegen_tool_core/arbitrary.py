@@ -235,7 +235,7 @@ def _catalog(session: VisaSession, source: str) -> tuple[str, ...]:
         raw = session.query(f"{source}:DATA:VOLatile:CATalog?").strip()
         if len(raw) > _MAX_CATALOG_BYTES or "\n" in raw or "\r" in raw:
             raise ValueError
-        entries = next(csv.reader([raw], strict=True))
+        entries = next(csv.reader([raw], skipinitialspace=True, strict=True))
         if entries == [""]:
             return ()
         if any(not 1 <= len(name) <= 255 or not name.isprintable() for name in entries):
@@ -298,6 +298,17 @@ def _complete_write(session: VisaSession) -> None:
 def _require_output_off(session: VisaSession, channel: int) -> None:
     if _parse_status_output(session.query(f"OUTPut{channel}?")) != "off":
         raise WaveformVerificationError("Selected output must be OFF for this Arbitrary operation.")
+
+
+def _require_sample_rate_uncoupled(session: VisaSession) -> None:
+    try:
+        state = session.query("RATE:COUPle:STATe?").strip().upper()
+    except Exception as exc:
+        raise WaveformVerificationError("Failed to query Arbitrary sample rate coupling.") from exc
+    if state not in {"0", "OFF"}:
+        raise WaveformVerificationError(
+            "Arbitrary sample rate coupling must be confirmed off before configuring playback."
+        )
 
 
 def _binary_block(session: VisaSession, prefix: str, payload: bytes) -> bytes:
@@ -557,6 +568,8 @@ def run_arbitrary(
             )
             return
         _check_independent_channel_guard(session, capabilities, context)
+        if playback is not None and capabilities.channel_count > 1:
+            _require_sample_rate_uncoupled(session)
         if command == "clear-arbitrary-memory":
             _require_no_error(session, before_write=True)
             session.write(f"OUTPut{channel} OFF")

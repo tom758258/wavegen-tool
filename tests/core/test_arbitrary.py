@@ -272,9 +272,49 @@ def test_single_waveform_and_confirmed_clear_keep_channel_isolation(csv_path, fa
     assert state.ch2.selected_arbitrary == DEFAULT_ARBITRARY
 
 
-def test_catalog_resolves_loaded_paths_in_the_selected_channel(csv_path, fake_visa):
+@pytest.mark.parametrize("command", ["configure-arbitrary", "configure-arbitrary-sequence"])
+@pytest.mark.parametrize("response", ["1", "UNKNOWN", None], ids=["on", "unknown", "timeout"])
+def test_playback_rejects_unconfirmed_sample_rate_isolation(
+    csv_path, fake_visa, monkeypatch, command, response
+):
     state, commands, sessions, run = fake_visa
-    loaded = r"USB:\XYZ\A.ARB"
+    run("upload-arbitrary", name="WAVE", path=csv_path, channel=2)
+    state.ch1.active_function = state.ch2.active_function = "ARB"
+    state.ch1.output_enabled = state.ch2.output_enabled = True
+    state.ch1.arbitrary_sample_rate_hz = 40_000
+
+    original = SimulatedResource._query_response
+
+    def query(session, scpi):
+        if scpi == "RATE:COUPle:STATe?":
+            if response is None:
+                raise TimeoutError
+            return response
+        return original(session, scpi)
+
+    monkeypatch.setattr(SimulatedResource, "_query_response", query)
+    arguments = PLAYBACK if command == "configure-arbitrary" else {"document": _sequence()}
+    with pytest.raises(WaveformVerificationError, match="sample rate coupling"):
+        run(command, **arguments, channel=2)
+
+    assert sessions[-1].writes == []
+    assert not any(isinstance(scpi, bytes) for scpi in commands)
+    assert state.ch1.arbitrary_sample_rate_hz == 40_000
+    assert state.ch1.output_enabled and state.ch2.output_enabled
+
+
+def test_catalog_resolves_loaded_paths_in_the_selected_channel(csv_path, fake_visa, monkeypatch):
+    state, commands, sessions, run = fake_visa
+    original = SimulatedResource._query_response
+
+    def query(session, command):
+        response = original(session, command)
+        if command.endswith(":DATA:VOLatile:CATalog?"):
+            return response.replace(',"', ', "')
+        return response
+
+    monkeypatch.setattr(SimulatedResource, "_query_response", query)
+    loaded = r"USB:\Wave Files\A.ARB"
     state.ch2.arbitrary_points[loaded] = 40
     playback = {**PLAYBACK, "name": "a", "channel": 2}
     assert loaded in run("list-arbitrary-memory", channel=2)["names"]

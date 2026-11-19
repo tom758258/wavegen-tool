@@ -90,7 +90,8 @@ request validation and safety rules documented for:
 - selected-channel status, output configuration, and output control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
 
-Core rejects Arbitrary operations in Product Live mode.
+Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
+Core rejects these operations in Product Live mode for all models.
 
 This overview does not remove command-specific limits. An invalid carrier,
 option combination, channel, value, trigger source, or safety state still fails
@@ -102,8 +103,10 @@ exercised on hardware.
 
 On two-channel live instruments, Core requires frequency coupling, voltage
 coupling, Channel 1 tracking, and Channel 2 tracking to be reported off before
-an independent state-changing operation. Core does not disable them
-automatically.
+an independent state-changing operation. In Core's contributor validation mode,
+Arbitrary waveform and sequence playback configuration also require Arbitrary
+sample rate coupling to be reported off on a two-channel instrument. Core does
+not disable coupling or tracking automatically.
 
 Configuration leaves the selected output off. Output-on remains an explicit
 operation. The tool does not use `*RST` as part of normal operation.
