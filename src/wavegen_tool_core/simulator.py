@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import csv
+from dataclasses import dataclass, field as dataclass_field
+import re
 import math
 
 from wavegen_tool_core.capabilities import capabilities_for_model_id
@@ -14,6 +16,7 @@ from wavegen_tool_core.identity import (
 
 
 SIMULATED_33521B_RESOURCE = "USB0::SIM::33521B::INSTR"
+_ARBITRARY_CAPACITY = 1_000_000
 SIMULATED_33521B_IDN = "KEYSIGHT TECHNOLOGIES,33521B,SIM000001,1.0"
 
 
@@ -96,6 +99,20 @@ class SimulatedChannelState:
     burst_count: int = 1
     burst_period_s: float = 1.0
     burst_phase_deg: float = 0.0
+    arbitrary_points: dict[str, int] = dataclass_field(default_factory=dict)
+    arbitrary_sequences: dict[str, tuple[tuple[str, int, str, str, int], ...]] = dataclass_field(
+        default_factory=dict
+    )
+    selected_arbitrary: str | None = None
+    arbitrary_sample_rate_hz: float = 40_000.0
+    arbitrary_sample_advance: str = "SRATe"
+    arbitrary_bus_triggers: int = 0
+
+    @property
+    def arbitrary_free_points(self) -> int:
+        return _ARBITRARY_CAPACITY - sum(
+            (points + 127) // 128 * 128 for points in self.arbitrary_points.values()
+        )
 
 
 class Simulated33521BState:
@@ -482,6 +499,49 @@ class SimulatedResource:
         self.writes.append(command)
         return len(command)
 
+    def write_raw(self, message: bytes) -> int:
+        self._ensure_open()
+        match = re.match(rb'(SOURce[12]:DATA:(ARBitrary ([A-Za-z0-9_]+),|SEQuence ))#([1-9])', message)
+        if match is None:
+            raise ValueError("Unsupported simulated binary command.")
+        header_end = match.end() + int(match[4])
+        size = int(message[match.end():header_end])
+        payload_end = header_end + size
+        termination = (self.write_termination or "\n").encode("ascii")
+        if message[payload_end:] != termination:
+            raise ValueError("Invalid simulated binary block length or termination.")
+        prefix = match[1].decode("ascii").strip()
+        _, channel = self._target_channel_and_state(prefix)
+        if match[3] is not None:
+            name = match[3].decode("ascii")
+            points, remainder = divmod(size, 4)
+            if remainder or points < 8 or (points + 127) // 128 * 128 > channel.arbitrary_free_points:
+                raise ValueError("Invalid simulated Arbitrary upload size.")
+            self._check_arbitrary_duplicate(channel, name)
+            channel.arbitrary_points[name] = points
+        else:
+            name, *fields = next(csv.reader([message[header_end:payload_end].decode("ascii")]))
+            if not fields or len(fields) % 5 or len(fields) > 512 * 5:
+                raise ValueError("Invalid simulated Arbitrary sequence descriptor.")
+            self._check_arbitrary_duplicate(channel, name)
+            steps = []
+            for waveform, count, mode, marker, point in zip(
+                fields[::5], fields[1::5], fields[2::5], fields[3::5], fields[4::5]
+            ):
+                points = channel.arbitrary_points.get(waveform, 0)
+                if not 4 <= int(point) <= points - 3:
+                    raise ValueError("Invalid simulated Arbitrary sequence segment or marker point.")
+                steps.append((waveform, int(count), mode, marker, int(point)))
+            channel.arbitrary_sequences[name] = tuple(steps)
+        self.writes.append(f"{prefix}<binary block>")
+        return len(message)
+
+    @staticmethod
+    def _check_arbitrary_duplicate(channel: SimulatedChannelState, name: str) -> None:
+        names = (*channel.arbitrary_points, *channel.arbitrary_sequences)
+        if any(existing.casefold() == name.casefold() for existing in names):
+            raise ValueError("Duplicate simulated Arbitrary name.")
+
     def query(self, command: str) -> str:
         self._ensure_open()
         response = self._query_response(command)
@@ -513,6 +573,13 @@ class SimulatedResource:
 
     def _apply_write(self, command: str) -> None:
         if command == "*TRG":
+            for channel in self.state.channels.values():
+                if (
+                    channel.output_enabled and channel.active_function == "ARB"
+                    and channel.trigger_source == "bus"
+                    and channel.selected_arbitrary in channel.arbitrary_sequences
+                ):
+                    channel.arbitrary_bus_triggers += 1
             return
         if command in {
             "SOURce1:FUNCtion:PULSe:HOLD WIDTh",
@@ -539,6 +606,24 @@ class SimulatedResource:
 
         ch_num, ch_state = self._target_channel_and_state(command)
         prefix_ch = f"{ch_num}"
+
+        source = f"SOURce{prefix_ch}"
+        if command == f"{source}:DATA:VOLatile:CLEar":
+            ch_state.arbitrary_points.clear()
+            ch_state.arbitrary_sequences.clear()
+            ch_state.selected_arbitrary = None
+            ch_state.arbitrary_bus_triggers = 0
+            return
+        if command.startswith(f"{source}:FUNCtion:ARBitrary "):
+            name = command.split(" ", 1)[1].strip('"')
+            if name not in ch_state.arbitrary_points and name not in ch_state.arbitrary_sequences:
+                raise ValueError("Unknown simulated Arbitrary selection.")
+            ch_state.selected_arbitrary = name
+            ch_state.arbitrary_bus_triggers = 0
+            return
+        if command.startswith(f"{source}:FUNCtion:ARBitrary:SRATe "):
+            ch_state.arbitrary_sample_rate_hz = float(command.rsplit(" ", 1)[1])
+            return
 
         if command == f"SOURce{prefix_ch}:AM:STATe ON":
             ch_state.am_enabled = True
@@ -635,6 +720,8 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:VOLTage:RANGe:AUTO ON": ("autorange_enabled", True),
             f"SOURce{prefix_ch}:VOLTage:UNIT VPP": ("voltage_unit", "VPP"),
             f"SOURce{prefix_ch}:FREQuency MINimum": ("frequency_hz", 0.000001),
+            f"{source}:FUNCtion ARB": ("active_function", "ARB"),
+            f"{source}:FUNCtion:ARBitrary:ADVance SRATe": ("arbitrary_sample_advance", "SRATe"),
             f"SOURce{prefix_ch}:FUNCtion SIN": ("active_function", "SIN"),
             f"SOURce{prefix_ch}:FUNCtion SQUare": ("active_function", "SQUARE"),
             f"SOURce{prefix_ch}:FUNCtion RAMP": ("active_function", "RAMP"),
@@ -889,6 +976,11 @@ class SimulatedResource:
                 return self.state.error_queue.pop(0)
             return '+0,"No error"'
 
+        if command == "*OPC?":
+            return "1"
+        if command == "FORMat:BORDer?":
+            return "NORM"
+
         # Handle coupling & tracking queries:
         if command in {
             "SOURce1:FREQuency:COUPle:STATe?",
@@ -916,7 +1008,21 @@ class SimulatedResource:
         ch_num, ch_state = self._target_channel_and_state(command)
         prefix_ch = f"{ch_num}"
 
+        source = f"SOURce{prefix_ch}"
+        if command == f"{source}:DATA:VOLatile:CATalog?":
+            names = (*ch_state.arbitrary_points, *(f"{name}.seq" for name in ch_state.arbitrary_sequences))
+            return ",".join(f'"{name}"' for name in names)
+        if command == f"{source}:DATA:VOLatile:FREe?":
+            return str(ch_state.arbitrary_free_points)
+        if command.startswith(f"{source}:DATA:ATTRibute:POINts? "):
+            name = command.split(" ", 1)[1].strip('"')
+            return str(ch_state.arbitrary_points[name])
+        if command == f"{source}:FUNCtion:ARBitrary:SRATe? MAXimum":
+            capabilities = capabilities_for_model_id(self.state.model_id)
+            return str(capabilities.max_arbitrary_sample_rate_hz)
+
         responses = {
+            f"{source}:FUNCtion:ARBitrary:SRATe?": _format_number(ch_state.arbitrary_sample_rate_hz),
             f"OUTPut{prefix_ch}?": "1" if ch_state.output_enabled else "0",
             f"SOURce{prefix_ch}:FUNCtion?": ch_state.active_function,
             f"SOURce{prefix_ch}:FREQuency?": _format_number(ch_state.frequency_hz),

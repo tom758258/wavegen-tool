@@ -9,6 +9,11 @@ import sys
 from enum import IntEnum
 from typing import Any, Sequence
 
+from wavegen_tool_core.arbitrary import (
+    ARBITRARY_COMMANDS,
+    read_arbitrary_sequence_file,
+    run_arbitrary,
+)
 from wavegen_tool_core import (
     AMConfig,
     BPSKConfig,
@@ -722,6 +727,38 @@ def _add_list_sweep_arguments(
     )
 
 
+def _add_arbitrary_parsers(subparsers: Any) -> None:
+    help_text = {
+        "upload-arbitrary": "Upload a named CSV waveform to volatile memory.",
+        "configure-arbitrary": "Configure playback of a loaded arbitrary waveform.",
+        "configure-arbitrary-sequence": "Create and configure a native arbitrary sequence.",
+        "list-arbitrary-memory": "List the selected channel's volatile arbitrary memory.",
+        "clear-arbitrary-memory": "Clear all volatile arbitrary data on the selected channel.",
+    }
+    for command, description in help_text.items():
+        parser = subparsers.add_parser(command, help=description, allow_abbrev=False)
+        _add_simulate_argument(parser)
+        _add_channel_argument(parser)
+        parser.add_argument("--resource", help="Explicit VISA resource or WAVEGEN_TOOL_RESOURCE.")
+        parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
+        parser.add_argument("--dry-run", action="store_true", help="Plan without using VISA.")
+        parser.add_argument("--model", choices=_REGISTERED_MODEL_IDS, default=CANONICAL_MODEL_ID)
+        parser.add_argument("--json", action="store_true", dest="json_output")
+        if command in {"upload-arbitrary", "configure-arbitrary"}:
+            parser.add_argument("--name", required=True)
+        if command in {"upload-arbitrary", "configure-arbitrary-sequence"}:
+            kind = "one-column CSV" if command == "upload-arbitrary" else "sequence JSON"
+            parser.add_argument("--file", required=True, help=f"Local {kind} file.")
+        if command == "configure-arbitrary":
+            parser.add_argument("--sample-rate-hz", required=True)
+            parser.add_argument("--amplitude-vpp", required=True)
+            parser.add_argument("--offset-v", default=0)
+            parser.add_argument("--load", choices=("50", "high-z"), default="50")
+        if command == "clear-arbitrary-memory":
+            parser.add_argument("--confirm-clear", action="store_true",
+                                help="Confirm removal of all volatile segments and sequences.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser without touching VISA."""
 
@@ -730,6 +767,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Safely identify and control an explicitly selected waveform generator.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    _add_arbitrary_parsers(subparsers)
 
     identify_parser = subparsers.add_parser(
         "identify",
@@ -2009,7 +2047,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-noise",
         "configure-prbs",
         "configure-output",
-    }
+    } | ARBITRARY_COMMANDS
     validation_only_live_commands = {
         "identify",
         "status",
@@ -2067,7 +2105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         and not args.dry_run
         and not args.simulate
         and args.model != CANONICAL_MODEL_ID
-        and not args.validation_allow_pending_live_support
+        and not getattr(args, "validation_allow_pending_live_support", False)
     ):
         parser.error(
             "non-default --model selection requires --dry-run or --simulate"
@@ -2095,6 +2133,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         and args.resource is None
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
+    if args.command in ARBITRARY_COMMANDS:
+        return _run_arbitrary(args)
     if args.command == "list-resources":
         return _run_list_resources(args)
     if args.command == "configure-sine":
@@ -3518,6 +3558,29 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_arbitrary(args: argparse.Namespace) -> int:
+    def operation() -> dict[str, object]:
+        arguments = {"channel": args.channel}
+        for field in ("name", "sample_rate_hz", "amplitude_vpp", "offset_v", "load", "confirm_clear"):
+            if hasattr(args, field):
+                arguments[field] = getattr(args, field)
+        if args.command == "upload-arbitrary":
+            arguments["path"] = args.file
+        elif args.command == "configure-arbitrary-sequence":
+            arguments["document"] = read_arbitrary_sequence_file(args.file)
+        if args.dry_run:
+            return run_arbitrary(args.command, arguments, model=args.model)
+        resource, factory = (
+            _simulated_target(args.model) if args.simulate else (args.resource, None)
+        )
+        return run_arbitrary(
+            args.command, arguments, resource=resource, backend=args.backend,
+            **_factory_injection(args.simulate, factory),
+        )
+
+    return _run_control(args, operation)
+
+
 def _run_configure_output(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_output_dry_run(args)
@@ -4097,6 +4160,11 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
 
 
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
+    if action in ARBITRARY_COMMANDS:
+        payload = dict(result, success=True, action=action, error=None)
+        if not result["executed"]:
+            payload["mode"] = "dry-run"
+        return payload
     payload = {
         "success": True,
         "action": action,
@@ -4876,7 +4944,7 @@ def _control_error_payload(
         "configure-prbs",
         "configure-output",
         "output",
-    } | _LIST_SWEEP_ACTIONS:
+    } | _LIST_SWEEP_ACTIONS | ARBITRARY_COMMANDS:
         payload["channel"] = channel
     return payload
 
@@ -4895,7 +4963,7 @@ def _control_internal_error_payload(action: str) -> dict[str, object]:
 
 
 def _status_success_payload(result: Any) -> dict[str, object]:
-    return {
+    payload = {
         "success": True,
         "action": "status",
         "channel": getattr(result, "channel", 1),
@@ -4914,6 +4982,9 @@ def _status_success_payload(result: Any) -> dict[str, object]:
         "load": result.load,
         "error": None,
     }
+    if result.function == "ARB":
+        payload["sample_rate_hz"] = result.sample_rate_hz
+    return payload
 
 
 def _error_queue_success_payload(result: Any) -> dict[str, object]:
@@ -5162,6 +5233,21 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
 
 
 def _human_control_success(action: str, result: Any) -> str:
+    if action in ARBITRARY_COMMANDS:
+        lines = [f"{action} {result['status']} on channel {result['channel']}."]
+        for field, label in (
+            ("name", "Name"), ("sample_count", "Samples"), ("step_count", "Steps"),
+            ("sample_rate_hz", "Sample rate (Sa/s)"), ("output_state", "Output"),
+            ("free_points", "Free points"),
+        ):
+            if field in result:
+                lines.append(f"{label}: {result[field]}")
+        if "names" in result:
+            lines.extend(result["names"] or ("Volatile memory is empty.",))
+            if result["catalog_truncated"]:
+                lines.append("Additional catalog entries omitted.")
+        lines.extend(result.get("commands", ()))
+        return "\n".join(lines)
     channel = getattr(result, "channel", 1)
     if action == "trigger":
         heading = "One instrument-wide bus trigger was sent without waiting."
@@ -5646,6 +5732,14 @@ def _human_status_success(result: Any) -> str:
         lines.extend(
             (
                 f"Bit rate: {result.bit_rate_bps:g} bit/s",
+                f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
+                f"Offset: {result.offset_v:g} V",
+            )
+        )
+    elif result.function == "ARB":
+        lines.extend(
+            (
+                f"Sample rate: {result.sample_rate_hz:g} Sa/s",
                 f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
                 f"Offset: {result.offset_v:g} V",
             )

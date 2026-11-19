@@ -721,7 +721,7 @@ def test_live_without_expected_model_defers_model_dependent_validation():
     assert result.arguments["channel"] == 99
 
 
-def test_worker_command_set_is_not_expanded():
+def test_worker_publishes_expected_domain_commands():
     assert worker_commands.SUPPORTED_WORKER_COMMANDS == {
         "identify",
         "status",
@@ -739,6 +739,17 @@ def test_worker_command_set_is_not_expanded():
         "configure-dc",
         "configure-noise",
         "configure-prbs",
+        "configure-sine-list-sweep",
+        "configure-square-list-sweep",
+        "configure-ramp-list-sweep",
+        "configure-triangle-list-sweep",
+        "configure-output",
+        "trigger",
+        "upload-arbitrary",
+        "configure-arbitrary",
+        "configure-arbitrary-sequence",
+        "list-arbitrary-memory",
+        "clear-arbitrary-memory",
         "output",
     }
 
@@ -757,3 +768,65 @@ def test_worker_advanced_readback_is_readonly_and_has_no_dry_run():
             worker_mode="live", allow_output_writes=False,
         )
     assert raised.value.code == "unsupported_command"
+
+
+@pytest.mark.parametrize(("command", "arguments"), [
+    ("trigger", {}),
+    ("configure-output", {"polarity": "inverted"}),
+    ("configure-sine-list-sweep", {"frequencies_hz": [2, 5], "amplitude_vpp": 1}),
+    ("upload-arbitrary", {"name": "WAVE", "path": None}),
+    ("configure-arbitrary", {"name": "WAVE", "sample_rate_hz": 1000, "amplitude_vpp": 1}),
+    ("configure-arbitrary-sequence", {"document": {}}),
+    ("clear-arbitrary-memory", {"confirm_clear": True}),
+])
+def test_new_worker_write_commands_require_live_authorization(command, arguments, tmp_path):
+    if command == "upload-arbitrary":
+        arguments = dict(arguments, path=str(tmp_path / "wave.csv"))
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload(command, arguments), worker_mode="live", allow_output_writes=False,
+        )
+    assert error.value.code == "live_write_not_allowed"
+
+
+@pytest.mark.parametrize(("command", "arguments"), [
+    ("trigger", {"channel": 1}),
+    ("upload-arbitrary", {"name": "WAVE", "path": "relative.csv"}),
+    ("upload-arbitrary", {"name": "WAVE", "path": "relative.csv", "samples": [0] * 8}),
+    ("configure-arbitrary-sequence", {"document": "sequence.json"}),
+    ("clear-arbitrary-memory", {"confirm_clear": 1}),
+    ("configure-dc", {"voltage_v": 1, "verify_readback": True}),
+    ("configure-sine", {"frequency_hz": 100, "amplitude_vpp": 1, "verify_readback": True}),
+    ("configure-sine", {"frequency_hz": 100, "amplitude_vpp": 1, "am": {"unknown": True}}),
+])
+def test_new_worker_fields_reject_unsupported_shapes(command, arguments):
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload(command, arguments), worker_mode="live", allow_output_writes=True,
+        )
+    assert error.value.code == "invalid_arguments"
+
+
+def test_memory_listing_worker_live_admission_is_read_only():
+    request = validate_worker_command_request(
+        _payload("list-arbitrary-memory", {"channel": 2}),
+        worker_mode="live", allow_output_writes=False,
+    )
+    assert request.arguments == {"channel": 2}
+
+
+def test_worker_reuses_core_for_incompatible_advanced_groups():
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload(
+                "configure-sine",
+                {
+                    **_sine_arguments(),
+                    "am": {"modulation_frequency_hz": 200, "depth_percent": 10},
+                    "burst": {"mode": "gated"},
+                },
+                context={"mode": "simulate", "planning_model_id": "keysight-33521b"},
+            ),
+            worker_mode="simulate", allow_output_writes=False,
+        )
+    assert error.value.code == "invalid_arguments"

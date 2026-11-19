@@ -4620,3 +4620,32 @@ def test_cli_independent_readback_rejects_ch2_on_33521b(capsys):
     assert status == ExitCode.CLI_USAGE
     assert payload["success"] is False
     assert payload["advanced_mode"] is None
+
+
+def test_arbitrary_cli_local_files_and_confirmation(tmp_path, capsys):
+    csv_path = tmp_path / "wave.csv"
+    csv_path.write_bytes(("0\r\n" * 8).encode("utf-8-sig"))
+    assert main(["upload-arbitrary", "--name", "WAVE", "--file", str(csv_path), "--dry-run", "--json"]) == 0
+    uploaded = json.loads(capsys.readouterr().out)
+    assert uploaded["action"] == "upload-arbitrary" and uploaded["mode"] == "dry-run"
+    assert uploaded["sample_count"] == 8 and uploaded["executed"] is False
+    assert "path" not in uploaded
+
+    sequence_path = tmp_path / "sequence.json"
+    sequence_path.write_text(json.dumps({
+        "version": 1, "name": "SEQ", "sample_rate_hz": 1e6, "amplitude_vpp": 1,
+        "trigger_source": "external", "trigger_slope": "negative",
+        "steps": [{"waveform": "WAVE", "play_control": "onceWaitTrig"}],
+    }), encoding="utf-8")
+    assert main(["configure-arbitrary-sequence", "--file", str(sequence_path), "--dry-run", "--json"]) == 0
+    planned = json.loads(capsys.readouterr().out)
+    assert planned["trigger_source"] == "external"
+    assert planned["trigger_slope"] == "negative"
+    assert planned["step_count"] == 1 and planned["output_state"] == "off"
+
+    assert main(["clear-arbitrary-memory", "--simulate", "--json"]) == ExitCode.CLI_USAGE
+    rejected = json.loads(capsys.readouterr().out)
+    assert rejected["success"] is False
+    assert "explicit confirmation" in rejected["error"]
+    assert main(["clear-arbitrary-memory", "--simulate", "--confirm-clear", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["output_state"] == "off"

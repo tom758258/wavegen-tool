@@ -146,7 +146,11 @@ from wavegen_tool_core.visa import (
     set_output,
 )
 
+from wavegen_tool_core.arbitrary import read_arbitrary_sequence_file, run_arbitrary
+
 __all__ = [
+    "read_arbitrary_sequence_file",
+    "run_arbitrary",
     "AMConfig",
     "BPSKConfig",
     "BusTriggerResult",

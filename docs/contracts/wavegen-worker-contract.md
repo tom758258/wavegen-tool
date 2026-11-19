@@ -64,7 +64,7 @@ does not expand Product Live support. Unknown context fields are rejected.
 
 ## Supported Commands
 
-All 17 domain commands accepted by `POST /command` are `async_job` commands
+All 28 domain commands accepted by `POST /command` are `async_job` commands
 under `common.async_jobs` contract version 1. Manifest declares
 `execution.model="multi_job"` and `execution.context_binding="per_command"`,
 with this feature and no duplicate commands table. Cancellation and streaming
@@ -89,14 +89,22 @@ Supported commands are:
 - `configure-dc`
 - `configure-noise`
 - `configure-prbs`
+- `configure-sine-list-sweep`
+- `configure-square-list-sweep`
+- `configure-ramp-list-sweep`
+- `configure-triangle-list-sweep`
+- `configure-output`
 - `output`
+- `trigger`
+- `upload-arbitrary`
+- `configure-arbitrary`
+- `configure-arbitrary-sequence`
+- `list-arbitrary-memory`
+- `clear-arbitrary-memory`
 
-`list-resources`, arbitrary SCPI, and waveform, burst, or sequence commands
-not listed above are unsupported. List Sweep is also unsupported.
-
-In `dry_run` context, all twelve `configure-*` commands are supported.
-`identify`, `status`, `read-errors`, `readback-advanced`, and `output` do not receive invented
-dry-run behavior.
+Dry-run accepts every `configure-*` command and the Arbitrary upload, list,
+and clear commands. Submit `trigger` in live or simulate mode. It sends an
+instrument-wide Bus trigger and accepts an empty arguments object.
 
 The read-only `readback-advanced` command accepts an optional channel
 (default 1), requires no `allow_output_writes` authorization, and returns
@@ -111,8 +119,8 @@ are rejected.
 
 `identify` does not allow argument fields.
 
-`status`, `readback-advanced`, all twelve `configure-*` commands, and `output` accept optional
-`channel`, defaulting to integer `1`. Worker admission requires a non-boolean
+`status`, `readback-advanced`, `output`, all `configure-*` commands, and the
+Arbitrary upload, list, and clear commands accept optional `channel`, defaulting to integer `1`. Worker admission requires a non-boolean
 positive integer. Core owns the supported channel domain and model-specific
 channel count: 33510B and 33512B admit Channels 1 and 2, while 33521B rejects
 Channel 2. The Worker does not maintain a model/channel allowlist.
@@ -161,6 +169,52 @@ Sweep numeric ranges, spacing, trigger source, and SCPI planning rules are
 owned by the existing Core `dry_run_*_sweep` functions. The Worker does not
 duplicate those rules.
 
+Ordinary sweeps accept `trigger_source` (default `"immediate"`) and
+`trigger_timer_s` for Timer. List Sweeps use `frequencies_hz` (a JSON array)
+and the same voltage, phase, load and carrier options as their ordinary
+sweep counterparts. With Immediate, supply `dwell_s`. With Bus, omit it.
+
+Static advanced options are nested JSON objects. Sine, Square, Ramp, and
+Triangle accept `am`, `fm`, `pm`, `fsk`, `bpsk`, `sum`, and `burst`.
+Pulse accepts `am`, `pwm`, `sum`, and `burst`. PRBS accepts `burst`.
+Core validates which combinations the carrier supports.
+
+| Field | Object members |
+| --- | --- |
+| `am` | `modulation_frequency_hz`, `depth_percent`, optional `am_type` (`"normal"` or `"dssc"`) |
+| `fm` | `modulation_frequency_hz`, `deviation_hz` |
+| `pm` | `modulation_frequency_hz`, `deviation_deg` |
+| `fsk` | `hop_frequency_hz`, `rate_hz` |
+| `bpsk` | `phase_shift_deg`, `rate_hz` |
+| `pwm` | `modulation_frequency_hz`, `deviation_s` |
+| `sum` | `modulation_frequency_hz`, `amplitude_percent` |
+| `burst` (Counted) | `mode: "counted"`, `count`, optional `period_s`, `trigger_source`, `trigger_timer_s`, `trigger_slope` |
+| `burst` (Gated) | `mode: "gated"`, optional `polarity` |
+
+`verify_readback` is an optional boolean for these static advanced
+configurations, ordinary sweeps and List Sweeps. Successful live or simulated
+verification reports `readback_verified: true` in the terminal result.
+Dry-run validates and plans the configuration only.
+
+`configure-output` accepts partial updates to `load`, `polarity`,
+`voltage_limit_low`, `voltage_limit_high`, `voltage_limits_enabled`,
+and `autorange_enabled`. The last two are booleans.
+
+| Arbitrary command | Arguments in addition to the optional `channel` |
+| --- | --- |
+| `upload-arbitrary` | `name`, `path` as an absolute Worker-host-local CSV path |
+| `configure-arbitrary` | `name`, `sample_rate_hz`, `amplitude_vpp`, optional `offset_v` (default 0) and `load` (default `"50"`) |
+| `configure-arbitrary-sequence` | `document` as a JSON object using the [sequence format](../cli/README.md#arbitrary-waveforms-and-sequences) |
+| `list-arbitrary-memory` | None |
+| `clear-arbitrary-memory` | Exact boolean `confirm_clear: true` |
+
+Upload admission checks the path shape. The background job opens and validates
+the CSV, so HTTP 202 indicates acceptance and the terminal job result reports
+the outcome. Sequence input is supplied directly in `document`. Upload
+results expose metadata such as name and sample count. Memory listing
+reports `names`, `free_points`, and `catalog_truncated`. Dry-run does
+not inspect device memory or verify references to loaded waveforms.
+
 `output` requires `enabled`, which must be a boolean. Optional
 `confirm_output`, when present, must also be a boolean. `confirm_output` is an
 admission safety field and is not passed to Core.
@@ -169,9 +223,13 @@ admission safety field and is not passed to Core.
 
 The following safety gate applies only when `context.mode` is `live`:
 
-- `identify`, `status`, `read-errors`, and `readback-advanced` do not require
+- Read-only commands, including `list-arbitrary-memory`, are available without
   `allow_output_writes`.
-- Every `configure-*` command requires `allow_output_writes=True`.
+- Every `configure-*` command, `trigger`, `upload-arbitrary`, and
+  `clear-arbitrary-memory` require `allow_output_writes=True`.
+- Clear also requires `confirm_clear: true` in live, simulate, and dry-run
+  contexts. It applies to all volatile segments and sequences on the selected
+  channel.
 - `output` with `enabled=false` is always allowed.
 - `output` with `enabled=true` requires both `allow_output_writes=True` and
   `confirm_output=true`.

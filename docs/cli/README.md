@@ -109,7 +109,7 @@ an explicit resource argument.
 
 ### Dry-run
 
-Waveform, sweep, List Sweep, and output-configuration commands accept
+Waveform, sweep, List Sweep, output-configuration, and Arbitrary commands accept
 `--dry-run`. Dry-run uses an exact registered `--model`, runs Core validation,
 and returns the ordered SCPI plan with `executed` false. It does not create a
 VISA resource manager, open a resource, query identity, send SCPI, or change
@@ -634,6 +634,71 @@ Bus-triggered sweeps require a separate `trigger` command after live
 configuration and explicit output-on. Timer sweep timing must accommodate
 sweep, hold, and return time.
 
+## Arbitrary Waveforms and Sequences
+
+33512B supports Arbitrary on Channels 1 and 2, and 33521B supports it on
+Channel 1. Core rejects Arbitrary on the standard 33510B profile. See
+[Supported Models](../core/supported-models.md) for connection scope.
+
+Create a UTF-8 CSV of at least eight samples with one numeric value per row
+and no header. Values must be finite and within `[-1, 1]`. Use a name that
+starts with an ASCII letter and contains at most 12 letters, digits, or
+underscores. Upload with the selected output off, then configure playback
+using the loaded name. The following live examples use the operator-set
+`WAVEGEN_TOOL_RESOURCE`.
+
+```console
+wavegen-tool upload-arbitrary --name WAVE_A --file wave-a.csv
+wavegen-tool list-arbitrary-memory
+wavegen-tool configure-arbitrary --name WAVE_A --sample-rate-hz 1000000 --amplitude-vpp 1
+```
+
+Upload only stores the segment. Configuration selects it and leaves the
+output off. Arb playback uses Sa/s and the instrument's current filter
+settings. Core checks the instrument's free points and accounts for 128-point
+allocation. A duplicate name is rejected. To remove **all** volatile segments
+and sequences on the selected channel, use
+`wavegen-tool clear-arbitrary-memory --confirm-clear`. This also turns off
+the selected output.
+
+Use `configure-arbitrary-sequence --file sequence.json` with a version 1
+document. For example, upload each named segment before applying this
+configuration.
+
+```json
+{
+  "version": 1,
+  "name": "TEST_SEQ",
+  "sample_rate_hz": 1000000,
+  "amplitude_vpp": 1,
+  "offset_v": 0,
+  "load": "50",
+  "trigger_source": "bus",
+  "steps": [
+    {"waveform": "WAVE_A", "play_control": "repeat", "repeat_count": 3},
+    {"waveform": "WAVE_B", "play_control": "onceWaitTrig"},
+    {"waveform": "WAVE_C", "play_control": "repeatTilTrig"}
+  ]
+}
+```
+
+A sequence accepts 1–512 steps. Use `once` for one playback, `repeat` with
+`repeat_count` from 1 to 1,000,000, `onceWaitTrig` to wait after playing, or
+`repeatTilTrig` to repeat until triggered. The marker is fixed to
+`lowAtStart`. For external triggering, set `trigger_source` to `"external"`
+and optionally set `trigger_slope` to `"negative"` or `"positive"`
+(default). With Bus, an explicit `wavegen-tool trigger` sends the
+instrument-wide trigger. Turn the output on only through the separate
+`output` command.
+
+Use `--dry-run` to validate local input and inspect the plan without VISA.
+Memory availability and loaded references are checked when executing against a
+device or simulator. For several simulated operations sharing a volatile
+catalog, use the Worker in simulate mode because each Direct CLI
+`--simulate` invocation starts a fresh simulator. In Worker requests, pass
+CSV as an absolute Worker-host path in `arguments.path` and submit the
+Sequence object in `arguments.document`.
+
 ## Frequency List Sweep
 
 The Direct CLI provides:
@@ -674,8 +739,7 @@ uv run wavegen-tool configure-sine-list-sweep `
 
 Square List Sweep adds duty cycle; Ramp List Sweep adds symmetry. Pulse, PRBS,
 arbitrary, External, Timer, and Manual-triggered lists, per-point dwell, list
-files, stored lists, and markers are outside the Direct CLI surface. List Sweep
-is not a Worker command.
+files, stored lists, and custom List Sweep markers are outside the Direct CLI surface.
 
 ## Output and Trigger
 
@@ -836,34 +900,16 @@ Worker startup validates admission but does not open a live resource or
 identify an instrument. A `ready` lifecycle event means the loopback HTTP plane
 is serving; it does not mean that physical hardware is connected or identified.
 
-The authoritative Worker command set is:
+See the [Worker contract](../contracts/wavegen-worker-contract.md) for the 28
+domain commands and their request fields. Worker command names use kebab-case
+and request argument fields use snake_case. Selected-channel results retain
+Core's integer `channel`, defaulting to 1. A Bus `trigger` applies instrument-wide.
 
-- `identify`, `status`, `readback-advanced`, and `read-errors`;
-- `configure-sine`, `configure-square`, `configure-ramp`,
-  `configure-triangle`, `configure-pulse`, `configure-dc`, `configure-noise`,
-  and `configure-prbs`;
-- the four ordinary sine/square/ramp/triangle sweep commands;
-- `output`.
-
-The Worker does not expose Direct CLI resource listing, `trigger`,
-`configure-output`, List Sweep, arbitrary SCPI, modulation/burst commands, or
-any other unlisted command. Worker command names use kebab-case and request
-argument fields use snake_case.
-
-`status`, `readback-advanced`, all listed `configure-*` commands, and `output` accept optional
-integer `channel`, defaulting to 1. Core validates the model-specific channel
-count. The two-channel 33510B and 33512B hardware-free paths accept Channels 1
-and 2; 33512B Product Live also admits both channels. The one-channel 33521B
-rejects Channel 2. `identify` and `read-errors` do not accept `channel`.
-Selected-channel Worker results retain the canonical Core `channel` field.
-
-Live Worker write safety is narrower than Direct CLI invocation:
-
-- identify/status/read-errors/readback-advanced do not require `allow_output_writes`;
-- `configure-*` requires Worker startup with `--allow-output-writes`;
-- output-off is always allowed;
-- output-on requires both `--allow-output-writes` and per-request
-  `confirm_output=true`.
+Live waveform configuration, trigger, Arbitrary upload, and memory clear
+require Worker startup with `--allow-output-writes`. Clear also requires
+`confirm_clear: true` in the request. Output-on requires both
+`--allow-output-writes` and `confirm_output: true`. Read-only commands and
+explicit output-off are available without the startup flag.
 
 The Worker has one active job slot. A second request is rejected as `busy`, or
 as `stopping` after a cooperative stop request.

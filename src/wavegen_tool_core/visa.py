@@ -238,6 +238,9 @@ class VisaSession(Protocol):
     def write(self, command: str) -> object:
         """Send one state-changing command."""
 
+    def write_raw(self, message: bytes) -> int:
+        """Send one complete binary message and return bytes written."""
+
     def control_ren(self, mode: RENLineOperation) -> None:
         """Control the VISA remote-enable line."""
 
@@ -289,6 +292,13 @@ class StatusResult:
     load: str
     channel: int = 1
     bit_rate_bps: float | None = None
+
+
+@dataclass(frozen=True)
+class ArbitraryStatusResult(StatusResult):
+    """Status of an arbitrary waveform or sequence."""
+
+    sample_rate_hz: float | None = None
 
 
 @dataclass(frozen=True)
@@ -1609,6 +1619,11 @@ def query_status(
                                 function_queries = STATUS_NOISE_QUERIES
                             elif function == "PRBS":
                                 function_queries = STATUS_PRBS_QUERIES
+                            elif function == "ARB":
+                                function_queries = (
+                                    "SOURce1:FUNCtion:ARBitrary:SRATe?",
+                                    *STATUS_FREQUENCY_AMPLITUDE_QUERIES[1:],
+                                )
                             else:
                                 function_queries = STATUS_FREQUENCY_AMPLITUDE_QUERIES
                             function_queries = tuple(
@@ -1679,7 +1694,15 @@ def query_status(
                                     if bit_rate_query in responses
                                     else None
                                 )
-                                result = StatusResult(
+                                status_type = StatusResult
+                                specific_fields = {}
+                                if function == "ARB":
+                                    status_type = ArbitraryStatusResult
+                                    specific_fields["sample_rate_hz"] = _parse_status_number(
+                                        responses[f"SOURce{selected_channel}:FUNCtion:ARBitrary:SRATe?"],
+                                        "sample rate",
+                                    )
+                                result = status_type(
                                     resource=resource_name,
                                     backend=backend_selection.name,
                                     transport=transport,
@@ -1699,6 +1722,7 @@ def query_status(
                                     load=_parse_status_load(responses[load_query]),
                                     channel=selected_channel,
                                     bit_rate_bps=bit_rate_bps,
+                                    **specific_fields,
                                 )
                             except StatusQueryError as exc:
                                 primary_error = exc.attach_context(

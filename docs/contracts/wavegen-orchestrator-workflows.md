@@ -34,7 +34,7 @@ The Worker has one active job slot. Orchestrators must handle `busy` and
 
 Manifest uses schema 2, declares Worker `v3-only` with `schema_versions=[3]`,
 `execution.model="multi_job"`, `execution.context_binding="per_command"`, and
-`common.async_jobs` contract version 1. The 17 domain commands are explicitly
+`common.async_jobs` contract version 1. The 28 domain commands are explicitly
 `async_job` in the Worker contract; no Manifest commands table is duplicated.
 Runtime features are fixed and match this declaration. No cancellation or
 streaming is adopted.

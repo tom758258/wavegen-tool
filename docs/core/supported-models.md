@@ -23,6 +23,10 @@ does not alter the default Product policy or make the model Product Live.
 Evidence handling and support decisions are documented in
 [Contributing](../CONTRIBUTING.md).
 
+Arbitrary playback and native sequences are available for 33512B (160 MSa/s)
+and 33521B (250 MSa/s). Actual limits depend on the instrument's filter and
+volatile memory availability. The standard 33510B profile rejects Arbitrary.
+
 ## Exact Live Identity
 
 Core recognizes these manufacturer fields:
@@ -83,6 +87,8 @@ request validation and safety rules documented for:
 - supported AM, FM, PM, FSK, BPSK, PWM, and Sum carrier combinations;
 - Counted Burst and Gated Burst on supported carriers;
 - sine, square, ramp, and triangle ordinary and List Sweeps;
+- selected-channel Arbitrary upload, playback configuration, sequence
+  configuration, and volatile memory operations;
 - selected-channel status, output configuration, and output control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
 
@@ -108,8 +114,7 @@ The Direct CLI exposes the broader Core-backed waveform, modulation, burst,
 sweep, List Sweep, output, trigger, and diagnostic surface documented in the
 [CLI guide](../cli/README.md).
 
-The local Worker is a narrower adapter surface, not a second model support
-matrix. It uses Core's registered models for dry-run and simulator planning and
+The local Worker uses Core's registered models for dry-run and simulator planning and
 Core's Product policy for live admission. Therefore 33512B and 33521B are
 Product Live within the existing Worker command surface, while 33510B remains
 hardware-free only.
