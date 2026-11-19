@@ -773,6 +773,15 @@ function Invoke-FullCommand {
     param($Name, $Arguments, [int]$Channel)
     $command = $Arguments[0]
     if ($command -eq 'trigger') { throw 'External case must use a physical trigger' }
+    if ($command -eq 'readback-advanced') {
+        return [pscustomobject]@{
+            advanced_mode = 'BURST'
+            settings = [pscustomobject]@{
+                burst_mode = 'counted'; count = 3
+                trigger_source = 'external'; trigger_slope = 'positive'
+            }
+        }
+    }
     if ($script:operatorAnswer -eq 'status-timeout' -and $command -eq 'status' -and $script:outputs[1] -eq 'on') {
         throw [TimeoutException]::new('Status query timed out.')
     }

@@ -235,7 +235,7 @@ foreach ($targetProfile in $targets) {
                             $cw = Invoke-WavegenJson -Name "$name-advanced-cw" -CliArguments $cwArgs -ArtifactDirectory (Join-Path $targetDirectory (New-SafeCaseName "$name-advanced-cw"))
                             if ($cw.Process.exit_code -ne 0 -or $null -ne $cw.ParseError -or
                                 $cw.Payload.success -ne $true -or $cw.Payload.advanced_mode -cne 'CW' -or
-                                @($cw.Payload.settings.PSObject.Properties.Name).Count -ne 0) {
+                                $cw.Payload.settings.PSObject.Properties.Count -ne 0) {
                                 throw 'Independent Advanced Mode simulator CW readback failed.'
                             }
                         }
