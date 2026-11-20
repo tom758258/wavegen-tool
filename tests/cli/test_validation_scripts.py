@@ -963,7 +963,7 @@ def test_trigger_validation_guard_keeps_pending_model_out_of_product(monkeypatch
 
 def test_full_readback_accepts_instrument_function_spellings(artifact_root):
     result = _run_powershell_test(artifact_root, r'''
-foreach ($pair in @(@('SIN', 'SINUSOID'), @('SQU', 'SQUARE'), @('PULS', 'PULSE'), @('NOIS', 'NOISE'), @('TRI', 'TRIANGLE'))) {
+foreach ($pair in @(@('SIN', 'SINUSOID'), @('SQU', 'SQUARE'), @('PULS', 'PULSE'), @('NOIS', 'NOISE'), @('TRI', 'TRIANGLE'), @('ARB', 'ARB'))) {
     foreach ($spelling in $pair) {
         Assert-FullReadback -Payload ([pscustomobject]@{ function = $spelling }) -Expected @{ function = $pair[0] }
     }

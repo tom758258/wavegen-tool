@@ -239,7 +239,7 @@ function Assert-FullReadback {
         if ($key -notin $Payload.PSObject.Properties.Name -or $null -eq $Payload.$key) { throw "Missing readback: $key." }
         $value = $Expected[$key]
         if ($key -eq 'function') {
-            $aliases = @{ SIN = @('SIN', 'SINUSOID'); SQU = @('SQU', 'SQUARE'); RAMP = @('RAMP'); TRI = @('TRI', 'TRIANGLE'); PULS = @('PULS', 'PULSE'); DC = @('DC'); NOIS = @('NOIS', 'NOISE'); PRBS = @('PRBS') }
+            $aliases = @{ SIN = @('SIN', 'SINUSOID'); SQU = @('SQU', 'SQUARE'); RAMP = @('RAMP'); TRI = @('TRI', 'TRIANGLE'); PULS = @('PULS', 'PULSE'); DC = @('DC'); NOIS = @('NOIS', 'NOISE'); PRBS = @('PRBS'); ARB = @('ARB') }
             if ([string]$Payload.$key -cnotin $aliases[$value]) { throw "Unexpected readback: $key." }
         } elseif ($value -is [bool]) {
             if ($Payload.$key -isnot [bool] -or $Payload.$key -ne $value) { throw "Unexpected value: $key." }
