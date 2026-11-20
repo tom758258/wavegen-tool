@@ -497,6 +497,37 @@ def test_run_directory_layout_is_created_under_tmp_tests(artifact_root: Path) ->
     assert REPO_ROOT / ".tmp_tests" in run_root.parents
 
 
+def test_minimal_publication_removes_nested_private_arbitrary_fixtures(
+    artifact_root: Path,
+) -> None:
+    # Synthetic CSV/JSON inputs must not make successful minimal publication fail.
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH, PRIVACY_PATH)
+        + f"$run = New-ValidationRunDirectory -RepoRoot {_ps_quote(REPO_ROOT)} "
+        + f"-BaseRoot {_ps_quote(artifact_root)}; "
+        + "$fixtures = Join-Path $run.Private 'fixtures'; "
+        + "$null = New-Item -ItemType Directory -Force -Path $fixtures; "
+        + "Write-Utf8NoBomText -LiteralPath (Join-Path $fixtures 'wave.csv') -Text '0.25'; "
+        + "Write-Utf8NoBomText -LiteralPath (Join-Path $fixtures 'sequence.json') -Text '{}'; "
+        + "$report = [pscustomobject]@{ status = 'PASS'; suite = 'full'; cases = @() }; "
+        + f"$published = Publish-ValidationArtifacts -Report $report -Run $run -RepoRoot {_ps_quote(REPO_ROOT)} "
+        + "-SummaryText 'Synthetic no-hardware validation'; "
+        + "if (-not $published) { throw 'Nested fixtures blocked safe publication'; }; "
+        + "@{ root = $run.Root; status = $report.status } | ConvertTo-Json -Compress"
+    )
+    payload = json.loads(result.stdout)
+    run = Path(payload["root"])
+    assert payload["status"] == "PASS"
+    assert not (run / "private").exists()
+    assert {item.name for item in (run / "shareable").iterdir()} == {
+        "report.json", "summary.md",
+    }
+    report = json.loads((run / "shareable" / "report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "PASS"
+    assert report["private_raw_artifacts_retained"] is False
+    assert report["redaction_applied"] is True
+
+
 def test_publication_failure_removes_partial_evidence(artifact_root: Path) -> None:
     result = _run_powershell(
         _dot_source(HELPERS_PATH, PRIVACY_PATH)
