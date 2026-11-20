@@ -387,6 +387,20 @@ def test_explicit_smoke(artifact_root, fake_git):
     assert "Output ON will not be used" in result.stdout
 
 
+
+def _preflight_diagnostics(artifact_root: Path) -> str:
+    # Only sanitized, shareable failure reasons enter CI assertion output.
+    reports = sorted((artifact_root / "_preflight").glob("run_*/shareable/report.json"))
+    if not reports:
+        return " (no preflight shareable report)"
+    report = json.loads(reports[-1].read_text(encoding="utf-8"))
+    failures = [
+        {"name": case["name"], "failure_reasons": case.get("failure_reasons", [])}
+        for case in report["cases"] if case["status"] != "PASS"
+    ]
+    return " preflight failures=" + json.dumps(failures[:16], ensure_ascii=False)
+
+
 @pytest.mark.parametrize("model,channels", [
     ("33521b", [1]), ("33512b", [1, 2]), ("33510b", [1, 2]),
 ])
@@ -407,7 +421,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         LIVE_SCRIPT, artifact_root, "-Target", f"keysight-{model}", "-Suite", "full",
         "-Connection", "usb", "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly",
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr + _preflight_diagnostics(artifact_root)
     assert not marker.exists()
     run = _only_run(artifact_root)
     report = _read_report(run)
@@ -539,7 +553,7 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         "-Suite", "full", "-Modes", mode, "-Connection", "usb",
         "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly",
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr + _preflight_diagnostics(artifact_root)
     report = _read_report(_only_run(artifact_root))
     assert expected in report["planned_cases"]
     assert unexpected not in report["planned_cases"]
