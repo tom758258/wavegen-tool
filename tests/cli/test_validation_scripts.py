@@ -84,6 +84,7 @@ def _run_script(
         errors="replace",
         input=stdin,
         check=False,
+        timeout=180,
     )
 
 
@@ -661,7 +662,7 @@ def test_preflight_reference_environment_is_full_only(artifact_root, monkeypatch
         command += " -OutputRoot " + quote(artifact_root) + "; exit $LASTEXITCODE"
         result = subprocess.run(
             [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+            cwd=REPO_ROOT, capture_output=True, text=True, check=False, timeout=180,
         )
     if suite == "full":
         assert result.returncode == 2
@@ -691,7 +692,7 @@ def _run_powershell_test(artifact_root, body):
     )
     result = subprocess.run(
         [POWERSHELL, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(harness)],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False, timeout=180,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return json.loads(result.stdout.split("RESULT:", 1)[1])
