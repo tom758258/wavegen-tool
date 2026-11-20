@@ -22,7 +22,7 @@ def _ps_quote(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _run_powershell(script: str, *, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+def _run_powershell(script: str, *, check: bool = True, timeout: int = 180) -> subprocess.CompletedProcess[str]:
     if POWERSHELL is None:
         pytest.skip("Windows PowerShell is unavailable")
     result = subprocess.run(
