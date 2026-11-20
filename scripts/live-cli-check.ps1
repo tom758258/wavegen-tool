@@ -763,6 +763,10 @@ if ($Suite -eq 'full' -and -not $PlanOnly) {
     Write-Host "  - No reset, preset or recall is performed."
 }
 Write-Host "  - Coupling or tracking is not changed automatically."
+if ($Suite -eq 'full' -and 'arbitrary' -in $applicableModes) {
+    Write-Host '  - Arbitrary Clear permanently removes ALL volatile waveforms and sequences on the selected channel.'
+    Write-Host '  - In Real Live, each Clear case requires a separate typed CLEAR confirmation.'
+}
 
 if ($PlanOnly) {
     Write-Host ""
