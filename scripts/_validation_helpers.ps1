@@ -525,12 +525,14 @@ function New-ArbitraryValidationFixtures {
     [void][IO.Directory]::CreateDirectory($Directory)
     $token = [guid]::NewGuid().ToString('N').Substring(0, 7).ToUpperInvariant()
     $names = @{}
-    foreach ($key in @('A', 'B', 'C', 'D', 'E', 'F')) { $names[$key] = "WG${key}_$token" }
+    foreach ($key in @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')) { $names[$key] = "WG${key}_$token" }
     $csv = Join-Path $Directory 'wave.csv'
     Write-Utf8NoBomText -LiteralPath $csv -Text ("0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n")
+    $idleCsv = Join-Path $Directory 'idle.csv'
+    Write-Utf8NoBomText -LiteralPath $idleCsv -Text ("0`n" * 16)
     $bus = Join-Path $Directory 'sequence-bus.json'
     $external = Join-Path $Directory 'sequence-external.json'
-    $busOnce = Join-Path $Directory 'sequence-bus-once.json'
+    $busFunctional = Join-Path $Directory 'sequence-bus-functional.json'
     $common = @{ version = 1; sample_rate_hz = 1000000; amplitude_vpp = 0.1; offset_v = 0; load = '50' }
     $busDocument = $common.Clone()
     $busDocument.name = "WGSB_$token"
@@ -541,21 +543,30 @@ function New-ArbitraryValidationFixtures {
         @{ waveform = $names.B; play_control = 'onceWaitTrig' },
         @{ waveform = $names.C; play_control = 'repeatTilTrig' }
     )
-    $busOnceDocument = $common.Clone()
-    $busOnceDocument.name = "WGSO_$token"
-    $busOnceDocument.trigger_source = 'bus'
-    $busOnceDocument.steps = @(@{ waveform = $names.F; play_control = 'once' })
-    Write-Utf8NoBomText -LiteralPath $busOnce -Text ($busOnceDocument | ConvertTo-Json -Depth 6 -Compress)
+    $busFunctionalDocument = $common.Clone()
+    $busFunctionalDocument.name = "WGSO_$token"
+    $busFunctionalDocument.sample_rate_hz = 1600
+    $busFunctionalDocument.trigger_source = 'bus'
+    $busFunctionalDocument.steps = @(
+        @{ waveform = $names.G; play_control = 'onceWaitTrig' },
+        @{ waveform = $names.F; play_control = 'repeat'; repeat_count = 200 }
+    )
+    Write-Utf8NoBomText -LiteralPath $busFunctional -Text ($busFunctionalDocument | ConvertTo-Json -Depth 6 -Compress)
     $externalDocument = $common.Clone()
     $externalDocument.name = "WGSE_$token"
     $externalDocument.trigger_source = 'external'
     $externalDocument.trigger_slope = 'positive'
-    $externalDocument.steps = @(@{ waveform = $names.D; play_control = 'once' })
+    $externalDocument.sample_rate_hz = 1600
+    $externalDocument.steps = @(
+        @{ waveform = $names.H; play_control = 'onceWaitTrig' },
+        @{ waveform = $names.D; play_control = 'repeat'; repeat_count = 200 }
+    )
     Write-Utf8NoBomText -LiteralPath $bus -Text ($busDocument | ConvertTo-Json -Depth 6 -Compress)
     Write-Utf8NoBomText -LiteralPath $external -Text ($externalDocument | ConvertTo-Json -Depth 6 -Compress)
     return [pscustomobject]@{
-        csv = $csv; bus = $bus; busOnce = $busOnce; external = $external
+        csv = $csv; idleCsv = $idleCsv; bus = $bus; busFunctional = $busFunctional; external = $external
         nameA = $names.A; nameB = $names.B; nameC = $names.C; nameD = $names.D; nameE = $names.E; nameF = $names.F
+        nameG = $names.G; nameH = $names.H
     }
 }
 
@@ -737,6 +748,8 @@ function Get-FullValidationInventory {
         $uploadD = New-Step @('upload-arbitrary', '--name', $fixture.nameD, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
         $uploadE = New-Step @('upload-arbitrary', '--name', $fixture.nameE, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
         $uploadF = New-Step @('upload-arbitrary', '--name', $fixture.nameF, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadG = New-Step @('upload-arbitrary', '--name', $fixture.nameG, '--file', $fixture.idleCsv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadH = New-Step @('upload-arbitrary', '--name', $fixture.nameH, '--file', $fixture.idleCsv) @{} @{ sample_count = 16; output_state = 'off' }
         Add-Recipe 'arbitrary-upload-configure' 'arbitrary' @(
             $uploadA,
             (New-Step @('list-arbitrary-memory')),
@@ -753,19 +766,19 @@ function Get-FullValidationInventory {
             (New-Step @('configure-arbitrary-sequence', '--file', $fixture.bus) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 4; trigger_source = 'bus'; output_state = 'off' })
         )
         Add-Recipe 'sequence-bus-functional' 'sequence' @(
-            $uploadF,
-            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.busOnce) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 1; trigger_source = 'bus'; output_state = 'off' }),
+            $uploadG, $uploadF,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.busFunctional) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 2; trigger_source = 'bus'; output_state = 'off' }),
             $outputOn,
             (New-Step @('trigger') @{ output_state = 'on' })
-        ) -Observation @{ expected = 'The one-step native sequence starts after the Bus trigger.'; seconds = 8 }
+        ) -Observation @{ expected = 'Only idle is present before the Bus trigger; after triggering, capture the approximately 100 Hz waveform for about 2 seconds on the scope.'; seconds = 8 }
         Add-Recipe 'sequence-external' 'sequence' @(
-            $uploadD,
-            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.external) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 1; trigger_source = 'external'; output_state = 'off' }),
+            $uploadH, $uploadD,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.external) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 2; trigger_source = 'external'; output_state = 'off' }),
             $outputOn
         ) -Observation @{
             input = 'external-trigger'; idle = 'low'
-            action = 'Send one rising-edge external trigger while observing the native sequence.'
-            expected = 'The single-step native sequence runs only after the external trigger.'
+            action = 'Send one rising-edge external trigger; use a scope single-shot capture for the active waveform.'
+            expected = 'Only idle is present before the external edge; after triggering, capture the approximately 100 Hz waveform for about 2 seconds.'
             seconds = 8
         }
     }
