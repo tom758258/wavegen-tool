@@ -1065,8 +1065,8 @@ requires the operator to type `CLEAR` separately at that exact step.
 | `-Resource` | Not used | Required | Explicit operator-chosen VISA resource, including PlanOnly |
 | `-Backend` | Not used | Optional | `system`; Full requires System VISA |
 | `-PlanOnly` | Not used | Optional switch | No VISA manager, hardware I/O, reset or output |
-| `-Python` | Optional | Optional | `.\\.venv\\Scripts\\python.exe`; Full requires project Python |
-| `-OutputRoot` | Optional | Optional | `.tmp_tests\\cli_preflight` / `.tmp_tests\\cli_live` |
+| `-Python` | Optional | Optional | `.\.venv\Scripts\python.exe`; Full requires project Python |
+| `-OutputRoot` | Optional | Optional | `.tmp_tests\cli_preflight` / `.tmp_tests\cli_live` |
 | `-DebugArtifacts` | Optional | Optional | Off; additional private diagnostics, sanitized public evidence |
 
 `Full` additionally requires Windows PowerShell Desktop and a clean unchanged
@@ -1120,9 +1120,9 @@ Full requires Windows PowerShell, the project `.venv/Scripts/python.exe`,
 identity exactly matches `-Target`. Add `-Suite full` to each command below for
 Full admission. Preflight Full, PlanOnly Full, and Real Full must all pass, with
 all required cases PASS, successful cleanup, outputs confirmed safe OFF, a clean
-final error queue, and successfully generated shareable evidence. This qualifies
-as formal admission evidence for that exact model and revision in the reference
-environment; scripts never promote models. 33510B remains validation-pending.
+final error queue, and successfully generated shareable evidence. For currently admitted Product Live families this is eligible evidence for a
+separate model/revision review, not automatic promotion. Contributor-only
+Arbitrary/Sequence results do not open Product Live; 33510B remains validation-pending.
 See [the full inventory and acceptance rules](../CONTRIBUTING.md#real-live).
 
 ### Hardware-free Preflight

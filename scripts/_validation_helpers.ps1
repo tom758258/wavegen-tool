@@ -525,11 +525,12 @@ function New-ArbitraryValidationFixtures {
     [void][IO.Directory]::CreateDirectory($Directory)
     $token = [guid]::NewGuid().ToString('N').Substring(0, 7).ToUpperInvariant()
     $names = @{}
-    foreach ($key in @('A', 'B', 'C', 'D', 'E')) { $names[$key] = "WG${key}_$token" }
+    foreach ($key in @('A', 'B', 'C', 'D', 'E', 'F')) { $names[$key] = "WG${key}_$token" }
     $csv = Join-Path $Directory 'wave.csv'
     Write-Utf8NoBomText -LiteralPath $csv -Text ("0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n")
     $bus = Join-Path $Directory 'sequence-bus.json'
     $external = Join-Path $Directory 'sequence-external.json'
+    $busOnce = Join-Path $Directory 'sequence-bus-once.json'
     $common = @{ version = 1; sample_rate_hz = 1000000; amplitude_vpp = 0.1; offset_v = 0; load = '50' }
     $busDocument = $common.Clone()
     $busDocument.name = "WGSB_$token"
@@ -540,6 +541,11 @@ function New-ArbitraryValidationFixtures {
         @{ waveform = $names.B; play_control = 'onceWaitTrig' },
         @{ waveform = $names.C; play_control = 'repeatTilTrig' }
     )
+    $busOnceDocument = $common.Clone()
+    $busOnceDocument.name = "WGSO_$token"
+    $busOnceDocument.trigger_source = 'bus'
+    $busOnceDocument.steps = @(@{ waveform = $names.F; play_control = 'once' })
+    Write-Utf8NoBomText -LiteralPath $busOnce -Text ($busOnceDocument | ConvertTo-Json -Depth 6 -Compress)
     $externalDocument = $common.Clone()
     $externalDocument.name = "WGSE_$token"
     $externalDocument.trigger_source = 'external'
@@ -548,8 +554,8 @@ function New-ArbitraryValidationFixtures {
     Write-Utf8NoBomText -LiteralPath $bus -Text ($busDocument | ConvertTo-Json -Depth 6 -Compress)
     Write-Utf8NoBomText -LiteralPath $external -Text ($externalDocument | ConvertTo-Json -Depth 6 -Compress)
     return [pscustomobject]@{
-        csv = $csv; bus = $bus; external = $external
-        nameA = $names.A; nameB = $names.B; nameC = $names.C; nameD = $names.D; nameE = $names.E
+        csv = $csv; bus = $bus; busOnce = $busOnce; external = $external
+        nameA = $names.A; nameB = $names.B; nameC = $names.C; nameD = $names.D; nameE = $names.E; nameF = $names.F
     }
 }
 
@@ -609,7 +615,7 @@ function Get-FullValidationInventory {
         }
         Add-Recipe "static-$wave" 'static' @((New-Step $args $readback $result)) ($wave -eq 'sine')
     }
-    $modes = [ordered]@{
+    $modulations = [ordered]@{
         am = @('--am-frequency', '10', '--am-depth', '20')
         'am-dssc' = @('--am-frequency', '10', '--am-depth', '20', '--am-type', 'dssc')
         fm = @('--fm-frequency', '10', '--fm-deviation', '100')
@@ -619,13 +625,13 @@ function Get-FullValidationInventory {
         pwm = @('--pwm-frequency', '10', '--pwm-deviation-s', '0.00002')
         sum = @('--sum-frequency', '10', '--sum-amplitude-percent', '10')
     }
-    foreach ($mode in $modes.Keys) {
+    foreach ($mode in $modulations.Keys) {
         $carrier = if ($mode -eq 'pwm') { $pulseSharedEdge } else { $sine }
         $modeName = ($mode -split '-')[0]
         $result = @{ "${modeName}_enabled" = $true }
         if ($modeName -eq 'am') { $result.am_type = if ($mode -eq 'am-dssc') { 'dssc' } else { 'normal' } }
         $readback = @{ function = $(if ($mode -eq 'pwm') { 'PULS' } else { 'SIN' }); frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
-        Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modes[$mode]) $readback $result)) ($mode -eq 'am')
+        Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modulations[$mode]) $readback $result)) ($mode -eq 'am')
     }
 
     Add-Recipe 'configure-output' 'output-config' @(
@@ -730,6 +736,7 @@ function Get-FullValidationInventory {
         $uploadC = New-Step @('upload-arbitrary', '--name', $fixture.nameC, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
         $uploadD = New-Step @('upload-arbitrary', '--name', $fixture.nameD, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
         $uploadE = New-Step @('upload-arbitrary', '--name', $fixture.nameE, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadF = New-Step @('upload-arbitrary', '--name', $fixture.nameF, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
         Add-Recipe 'arbitrary-upload-configure' 'arbitrary' @(
             $uploadA,
             (New-Step @('list-arbitrary-memory')),
@@ -743,10 +750,14 @@ function Get-FullValidationInventory {
         )
         Add-Recipe 'sequence-bus' 'sequence' @(
             $uploadB, $uploadC,
-            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.bus) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 4; trigger_source = 'bus'; output_state = 'off' }),
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.bus) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 4; trigger_source = 'bus'; output_state = 'off' })
+        )
+        Add-Recipe 'sequence-bus-functional' 'sequence' @(
+            $uploadF,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.busOnce) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 1; trigger_source = 'bus'; output_state = 'off' }),
             $outputOn,
             (New-Step @('trigger') @{ output_state = 'on' })
-        ) -Observation @{ expected = 'The explicitly triggered native sequence produces the expected waveform progression, including its waits and repeats.'; seconds = 8 }
+        ) -Observation @{ expected = 'The one-step native sequence starts after the Bus trigger.'; seconds = 8 }
         Add-Recipe 'sequence-external' 'sequence' @(
             $uploadD,
             (New-Step @('configure-arbitrary-sequence', '--file', $fixture.external) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 1; trigger_source = 'external'; output_state = 'off' }),

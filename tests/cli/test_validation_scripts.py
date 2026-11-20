@@ -440,7 +440,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     }
     if model != "33510b":
         expected_primary |= {
-            "arbitrary-upload-configure", "arbitrary-clear", "sequence-bus", "sequence-external",
+            "arbitrary-upload-configure", "arbitrary-clear", "sequence-bus", "sequence-bus-functional", "sequence-external",
         }
         if model == "33512b":
             expected_parity.add("arbitrary-upload-configure")
@@ -498,7 +498,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "ch1/burst-bus", "ch1/burst-timer", "ch1/burst-external", "ch1/burst-external-negative",
         "ch1/burst-gated", "ch1/burst-gated-inverted", "ch1/sweep-sine-bus",
         "ch1/sweep-sine-timer", "ch1/list-bus-trigger",
-    } | ({"ch1/sequence-bus", "ch1/sequence-external"} if model != "33510b" else set())
+    } | ({"ch1/sequence-bus-functional", "ch1/sequence-external"} if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
     for private in (USB_RESOURCE, "SYNTHETIC123", str(REPO_ROOT), str(run)):
@@ -547,6 +547,7 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     assert report["visa_io_performed"] is False
     if mode == "arbitrary,sequence":
         assert "ch1/sequence-bus" in report["planned_cases"]
+        assert "ch1/sequence-bus-functional" in report["planned_cases"]
         assert "ch1/sequence-external" in report["planned_cases"]
         clear = next(x for x in report["full_inventory"] if x["name"] == "ch1/arbitrary-clear")
         assert any(step["arguments"][0] == "clear-arbitrary-memory" and
