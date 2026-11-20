@@ -544,4 +544,3 @@ def test_modes_reject_smoke_and_unsupported_capability() -> None:
     assert json.loads(result.stdout) == {
         "smoke_rejected": True, "unsupported_rejected": True,
     }
-

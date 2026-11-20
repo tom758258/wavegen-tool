@@ -4691,4 +4691,3 @@ def test_arbitrary_product_live_remains_blocked_before_visa(monkeypatch, capsys)
         assert result != ExitCode.SUCCESS
         assert payload["success"] is False
         assert payload["error"] is not None
-

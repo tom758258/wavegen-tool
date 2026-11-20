@@ -999,4 +999,3 @@ Write-Output ('RESULT:' + (@{
     assert result["clear_calls"] == 0
     assert result["status"] == "FAIL"
     assert result["cleanup_status"] == "PASS"
-
