@@ -575,3 +575,50 @@ def test_modes_reject_smoke_and_unsupported_capability() -> None:
     assert json.loads(result.stdout) == {
         "smoke_rejected": True, "unsupported_rejected": True,
     }
+
+
+def test_triggered_sequence_fixtures_wait_before_playback(artifact_root: Path) -> None:
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + f"$fixtures = New-ArbitraryValidationFixtures -Directory {_ps_quote(artifact_root / 'fixtures')}; "
+        + "$bus = Get-Content -LiteralPath $fixtures.busFunctional -Raw | ConvertFrom-Json; "
+        + "$external = Get-Content -LiteralPath $fixtures.external -Raw | ConvertFrom-Json; "
+        + "$recipes = @(Get-FullValidationInventory -Channels @(1) -Modes @('sequence') -ArbitraryFixtures $fixtures); "
+        + "$busCase = $recipes | Where-Object name -eq 'ch1/sequence-bus-functional'; "
+        + "$externalCase = $recipes | Where-Object name -eq 'ch1/sequence-external'; "
+        + "@{ bus = $bus; external = $external; "
+        + "idle_samples = @(Get-Content -LiteralPath $fixtures.idleCsv); "
+        + "signal_samples = @(Get-Content -LiteralPath $fixtures.csv); "
+        + "bus_commands = @($busCase.steps | ForEach-Object { $_.arguments[0] }); "
+        + "external_commands = @($externalCase.steps | ForEach-Object { $_.arguments[0] }); "
+        + "bus_step_count = $busCase.steps[2].result.step_count; "
+        + "external_step_count = $externalCase.steps[2].result.step_count; "
+        + "bus_idle_name = $fixtures.nameG; external_idle_name = $fixtures.nameH; "
+        + "bus_signal_name = $fixtures.nameF; external_signal_name = $fixtures.nameD "
+        + "} | ConvertTo-Json -Depth 8 -Compress"
+    )
+    data = json.loads(result.stdout)
+    assert data["idle_samples"] == ["0"] * 16
+    assert any(float(sample) != 0 for sample in data["signal_samples"])
+    assert data["bus_idle_name"] != data["external_idle_name"]
+    assert data["bus_commands"] == [
+        "upload-arbitrary", "upload-arbitrary", "configure-arbitrary-sequence",
+        "output", "trigger",
+    ]
+    assert data["external_commands"] == [
+        "upload-arbitrary", "upload-arbitrary", "configure-arbitrary-sequence",
+        "output",
+    ]
+    assert data["bus_step_count"] == data["external_step_count"] == 2
+    for source, idle_name, signal_name in (
+        ("bus", "bus_idle_name", "bus_signal_name"),
+        ("external", "external_idle_name", "external_signal_name"),
+    ):
+        document = data[source]
+        assert document["trigger_source"] == source
+        assert document["sample_rate_hz"] == 1600
+        assert document["steps"] == [
+            {"waveform": data[idle_name], "play_control": "onceWaitTrig"},
+            {"waveform": data[signal_name], "play_control": "repeat", "repeat_count": 200},
+        ]
+    assert data["external"]["trigger_slope"] == "positive"
