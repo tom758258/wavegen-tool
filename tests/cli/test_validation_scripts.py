@@ -540,6 +540,21 @@ def test_smoke_rejects_modes_before_artifacts(artifact_root):
         assert not list(artifact_root.iterdir())
 
 
+def test_full_preflight_arbitrary_sequence_direct_without_hardware(
+    artifact_root: Path, fake_git,
+) -> None:
+    result = _run_script(
+        PREFLIGHT_SCRIPT, artifact_root, "-Target", "keysight-33521b",
+        "-Suite", "full", "-Modes", "arbitrary,sequence",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = _read_report(_only_run(artifact_root))
+    assert report["status"] == "PASS"
+    assert report["hardware_touched"] is False
+    assert report["visa_io_performed"] is False
+    assert report["selected_modes"] == ["arbitrary", "sequence"]
+
+
 @pytest.mark.parametrize("mode,expected,unexpected", [
     ("static", "ch1/static-sine", "ch1/burst-bus"),
     ("burst,output", "ch1/burst-bus", "ch1/static-sine"),
