@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet("smoke", "full")][string]$Suite = "smoke",
+    [string[]]$Modes = @(),
     [string]$Target = "all",
     [string]$Python = ".\.venv\Scripts\python.exe",
     [switch]$DebugArtifacts,
@@ -74,6 +75,7 @@ function Get-ValidationSummary {
         "",
         "- Result: $($Report.status)",
         "- Suite: $($Report.suite)",
+        "- Selected modes: $($Report.selected_modes -join ', ')",
         "- Validation mode: $($Report.validation_mode)",
         "- Target selection: $($Report.target)",
         "- Hardware touched: false",
@@ -92,6 +94,8 @@ function Get-ValidationSummary {
 }
 
 try {
+    $modesSpecified = $PSBoundParameters.ContainsKey("Modes")
+    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified)
     $targets = @(Resolve-ValidationTargets -Target $Target)
     if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop')) {
         throw 'Full requires Windows PowerShell Desktop on Windows.'
@@ -200,14 +204,28 @@ foreach ($targetProfile in $targets) {
     }
 
     if ($Suite -eq 'full') {
-        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount))) {
+        try {
+            $applicableModes = @(Get-ApplicableValidationModes -Modes $selectedModes -Capabilities $payload.capabilities -RejectUnsupportedArbitrary:($modesSpecified -and $Target -ne 'all'))
+        } catch {
+            Add-ValidationCase -Cases $cases -Name "${modelId}/mode-admission" -Status FAIL -FailureReasons $_.Exception.Message
+            Write-Host ""
+            continue
+        }
+        $fixtures = if (@($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
+            New-ArbitraryValidationFixtures -Directory (Join-Path $targetDirectory 'fixtures')
+        } else { $null }
+        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures)) {
             if ($recipe.channel -notin $channelsTested) { [void]$channelsTested.Add($recipe.channel) }
             $stepIndex = 0
             foreach ($step in $recipe.steps) {
                 $stepIndex += 1
                 $command = $step.arguments[0]
-                $modes = if ($command.StartsWith('configure-')) { @('dry-run', 'simulate') } else { @('simulate') }
-                foreach ($mode in $modes) {
+                $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence')) {
+                    @('dry-run')
+                } elseif ($command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory')) {
+                    @('dry-run', 'simulate')
+                } else { @('simulate') }
+                foreach ($mode in $executionModes) {
                     $name = "${modelId}/$($recipe.name)/step${stepIndex}-$mode"
                     $reasons = @()
                     $invocation = $null
@@ -333,6 +351,7 @@ foreach ($targetProfile in $targets) {
         target_capability_model = $capabilityModel
         channel_count = $channelCount
         channels_tested = @($channelsTested)
+        applicable_modes = $(if ($Suite -eq 'full') { @($applicableModes) } else { @() })
     })
     Write-Host ""
 }
@@ -348,6 +367,8 @@ $summaryCounts = Get-SummaryCounts -Cases $cases
 $status = if ($summaryCounts.failed -eq 0 -and ($Suite -ne "full" -or $summaryCounts.not_applicable -eq 0)) { "PASS" } else { "FAIL" }
 $report = [pscustomobject][ordered]@{
     suite = $Suite
+    selected_modes = if ($Suite -eq 'full') { @($selectedModes) } else { @() }
+    complete_mode_selection = $Suite -eq 'full' -and $selectedModes.Count -eq $script:FullValidationModes.Count
     schema_version = 1
     kind = "cli-preflight"
     status = $status

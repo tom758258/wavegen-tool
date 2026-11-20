@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet("smoke", "full")][string]$Suite = "smoke",
+    [string[]]$Modes = @(),
     [Parameter(Mandatory = $true)]
     [string]$Target,
 
@@ -87,7 +88,7 @@ function Get-PlannedLiveCases {
     param([Parameter(Mandatory = $true)][int[]]$Channels)
 
     if ($Suite -eq 'full') {
-        return @('identity', 'baseline-error-drain') + @($Channels | ForEach-Object { "ch$_/initial-safe-off" }) + @((Get-FullValidationInventory -Channels $Channels).name) + @($Channels | ForEach-Object { "ch$_/final-safe-off" }) + @('final-error-queue')
+        return @('identity', 'baseline-error-drain') + @($Channels | ForEach-Object { "ch$_/initial-safe-off" }) + @($fullInventory.name) + @($Channels | ForEach-Object { "ch$_/final-safe-off" }) + @('final-error-queue')
     }
     $planned = [System.Collections.ArrayList]::new()
     [void]$planned.Add("identity")
@@ -135,6 +136,8 @@ function Get-ValidationSummary {
         "",
         "- Result: $($Report.status)",
         "- Suite: $($Report.suite)",
+        "- Selected modes: $($Report.selected_modes -join ', ')",
+        "- Applicable modes: $($Report.applicable_modes -join ', ')",
         "- Validation mode: $($Report.validation_mode)",
         "- Expected model: $($Report.expected_model)",
         "- Git commit: $($Report.git_head)",
@@ -197,7 +200,7 @@ function Add-RemainingChannelCases {
     )
 
     if ($Suite -eq 'full') {
-        foreach ($recipe in @(Get-FullValidationInventory -Channels $Channels)) {
+        foreach ($recipe in @($fullInventory)) {
             Add-LiveCase -Cases $Cases -Name $recipe.name -Status 'N/A' -FailureReasons $Reason -Evidence (Get-FullCaseEvidence $recipe)
         }
         return
@@ -355,7 +358,7 @@ function Invoke-FullLiveCases {
             catch { $reasons += $_.Exception.Message; $CanRun = $false }
             Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         }
-        foreach ($recipe in @(Get-FullValidationInventory -Channels $Channels)) {
+        foreach ($recipe in @($fullInventory)) {
             $evidence = Get-FullCaseEvidence $recipe
             if (-not $CanRun) {
                 Add-LiveCase -Cases $cases -Name $recipe.name -Status 'N/A' -Evidence $evidence `
@@ -400,6 +403,16 @@ function Invoke-FullLiveCases {
                     $index += 1
                     $name = "$($recipe.name)/step$index"
                     $command = $step.arguments[0]
+                    if ($command -eq 'clear-arbitrary-memory') {
+                        if ([Console]::IsInputRedirected) {
+                            throw 'Arbitrary Clear requires independent interactive confirmation.'
+                        }
+                        Write-Host "WARNING: This clears ALL volatile segments and sequences on CH$channel."
+                        $clearApproval = Read-Host "Type CLEAR to authorize this channel's destructive memory clear"
+                        if ($clearApproval -cne 'CLEAR') {
+                            throw 'Arbitrary Clear was not explicitly authorized; no Clear command was sent.'
+                        }
+                    }
                     $turningOn = $command -eq 'output' -and $step.arguments[2] -eq 'on'
                     if ($turningOn -and -not $observation -and $recipe.family -cne 'output-control') {
                         throw 'Output ON is restricted to output-control and confirmed observation cases.'
@@ -411,6 +424,14 @@ function Invoke-FullLiveCases {
                     $commandChannel = if ($command -eq 'trigger') { 0 } else { $channel }
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
                     Assert-FullReadback -Payload $result -Expected $step.result
+                    if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
+                        $command -eq 'list-arbitrary-memory' -and $index -eq $recipe.steps.Count) {
+                        $uploadArguments = @($recipe.steps[0].arguments)
+                        $uploadedName = $uploadArguments[[array]::IndexOf($uploadArguments, '--name') + 1]
+                        if (@($result.names) -contains $uploadedName) {
+                            throw 'Volatile Clear was not confirmed: the synthetic waveform remains in the catalog.'
+                        }
+                    }
                     if ('advanced_expected' -in $step.PSObject.Properties.Name) {
                         $advanced = Invoke-FullCommand -Name "$name-advanced-readback" -Arguments @('readback-advanced') -Channel $channel
                         Assert-AdvancedModeReadback -Payload $advanced -Expected $step.advanced_expected
@@ -480,6 +501,8 @@ function Invoke-FullLiveCases {
 }
 
 try {
+    $modesSpecified = $PSBoundParameters.ContainsKey("Modes")
+    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified)
     $targetProfile = Resolve-ValidationTarget -Target $Target
     $connectionName = $Connection.Trim().ToLowerInvariant()
     if ($connectionName -notin @("usb", "tcpip")) {
@@ -524,6 +547,9 @@ $expectedModel = [string]$targetProfile.model_id
 $targetCapabilityModel = [string]$targetProfile.model
 $report = [pscustomobject][ordered]@{
     suite = $Suite
+    selected_modes = if ($Suite -eq 'full') { @($selectedModes) } else { @() }
+    applicable_modes = @()
+    complete_mode_selection = $Suite -eq 'full' -and $selectedModes.Count -eq $script:FullValidationModes.Count
     schema_version = 1
     kind = "cli-live-check"
     status = "FAIL"
@@ -562,6 +588,7 @@ $preflightArguments = @(
     '-OutputRoot', (Join-Path $OutputRoot '_preflight')
 )
 if ($DebugArtifacts) { $preflightArguments += '-DebugArtifacts' }
+if ($Suite -eq 'full' -and $modesSpecified) { $preflightArguments += @('-Modes', ($selectedModes -join ',')) }
 $preflightProcess = $null
 try {
     $preflightProcess = Invoke-CapturedCommand -Name 'preflight' -FilePath $powershellPath `
@@ -658,11 +685,30 @@ if ($capabilityReasons.Count -eq 0) {
 }
 
 $channels = @(1..$channelCount)
+try {
+    $applicableModes = if ($Suite -eq 'full') {
+        @(Get-ApplicableValidationModes -Modes $selectedModes -Capabilities $payload.capabilities -RejectUnsupportedArbitrary:($modesSpecified))
+    } else { @() }
+    $fixtures = if ($Suite -eq 'full' -and @($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
+        New-ArbitraryValidationFixtures -Directory (Join-Path $run.Private 'fixtures')
+    } else { $null }
+    $fullInventory = if ($Suite -eq 'full') {
+        @(Get-FullValidationInventory -Channels $channels -Modes $applicableModes -ArbitraryFixtures $fixtures)
+    } else { @() }
+} catch {
+    Add-LiveCase -Cases $cases -Name 'mode-admission' -Status FAIL -FailureReasons $_.Exception.Message
+    $report.cases = @($cases)
+    $report.summary_counts = Get-SummaryCounts -Cases $cases
+    $null = Publish-LiveArtifacts -Report $report -Run $run
+    Write-CompletionSummary -Result FAIL -Run $run
+    exit 2
+}
+$report.applicable_modes = @($applicableModes)
 $plannedCases = @(Get-PlannedLiveCases -Channels $channels)
 $report.channel_count = $channelCount
 $report.channels_planned = $channels
 $report.planned_cases = $plannedCases
-if ($Suite -eq "full") { $report | Add-Member -NotePropertyName full_inventory -NotePropertyValue @(Get-FullValidationInventory -Channels $channels) }
+if ($Suite -eq "full") { $report | Add-Member -NotePropertyName full_inventory -NotePropertyValue @($fullInventory) }
 $resourceDisplay = if ($PlanOnly) {
     Protect-ArtifactText `
         -Text $Resource `
@@ -678,6 +724,7 @@ Write-Host "Wavegen Tool Live CLI Validation"
 Write-Host ""
 Write-Host "Target: $expectedModel"
 Write-Host "Suite: $Suite"
+if ($Suite -eq 'full') { Write-Host "Modes: $($applicableModes -join ', ')" }
 if ($Suite -eq "full") { Write-Host "Reference environment: $($report.reference_environment)" }
 Write-Host "Connection: $connectionName"
 Write-Host "Backend: $backendName"

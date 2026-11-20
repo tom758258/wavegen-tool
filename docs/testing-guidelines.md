@@ -121,8 +121,28 @@ path.
 ## Validation Suite Contracts
 
 Both CLI runners default to `-Suite smoke`; the only other suite is `full`.
+`-Modes` applies only to `-Suite full`; explicitly combining it with Smoke fails
+before artifacts or any VISA I/O. Full defaults to every applicable feature mode.
+Available families: `static`, `modulation`, `burst`, `sweep`, `list-sweep`,
+`output`, `arbitrary`, `sequence`. Selecting a subset runs only those recipes
+and the shared identity, safe-off, error-queue and cleanup checks. An explicitly
+requested unsupported Arbitrary/Sequence mode for one model fails closed;
+all-target preflight skips those recipes for models lacking the Core capability.
+A subset PASS is not full-scope Product Live admission evidence.
+
 Smoke remains a representative Sine sanity check and never enables output:
 `smoke PASS != all implemented features validated`.
+
+When adding or changing an instrument feature, explicitly review its directly
+relevant Core/CLI/Worker checks and whether existing Preflight, PlanOnly and
+Real Live recipes cover it. Update the affected validation recipes or document
+why they remain deliberately deferred; lack of hardware does not prevent
+preparing bounded recipes with fake VISA and hardware-free plans. Test the
+changed boundary, shared integration and necessary safety gates rather than
+adding unrelated permanent matrices. Contributor-only Arbitrary/Sequence
+validation does not grant Product Live permission. A Clear recipe lists the
+potentially destructive operation in PlanOnly and requires separate explicit
+confirmation immediately before its Real Live command. No unattended Clear.
 
 Full preflight and PlanOnly share the Real Full canonical inventory, but remain
 hardware-free (`hardware_touched=false`, `visa_io_performed=false`). Check
@@ -136,7 +156,7 @@ Do not duplicate waveform parameter boundary permutations in runner tests.
 Admission evidence requires preflight Full PASS + PlanOnly Full PASS + Real
 Full PASS, all required cases PASS, cleanup PASS, outputs safe OFF, a clean
 bounded final error queue, and shareable evidence PASS. This covers the exact
-model and revision's implemented Direct CLI Product Live scope only under
+model and revision's exercised Direct CLI scope only under
 Windows PowerShell, project Python, explicit USB resource, and system VISA.
 Required FAIL/N/A, missing cases, cleanup errors, unconfirmed OFF, dirty or
 unbounded final queue, and shareable generation failure must fail the gate.
@@ -146,6 +166,9 @@ reset or safe-off failure fails that case and blocks subsequent cases.
 Verify best-effort OFF after a failure after ON, and require an affirmative
 observation for a functional pass. Keep the List-to-List-to-CW transition intact.
 
+Only a complete applicable Full run can be considered for a separate Product
+Live policy decision; selected-mode subsets and contributor-only Arbitrary
+cases never automatically qualify. Hardware-free testing is not real evidence.
 Full PASS is eligible evidence for a separate Product Live policy decision,
 never automatic promotion. 33510B stays validation-pending until an explicit
 Core policy change. Use the existing private/shareable evidence boundary.

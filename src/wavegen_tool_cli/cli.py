@@ -739,6 +739,7 @@ def _add_arbitrary_parsers(subparsers: Any) -> None:
         parser = subparsers.add_parser(command, help=description, allow_abbrev=False)
         _add_simulate_argument(parser)
         _add_channel_argument(parser)
+        _add_validation_support_policy_argument(parser)
         parser.add_argument("--resource", help="Explicit VISA resource or WAVEGEN_TOOL_RESOURCE.")
         parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
         parser.add_argument("--dry-run", action="store_true", help="Plan without using VISA.")
@@ -3575,6 +3576,7 @@ def _run_arbitrary(args: argparse.Namespace) -> int:
         )
         return run_arbitrary(
             args.command, arguments, resource=resource, backend=args.backend,
+            **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         )
 

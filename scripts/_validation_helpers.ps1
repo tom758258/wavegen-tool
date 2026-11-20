@@ -488,8 +488,77 @@ function Get-AdvancedReadbackExpectation {
     return [pscustomobject]@{ advanced_mode = $mode; settings = $settings }
 }
 
+
+$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence')
+
+function Resolve-SelectedValidationModes {
+    param([string]$Suite, [string[]]$Modes = @(), [bool]$Specified = $false)
+
+    if ($Specified -and $Suite -ne 'full') {
+        throw '-Modes requires -Suite full; Smoke does not support mode selection.'
+    }
+    if (-not $Specified) { return @($script:FullValidationModes) }
+    $requested = @($Modes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() })
+    if ($requested.Count -eq 0 -or @($requested | Where-Object { -not $_ -or $_ -notin $script:FullValidationModes }).Count -gt 0) {
+        throw "Modes must contain one or more of: $($script:FullValidationModes -join ', ')."
+    }
+    return @($script:FullValidationModes | Where-Object { $_ -in $requested })
+}
+
+function Get-ApplicableValidationModes {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Modes,
+        [Parameter(Mandatory = $true)]$Capabilities,
+        [bool]$RejectUnsupportedArbitrary = $false
+    )
+    $supportsArbitrary = $null -ne $Capabilities.max_arbitrary_sample_rate_hz
+    if (-not $supportsArbitrary -and $RejectUnsupportedArbitrary -and
+        @($Modes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
+        throw 'The selected model does not support Arbitrary or Sequence validation.'
+    }
+    return @($Modes | Where-Object { $supportsArbitrary -or $_ -notin @('arbitrary', 'sequence') })
+}
+
+function New-ArbitraryValidationFixtures {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+
+    [void][IO.Directory]::CreateDirectory($Directory)
+    $token = [guid]::NewGuid().ToString('N').Substring(0, 7).ToUpperInvariant()
+    $names = @{}
+    foreach ($key in @('A', 'B', 'C', 'D', 'E')) { $names[$key] = "WG${key}_$token" }
+    $csv = Join-Path $Directory 'wave.csv'
+    Write-Utf8NoBomText -LiteralPath $csv -Text ("0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n")
+    $bus = Join-Path $Directory 'sequence-bus.json'
+    $external = Join-Path $Directory 'sequence-external.json'
+    $common = @{ version = 1; sample_rate_hz = 1000000; amplitude_vpp = 0.1; offset_v = 0; load = '50' }
+    $busDocument = $common.Clone()
+    $busDocument.name = "WGSB_$token"
+    $busDocument.trigger_source = 'bus'
+    $busDocument.steps = @(
+        @{ waveform = $names.B; play_control = 'once' },
+        @{ waveform = $names.C; play_control = 'repeat'; repeat_count = 2 },
+        @{ waveform = $names.B; play_control = 'onceWaitTrig' },
+        @{ waveform = $names.C; play_control = 'repeatTilTrig' }
+    )
+    $externalDocument = $common.Clone()
+    $externalDocument.name = "WGSE_$token"
+    $externalDocument.trigger_source = 'external'
+    $externalDocument.trigger_slope = 'positive'
+    $externalDocument.steps = @(@{ waveform = $names.D; play_control = 'once' })
+    Write-Utf8NoBomText -LiteralPath $bus -Text ($busDocument | ConvertTo-Json -Depth 6 -Compress)
+    Write-Utf8NoBomText -LiteralPath $external -Text ($externalDocument | ConvertTo-Json -Depth 6 -Compress)
+    return [pscustomobject]@{
+        csv = $csv; bus = $bus; external = $external
+        nameA = $names.A; nameB = $names.B; nameC = $names.C; nameD = $names.D; nameE = $names.E
+    }
+}
+
 function Get-FullValidationInventory {
-    param([Parameter(Mandatory = $true)][int[]]$Channels)
+    param(
+        [Parameter(Mandatory = $true)][int[]]$Channels,
+        [string[]]$Modes = $script:FullValidationModes,
+        $ArbitraryFixtures = $null
+    )
 
     # Recipes contain public CLI arguments only; Core owns admission and SCPI.
     $voltage = @('--amplitude-vpp', '0.1', '--offset-v', '0', '--load', '50')
@@ -653,6 +722,43 @@ function Get-FullValidationInventory {
         (New-Step @('output', '--state', 'on') @{ output_state = 'on' }),
         (New-Step @('output', '--state', 'off') @{ output_state = 'off' })
     ) $true
+
+    if ($null -ne $ArbitraryFixtures) {
+        $fixture = $ArbitraryFixtures
+        $uploadA = New-Step @('upload-arbitrary', '--name', $fixture.nameA, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadB = New-Step @('upload-arbitrary', '--name', $fixture.nameB, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadC = New-Step @('upload-arbitrary', '--name', $fixture.nameC, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadD = New-Step @('upload-arbitrary', '--name', $fixture.nameD, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadE = New-Step @('upload-arbitrary', '--name', $fixture.nameE, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        Add-Recipe 'arbitrary-upload-configure' 'arbitrary' @(
+            $uploadA,
+            (New-Step @('list-arbitrary-memory')),
+            (New-Step @('configure-arbitrary', '--name', $fixture.nameA, '--sample-rate-hz', '1000000', '--amplitude-vpp', '0.1', '--offset-v', '0', '--load', '50') @{ function = 'ARB'; output_state = 'off' } @{ output_state = 'off' })
+        ) $true
+        Add-Recipe 'arbitrary-clear' 'arbitrary' @(
+            $uploadE,
+            (New-Step @('list-arbitrary-memory')),
+            (New-Step @('clear-arbitrary-memory', '--confirm-clear') @{ output_state = 'off' } @{ output_state = 'off' }),
+            (New-Step @('list-arbitrary-memory'))
+        )
+        Add-Recipe 'sequence-bus' 'sequence' @(
+            $uploadB, $uploadC,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.bus) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 4; trigger_source = 'bus'; output_state = 'off' }),
+            $outputOn,
+            (New-Step @('trigger') @{ output_state = 'on' })
+        ) -Observation @{ expected = 'The explicitly triggered native sequence produces the expected waveform progression, including its waits and repeats.'; seconds = 8 }
+        Add-Recipe 'sequence-external' 'sequence' @(
+            $uploadD,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.external) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 1; trigger_source = 'external'; output_state = 'off' }),
+            $outputOn
+        ) -Observation @{
+            input = 'external-trigger'; idle = 'low'
+            action = 'Send one rising-edge external trigger while observing the native sequence.'
+            expected = 'The single-step native sequence runs only after the external trigger.'
+            seconds = 8
+        }
+    }
+
     # Reuse existing Full cases; only configure steps with an active Advanced Mode
     # opt into independent instrument/simulator readback.
     foreach ($recipe in $recipes) {
@@ -674,6 +780,12 @@ function Get-FullValidationInventory {
     }
     foreach ($channel in $Channels) {
         foreach ($recipe in $recipes) {
+            $mode = switch ($recipe.family) {
+                'output-config' { 'output' }
+                'output-control' { 'output' }
+                default { $recipe.family }
+            }
+            if ($mode -ne 'inspection' -and $mode -notin $Modes) { continue }
             if ($channel -ne 1 -and -not $recipe.parity) { continue }
             [pscustomobject]@{
                 name = "ch${channel}/$($recipe.name)"; family = $recipe.family

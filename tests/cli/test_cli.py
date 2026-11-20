@@ -4649,3 +4649,46 @@ def test_arbitrary_cli_local_files_and_confirmation(tmp_path, capsys):
     assert "explicit confirmation" in rejected["error"]
     assert main(["clear-arbitrary-memory", "--simulate", "--confirm-clear", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["output_state"] == "off"
+
+
+@pytest.mark.parametrize("command,arguments", [
+    ("list-arbitrary-memory", []),
+    ("configure-arbitrary", ["--name", "WAVE_A", "--sample-rate-hz", "1000000", "--amplitude-vpp", "0.1"]),
+    ("clear-arbitrary-memory", ["--confirm-clear"]),
+])
+def test_arbitrary_cli_contributor_injection_is_explicit(monkeypatch, capsys, command, arguments):
+    """The existing validation gate reaches Core only when explicitly requested."""
+    calls = []
+    def fake_arbitrary(action, data, **kwargs):
+        calls.append((action, data, kwargs))
+        return {"status": "completed", "channel": data["channel"], "model": "33521B",
+                "canonical_model_id": "keysight-33521b", "executed": True,
+                "backend": "system", "transport": "usb"}
+    monkeypatch.setattr(cli_module, "run_arbitrary", fake_arbitrary)
+    base = [command, *arguments, "--resource", USB_RESOURCE, "--json"]
+    assert main(base) == ExitCode.SUCCESS
+    capsys.readouterr()
+    assert calls[-1][2].get("support_policy_mode") is None
+    assert main(base + ["--validation-allow-pending-live-support", "--model", "keysight-33521b"]) == ExitCode.SUCCESS
+    capsys.readouterr()
+    assert calls[-1][2]["support_policy_mode"] == "validation"
+    assert calls[-1][2]["expected_model_id"] == "keysight-33521b"
+    assert calls[-1][2]["resource"] == USB_RESOURCE
+
+
+def test_arbitrary_product_live_remains_blocked_before_visa(monkeypatch, capsys):
+    from wavegen_tool_core import arbitrary
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Physical VISA must not be opened")
+    monkeypatch.setattr(arbitrary, "_run_on_supported_instrument", forbidden)
+    for command, additional in (
+        ("list-arbitrary-memory", []),
+        ("clear-arbitrary-memory", ["--confirm-clear"]),
+    ):
+        result = main([command, *additional, "--resource", USB_RESOURCE, "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert result != ExitCode.SUCCESS
+        assert payload["success"] is False
+        assert payload["error"] is not None
+

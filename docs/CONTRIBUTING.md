@@ -163,7 +163,16 @@ The runner never scans, guesses, infers, or auto-selects a resource. Resource
 discovery is a separate user-invoked Direct CLI diagnostic and is not part of
 contributor validation.
 
-Both runners accept `-Suite smoke|full`, defaulting to `smoke`. Smoke is a
+Both runners accept `-Suite smoke|full`, defaulting to `smoke`.
+For Full only, `-Modes` selects any of `static`, `modulation`, `burst`,
+`sweep`, `list-sweep`, `output`, `arbitrary`, or `sequence`.
+Omitting it selects all applicable families; Smoke plus Modes fails closed.
+A subset PASS is not complete admission evidence. The same filtered recipes
+are used by Preflight, PlanOnly, Real Live and reporting. Core-admitted
+Arbitrary/Sequence validation remains contributor-only and needs separate
+physical authorization. Before an actual volatile Clear, the operator must
+type `CLEAR` after a new destructive-action warning.
+ Smoke is a
 representative CLI Live sanity check: exact identity, stale-error drain,
 capability-driven per-channel Sine configuration/readback, output OFF before
 and after each channel, and a clean final error queue. Smoke never uses Output
@@ -186,7 +195,7 @@ never reset the instrument. Real Live Full alone performs a bounded `*RST`
 before every independent case, after safe-off checks; it never resets between
 steps of the same case.
 
-Full uses the same cases for Preflight, PlanOnly, and Real Live. CH1 covers
+Full uses the same selected cases for Preflight, PlanOnly, and Real Live. CH1 covers
 all eight static waveforms, internal AM (normal and DSSC), FM, PM, FSK, BPSK,
 PWM, and Sum. It also covers Counted and Gated Burst, Linear and Logarithmic
 Sweeps, List Sweeps, output settings, and explicit output ON/OFF.

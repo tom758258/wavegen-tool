@@ -438,6 +438,12 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "status", "static-sine", "modulation-am", "burst-immediate",
         "sweep-sine-linear", "list-transition-cw-recovery", "configure-output", "output-control",
     }
+    if model != "33510b":
+        expected_primary |= {
+            "arbitrary-upload-configure", "arbitrary-clear", "sequence-bus", "sequence-external",
+        }
+        if model == "33512b":
+            expected_parity.add("arbitrary-upload-configure")
     primary = [case for case in inventory if case["channel"] == 1]
     secondary = [case for case in inventory if case["channel"] == 2]
     assert {case["name"] for case in primary} == {f"ch1/{name}" for name in expected_primary}
@@ -492,7 +498,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "ch1/burst-bus", "ch1/burst-timer", "ch1/burst-external", "ch1/burst-external-negative",
         "ch1/burst-gated", "ch1/burst-gated-inverted", "ch1/sweep-sine-bus",
         "ch1/sweep-sine-timer", "ch1/list-bus-trigger",
-    }
+    } | ({"ch1/sequence-bus", "ch1/sequence-external"} if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
     for private in (USB_RESOURCE, "SYNTHETIC123", str(REPO_ROOT), str(run)):
@@ -506,6 +512,73 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     assert readiness["visa_io_performed"] is False
     assert readiness["git_head"] == report["git_head"]
     assert readiness["git_clean"] is True
+
+
+
+def test_smoke_rejects_modes_before_artifacts(artifact_root):
+    for script in (PREFLIGHT_SCRIPT, LIVE_SCRIPT):
+        args = ["-Target", "keysight-33521b", "-Modes", "static"]
+        if script == LIVE_SCRIPT:
+            args += ["-Connection", "usb", "-Resource", USB_RESOURCE, "-PlanOnly"]
+        result = _run_script(script, artifact_root, *args)
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert "-Modes requires -Suite full" in result.stderr
+        assert not list(artifact_root.iterdir())
+
+
+@pytest.mark.parametrize("mode,expected,unexpected", [
+    ("static", "ch1/static-sine", "ch1/burst-bus"),
+    ("burst,output", "ch1/burst-bus", "ch1/static-sine"),
+    ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
+])
+def test_full_plan_filters_modes_and_propagates_to_preflight(
+    artifact_root, fake_git, mode, expected, unexpected,
+):
+    result = _run_script(
+        LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b",
+        "-Suite", "full", "-Modes", mode, "-Connection", "usb",
+        "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = _read_report(_only_run(artifact_root))
+    assert expected in report["planned_cases"]
+    assert unexpected not in report["planned_cases"]
+    assert report["hardware_touched"] is False
+    assert report["visa_io_performed"] is False
+    if mode == "arbitrary,sequence":
+        assert "ch1/sequence-bus" in report["planned_cases"]
+        assert "ch1/sequence-external" in report["planned_cases"]
+        clear = next(x for x in report["full_inventory"] if x["name"] == "ch1/arbitrary-clear")
+        assert any(step["arguments"][0] == "clear-arbitrary-memory" and
+                   "--confirm-clear" in step["arguments"] for step in clear["steps"])
+    preflight = next((artifact_root / "_preflight").glob("run_*/shareable/report.json"))
+    readiness = json.loads(preflight.read_text(encoding="utf-8"))
+    assert readiness["status"] == "PASS"
+    assert readiness["hardware_touched"] is False
+    assert readiness["selected_modes"] == report["selected_modes"]
+
+
+def test_invalid_full_modes_fail_without_artifacts(artifact_root, fake_git):
+    for modes in ("bogus", ",", "static,bogus", " "):
+        args = ["-Target", "keysight-33521b", "-Suite", "full", "-Modes", modes]
+        result = _run_script(PREFLIGHT_SCRIPT, artifact_root, *args)
+        assert result.returncode == 2, result.stdout + result.stderr
+        assert not list(artifact_root.iterdir())
+
+
+def test_single_unsupported_arbitrary_mode_is_refused(artifact_root, fake_git):
+    result = _run_script(
+        LIVE_SCRIPT, artifact_root, "-Target", "keysight-33510b",
+        "-Suite", "full", "-Modes", "arbitrary", "-Connection", "usb",
+        "-Resource", USB_RESOURCE, "-PlanOnly",
+    )
+    assert result.returncode != 0
+    report = _read_report(_only_run(artifact_root))
+    assert any(case["name"] == "preflight" and case["status"] == "FAIL"
+               for case in report["cases"])
+    assert report["hardware_touched"] is False
+    assert report["visa_io_performed"] is False
+
 
 
 @pytest.mark.parametrize("connection,backend,resource", [
@@ -673,7 +746,7 @@ $script:resetCalls = 0
 $inventory = @(Get-FullValidationInventory -Channels @(2))
 $script:casesUnderTest = @($inventory | Where-Object family -eq 'output-control') +
     @($inventory | Where-Object name -eq 'ch2/status')
-function Get-FullValidationInventory { param($Channels); return $script:casesUnderTest }
+$fullInventory = @($script:casesUnderTest)
 function Invoke-WavegenJson {
     param($Name, $CliArguments, $ArtifactDirectory)
     $command = $CliArguments[0]
@@ -756,7 +829,7 @@ $targetCapabilityModel = '33512B'
 $script:outputs = @{ 1 = 'off'; 2 = 'off' }
 $script:outputOnCalls = 0
 $script:onlyExternal = @(Get-FullValidationInventory -Channels @(1, 2) | Where-Object name -eq 'ch1/burst-external')
-function Get-FullValidationInventory { param($Channels); return $script:onlyExternal }
+$fullInventory = @($script:onlyExternal)
 function Read-LiveConfirmation {
     if ($script:outputs[1] -ne 'off') { throw 'Output must be off during preparation' }
     return $script:operatorAnswer -ne 'skip'
@@ -891,3 +964,38 @@ def test_full_output_config_channel_uses_detected_capabilities(monkeypatch, caps
     assert payload["success"] is accepted
     if accepted:
         assert payload["channel"] == 2 and payload["model"] == "33512B"
+
+
+def test_arbitrary_clear_refusal_never_executes_clear(artifact_root):
+    result = _run_powershell_test(artifact_root, r'''
+$cases = [System.Collections.ArrayList]::new()
+$channelsTested = [System.Collections.ArrayList]::new()
+$targetCapabilityModel = '33521B'
+$script:clearCalls = 0
+$fullInventory = @([pscustomobject]@{
+    name = 'ch1/arbitrary-clear'; family = 'arbitrary'; channel = 1; required = $true
+    observation = $null
+    steps = @([pscustomobject]@{
+        arguments = @('clear-arbitrary-memory', '--confirm-clear')
+        readback = @{}; result = @{}
+    })
+})
+function Set-FullSafeOff { param($Name, $Channel) }
+function Assert-FullErrorQueue { param($Name) }
+function Invoke-FullValidationReset { param($Name) }
+function Invoke-FullCommand {
+    param($Name, $Arguments, [int]$Channel)
+    if ($Arguments[0] -eq 'clear-arbitrary-memory') { $script:clearCalls++ }
+    return [pscustomobject]@{ output_state = 'off' }
+}
+Invoke-FullLiveCases -Channels @(1) -CanRun $true
+$entry = $cases | Where-Object name -eq 'ch1/arbitrary-clear'
+Write-Output ('RESULT:' + (@{
+    clear_calls = $script:clearCalls; status = $entry.status
+    cleanup_status = $entry.cleanup_status
+} | ConvertTo-Json -Compress))
+''')
+    assert result["clear_calls"] == 0
+    assert result["status"] == "FAIL"
+    assert result["cleanup_status"] == "PASS"
+

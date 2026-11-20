@@ -515,3 +515,33 @@ def test_publication_failure_removes_partial_evidence(artifact_root: Path) -> No
     files = [path for path in artifact_root.rglob("*") if path.is_file()]
     assert [path.name for path in files] == ["error-summary.md"]
     assert "synthetic" not in files[0].read_text(encoding="utf-8")
+
+
+def test_full_mode_resolution_and_family_filtering() -> None:
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$selected = @(Resolve-SelectedValidationModes -Suite full -Modes @('output,burst', 'static', 'burst') -Specified $true); "
+        + "$recipes = @(Get-FullValidationInventory -Channels @(1,2) -Modes $selected); "
+        + "@{ modes = $selected; families = @($recipes | ForEach-Object { $_.family } | Select-Object -Unique); "
+        + "count = $recipes.Count } | ConvertTo-Json -Compress"
+    )
+    data = json.loads(result.stdout)
+    assert data["modes"] == ["static", "burst", "output"]
+    assert set(data["families"]) == {
+        "inspection", "static", "burst", "output-config", "output-control"
+    }
+    assert data["count"] > 0
+
+
+def test_modes_reject_smoke_and_unsupported_capability() -> None:
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$smoke = $false; $missing = $false; "
+        + "try { @(Resolve-SelectedValidationModes -Suite smoke -Modes @('static') -Specified $true) | Out-Null } catch { $smoke = $true }; "
+        + "try { @(Get-ApplicableValidationModes -Modes @('arbitrary') -Capabilities @{ max_arbitrary_sample_rate_hz = $null } -RejectUnsupportedArbitrary $true) | Out-Null } catch { $missing = $true }; "
+        + "@{ smoke_rejected = $smoke; unsupported_rejected = $missing } | ConvertTo-Json -Compress"
+    )
+    assert json.loads(result.stdout) == {
+        "smoke_rejected": True, "unsupported_rejected": True,
+    }
+
