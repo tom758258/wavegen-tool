@@ -5993,13 +5993,15 @@ def test_full_validation_reset_fails_when_output_turns_on_after_reset() -> None:
     session = PostResetOutputOn(
         responses_by_command={"OUTPut1?": "0", "*OPC?": "1", "OUTPut:SYNC?": "0"},
     )
-    with pytest.raises(WaveformVerificationError):
+    with pytest.raises(visa_module.FullValidationOutputOnError) as error:
         visa_module.reset_for_live_full_validation(
             USB_RESOURCE,
             expected_model_id="keysight-33521b",
             resource_manager_factory=RecordingFactory(FakeManager(session)),
         )
     assert session.writes == ["OUTPut:SYNC OFF", "*RST", "OUTPut:SYNC OFF"]
+    assert error.value.channel == 1
+    assert error.value.after_reset is True
 
 
 def test_full_validation_reset_fails_when_sync_will_not_turn_off_after_reset():
@@ -6045,7 +6047,7 @@ def test_full_validation_reset_guards_every_channel() -> None:
             "*OPC?": "1",
         },
     )
-    with pytest.raises(WaveformVerificationError):
+    with pytest.raises(visa_module.FullValidationOutputOnError) as error:
         visa_module.reset_for_live_full_validation(
             USB_RESOURCE,
             expected_model_id="keysight-33512b",
@@ -6053,6 +6055,8 @@ def test_full_validation_reset_guards_every_channel() -> None:
         )
     assert session.writes == []
     assert session.queries == [IDN_QUERY, "OUTPut1?", "OUTPut2?"]
+    assert error.value.channel == 2
+    assert error.value.after_reset is False
 
 
 class EchoAdvancedReadbackSession(FakeSession):

@@ -7464,6 +7464,19 @@ def set_sync_output(
     )
 
 
+class FullValidationOutputOnError(WaveformVerificationError):
+    """A main output was read back ON at a Full validation reset boundary."""
+
+    def __init__(self, channel: int, *, after_reset: bool) -> None:
+        phase = "after" if after_reset else "before"
+        super().__init__(
+            f"CH{channel} output was ON {phase} Full validation reset.",
+            output_state="on",
+        )
+        self.channel = channel
+        self.after_reset = after_reset
+
+
 def reset_for_live_full_validation(
     resource: str,
     backend: str | None = None,
@@ -7482,11 +7495,11 @@ def reset_for_live_full_validation(
         context: IdentificationResult,
     ) -> None:
         channel_count = _capabilities_for_identity(context.identity).channel_count
-        for channel in range(1, channel_count + 1):
-            if _parse_status_output(session.query(f"OUTPut{channel}?")) != "off":
-                raise WaveformVerificationError(
-                    "All instrument outputs must be OFF before Full validation reset."
-                )
+
+        def verify_main_outputs_off(*, after_reset: bool) -> None:
+            for channel in range(1, channel_count + 1):
+                if _parse_status_output(session.query(f"OUTPut{channel}?")) == "on":
+                    raise FullValidationOutputOnError(channel, after_reset=after_reset)
 
         def verify_sync_off(stage: str) -> None:
             confirmed = False
@@ -7497,6 +7510,7 @@ def reset_for_live_full_validation(
                 if record_sync_off is not None:
                     record_sync_off(stage, confirmed)
 
+        verify_main_outputs_off(after_reset=False)
         try:
             verify_sync_off("before_reset")
             session.write("*RST")
@@ -7514,11 +7528,7 @@ def reset_for_live_full_validation(
             if error is exc:
                 raise
             raise error from exc
-        for channel in range(1, channel_count + 1):
-            if _parse_status_output(session.query(f"OUTPut{channel}?")) != "off":
-                raise WaveformVerificationError(
-                    "An instrument output was not OFF after Full validation reset."
-                )
+        verify_main_outputs_off(after_reset=True)
 
     _run_on_supported_instrument(
         resource,

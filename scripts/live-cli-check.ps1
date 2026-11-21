@@ -309,22 +309,30 @@ function Assert-FullErrorQueue {
 }
 
 function Invoke-FullValidationReset {
-    param([Parameter(Mandatory = $true)][string]$Name, [System.Collections.IDictionary]$SyncOff)
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [System.Collections.IDictionary]$SyncOff,
+        [int[]]$Channels
+    )
 
     $artifactDirectory = Join-Path $run.Private (New-SafeCaseName "$Name-reset")
     $stdoutPath = Join-Path $artifactDirectory 'stdout.txt'
     $code = @'
 import json
 import sys
-from wavegen_tool_core.visa import reset_for_live_full_validation
+from wavegen_tool_core.visa import FullValidationOutputOnError, reset_for_live_full_validation
 
-sync_off = {}
+evidence = {}
 try:
     reset_for_live_full_validation(
-        sys.argv[1], sys.argv[2], expected_model_id=sys.argv[3], record_sync_off=sync_off.__setitem__
+        sys.argv[1], sys.argv[2], expected_model_id=sys.argv[3], record_sync_off=evidence.__setitem__
     )
+except FullValidationOutputOnError as exc:
+    evidence["main_output_on_channel"] = exc.channel
+    evidence["main_output_on_after_reset"] = exc.after_reset
+    raise
 finally:
-    print(json.dumps(sync_off))
+    print(json.dumps(evidence))
 '@
     $process = Invoke-CapturedCommand -Name $Name -FilePath $Python `
         -Arguments @('-c', $code, $Resource, $backendName, $expectedModel) `
@@ -335,15 +343,30 @@ finally:
     try { $payload = $raw | ConvertFrom-Json -ErrorAction Stop } catch { $payload = $null }
     if ($payload -is [pscustomobject]) {
         foreach ($stage in @('before_reset', 'after_reset', 'failure_cleanup')) {
-            if ($stage -notin $payload.PSObject.Properties.Name) {
+            $stageProperty = $payload.PSObject.Properties[$stage]
+            if ($null -eq $stageProperty) {
                 $SyncOff[$stage] = 'not-run'
-            } elseif ($payload.$stage -is [bool]) {
-                $SyncOff[$stage] = if ($payload.$stage) { 'confirmed' } else { 'unconfirmed' }
+            } elseif ($stageProperty.Value -is [bool]) {
+                $SyncOff[$stage] = if ($stageProperty.Value) { 'confirmed' } else { 'unconfirmed' }
             }
         }
     }
     if ($process.exit_code -ne 0) {
-        throw "Full validation reset failed (exit code $($process.exit_code))."
+        $failureMessage = "Full validation reset failed (exit code $($process.exit_code))."
+        if ($payload -is [pscustomobject]) {
+            $onChannel = $payload.PSObject.Properties['main_output_on_channel']
+            $afterReset = $payload.PSObject.Properties['main_output_on_after_reset']
+            if ($null -ne $onChannel -and ($onChannel.Value -is [int] -or $onChannel.Value -is [long]) -and
+                $onChannel.Value -in $Channels -and $null -ne $afterReset -and $afterReset.Value -is [bool]) {
+                $phase = if ($afterReset.Value) { 'after' } else { 'before' }
+                $resetFailure = [InvalidOperationException]::new(
+                    "$failureMessage CH$($onChannel.Value) output was ON $phase Full validation reset."
+                )
+                $resetFailure.Data['MainOutputOnChannel'] = [int]$onChannel.Value
+                throw $resetFailure
+            }
+        }
+        throw $failureMessage
     }
     if ($SyncOff.before_reset -ne 'confirmed' -or $SyncOff.after_reset -ne 'confirmed') {
         throw 'Full validation reset did not report confirmed Sync OFF before and after reset.'
@@ -456,7 +479,7 @@ function Invoke-FullLiveCases {
                     failure_cleanup = 'unreported'
                 }
                 foreach ($checked in $Channels) { $mainOffByChannel[$checked] = $false }
-                Invoke-FullValidationReset -Name "$($recipe.name)/reset" -SyncOff $evidence.sync_reset_off
+                Invoke-FullValidationReset -Name "$($recipe.name)/reset" -SyncOff $evidence.sync_reset_off -Channels $Channels
                 foreach ($checked in $Channels) {
                     $state = Invoke-FullCommand -Name "$($recipe.name)/reset-ch$checked" -Arguments @('status') -Channel $checked
                     Assert-FullReadback -Payload $state -Expected @{ output_state = 'off' } -MainChannel $checked

@@ -780,7 +780,8 @@ Write-Output ('RESULT:' + (@{ head = $head; changed_rejected = $changedRejected 
 
 @pytest.mark.parametrize("failure", [
     "none", "command", "cleanup", "case-dirty", "dirty", "limit", "na", "reset",
-    "reset-unreported", "before-timeout", "queue-timeout", "off-timeout", "termination-unconfirmed",
+    "reset-empty-report", "reset-main-on-before", "reset-main-on-after", "reset-unreported",
+    "before-timeout", "queue-timeout", "off-timeout", "termination-unconfirmed",
 ])
 def test_full_failure_gate_and_best_effort_off(artifact_root, failure):
     result = _run_powershell_test(artifact_root, r'''
@@ -802,6 +803,7 @@ $script:offCalls = 0
 $script:onCalls = 0
 $script:resetCalls = 0
 $script:finalOffAttempts = @()
+$script:caseOffAttempts = @()
 $inventory = @(Get-FullValidationInventory -Channels @(2))
 $script:casesUnderTest = @($inventory | Where-Object family -eq 'output-control') +
     @($inventory | Where-Object name -eq 'ch2/status')
@@ -811,6 +813,10 @@ function Invoke-WavegenJson {
     $command = $CliArguments[0]
     if ($Name -eq 'sync/final-safe-off' -or $Name -eq 'ch2/final-safe-off-command') {
         $script:finalOffAttempts += $Name
+    }
+    if ($Name -like '*/cleanup-command' -or $Name -like '*/cleanup-sync') {
+        $script:caseOffAttempts += $command
+        if ($failure -like 'reset-main-on-*') { throw [TimeoutException]::new("$command OFF timed out.") }
     }
     if ($command -eq 'sync-output') {
         if ('--channel' -in $CliArguments -or $CliArguments[2] -ne 'off') { throw 'Unexpected Sync control' }
@@ -860,6 +866,17 @@ function Invoke-CapturedCommand {
     if ($failure -eq 'reset-unreported') {
         return @{ exit_code = 0; stdout_text = ''; stderr_text = '' }
     }
+    if ($failure -eq 'reset-empty-report') {
+        return @{ exit_code = 1; stdout_text = '{}'; stderr_text = $Resource }
+    }
+    if ($failure -eq 'reset-main-on-before') {
+        $script:state = 'on'
+        return @{ exit_code = 1; stdout_text = '{"main_output_on_channel":2,"main_output_on_after_reset":false}'; stderr_text = $Resource }
+    }
+    if ($failure -eq 'reset-main-on-after') {
+        $script:state = 'on'
+        return @{ exit_code = 1; stdout_text = '{"before_reset":true,"after_reset":true,"main_output_on_channel":2,"main_output_on_after_reset":true}'; stderr_text = $Resource }
+    }
     return @{ exit_code = 0; stdout_text = '{"before_reset":true,"after_reset":true}'; stderr_text = '' }
 }
 Invoke-FullLiveCases -Channels @(2) -CanRun ($failure -ne 'na')
@@ -870,12 +887,14 @@ $pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch2/initial-s
 Write-Output ('RESULT:' + (@{
     pass = $pass; state = $script:state; off_calls = $script:offCalls; on_calls = $script:onCalls
     reset_calls = $script:resetCalls; final_off_attempts = $script:finalOffAttempts; cases = @($cases)
+    case_off_attempts = $script:caseOffAttempts
 } | ConvertTo-Json -Depth 10 -Compress))
 '''.replace("FAILURE", failure))
     assert result["pass"] is (failure == "none")
     assert result["state"] == ("on" if failure == "off-timeout" else "off")
     assert result["off_calls"] >= 2
-    assert result["on_calls"] == (0 if failure in {"na", "reset", "reset-unreported", "before-timeout"} else 1)
+    reset_failure = failure.startswith("reset")
+    assert result["on_calls"] == (0 if reset_failure or failure in {"na", "before-timeout"} else 1)
     assert result["reset_calls"] == (0 if failure == "na" else 2 if failure in {"none", "dirty", "limit"} else 1)
     statuses = {case["name"]: case["status"] for case in result["cases"]}
     case = next(case for case in result["cases"] if case["name"] == "ch2/output-control")
@@ -890,11 +909,27 @@ Write-Output ('RESULT:' + (@{
             "before_reset": "unreported", "after_reset": "unreported", "failure_cleanup": "unreported",
         }
         assert statuses["ch2/status"] == "N/A"
+    elif failure in {"reset-empty-report", "reset-main-on-before", "reset-main-on-after"}:
+        phase = failure.rsplit("-", 1)[-1]
+        expected_sync = "confirmed" if phase == "after" else "not-run"
+        assert case["sync_reset_off"] == {
+            "before_reset": expected_sync, "after_reset": expected_sync, "failure_cleanup": "not-run",
+        }
+        assert statuses["ch2/status"] == "N/A"
+        assert "Full validation reset failed (exit code 1)" in case["failure_reasons"][0]
+        assert "synthetic-resource" not in json.dumps(case)
+        if failure.startswith("reset-main-on-"):
+            assert f"CH2 output was ON {phase}" in case["failure_reasons"][0]
+            assert result["case_off_attempts"] == ["output", "sync-output"]
+            assert case["cleanup_status"] == "FAIL"
+            assert any("output OFF timed out" in reason for reason in case["failure_reasons"])
+            assert any("sync-output OFF timed out" in reason for reason in case["failure_reasons"])
+            assert statuses["ch2/final-safe-off"] == statuses["sync/final-safe-off"] == "PASS"
     elif failure == "none":
         assert case["sync_reset_off"] == {
             "before_reset": "confirmed", "after_reset": "confirmed", "failure_cleanup": "not-run",
         }
-    if failure in {"command", "cleanup", "case-dirty", "reset", "reset-unreported"}:
+    if reset_failure or failure in {"command", "cleanup", "case-dirty"}:
         assert statuses["ch2/output-control"] == "FAIL"
     if failure == "na":
         assert statuses["ch2/output-control"] == "N/A"
