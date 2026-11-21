@@ -447,6 +447,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "burst-external-negative", "burst-gated-inverted",
         "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus", "sweep-sine-timer",
         "sweep-square-linear", "sweep-ramp-linear", "sweep-triangle-linear",
+        "sweep-external-positive", "sweep-external-negative",
         "list-transition-cw-recovery", "list-bus-trigger", "configure-output", "output-control",
         "sync-configuration", "sync-control",
     }
@@ -562,6 +563,7 @@ def test_full_preflight_arbitrary_sequence_direct_without_hardware(
     ("static", "ch1/static-sine", "ch1/burst-bus"),
     ("output", "ch1/sync-control", "ch1/static-sine"),
     ("burst,output", "ch1/burst-bus", "ch1/static-sine"),
+    ("sweep", "ch1/sweep-external-positive", "ch1/list-bus-trigger"),
     ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
 ])
 def test_full_plan_filters_modes_and_propagates_to_preflight(
@@ -608,6 +610,26 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
             "ch1/sync-control/step1-simulate": "PASS",
             "ch1/sync-control/step2-simulate": "PASS",
         }
+    if mode == "sweep":
+        assert report["complete_mode_selection"] is False
+        for slope, idle in (("positive", "low"), ("negative", "high")):
+            name = f"ch1/sweep-external-{slope}"
+            recipe = next(case for case in report["full_inventory"] if case["name"] == name)
+            configure, output = recipe["steps"]
+            assert recipe["required"] is True
+            assert recipe["observation"]["input"] == "external-trigger"
+            assert recipe["observation"]["idle"] == idle
+            assert configure["arguments"][0] == "configure-sine-sweep"
+            assert configure["advanced_expected"]["settings"]["trigger_slope"] == slope
+            assert output["arguments"] == ["output", "--state", "on"]
+            assert {
+                case["name"].split("/", 1)[1]: case["status"]
+                for case in readiness["cases"] if f"/{name}/" in case["name"]
+            } == {
+                f"{name}/step1-dry-run": "PASS",
+                f"{name}/step1-simulate": "PASS",
+                f"{name}/step2-simulate": "PASS",
+            }
 
 
 def test_invalid_full_modes_fail_without_artifacts(artifact_root, fake_git):
@@ -951,8 +973,11 @@ Write-Output ('RESULT:' + (@{
         assert statuses["sync/final-safe-off"] == "PASS"
 
 
-@pytest.mark.parametrize("answer", ["Yes", "No", "", "skip", "interrupted", "status-timeout"])
-def test_full_external_observation_requires_confirmation_and_safe_off(artifact_root, answer):
+@pytest.mark.parametrize(("answer", "recipe"), [
+    *[(answer, "burst-external") for answer in ("Yes", "No", "", "skip", "interrupted", "status-timeout")],
+    ("Yes", "sweep-external-negative"),
+])
+def test_full_external_observation_requires_confirmation_and_safe_off(artifact_root, answer, recipe):
     result = _run_powershell_test(artifact_root, r'''
 $script:operatorAnswer = 'ANSWER'
 $cases = [System.Collections.ArrayList]::new()
@@ -961,8 +986,9 @@ $targetCapabilityModel = '33512B'
 $script:outputs = @{ 1 = 'off'; 2 = 'off' }
 $script:outputOnCalls = 0
 $script:mainOffAtSyncCleanup = $false
-$script:onlyExternal = @(Get-FullValidationInventory -Channels @(1, 2) | Where-Object name -eq 'ch1/burst-external')
-$fullInventory = @($script:onlyExternal)
+$recipeName = 'ch1/RECIPE'
+$isSweep = $recipeName -like '*/sweep-*'
+$fullInventory = @(Get-FullValidationInventory -Channels @(1, 2) | Where-Object name -eq $recipeName)
 function Read-LiveConfirmation {
     if ($script:outputs[1] -ne 'off') { throw 'Output must be off during preparation' }
     return $script:operatorAnswer -ne 'skip'
@@ -985,6 +1011,16 @@ function Invoke-FullCommand {
     }
     if ($command -eq 'trigger') { throw 'External case must use a physical trigger' }
     if ($command -eq 'readback-advanced') {
+        if ($isSweep) {
+            return [pscustomobject]@{
+                advanced_mode = 'SWEEP'
+                settings = [pscustomobject]@{
+                    spacing = 'linear'; start_frequency_hz = 2; stop_frequency_hz = 8
+                    sweep_time_s = 1; hold_time_s = 0.2; return_time_s = 0.2
+                    trigger_source = 'external'; trigger_slope = 'negative'
+                }
+            }
+        }
         return [pscustomobject]@{
             advanced_mode = 'BURST'
             settings = [pscustomobject]@{
@@ -1004,9 +1040,12 @@ function Invoke-FullCommand {
         $script:outputs[$Channel] = $Arguments[2]
     }
     return [pscustomobject]@{
-        output_state = $script:outputs[$Channel]; function = 'PULS'; frequency_hz = 1
+        output_state = $script:outputs[$Channel]
+        function = if ($isSweep) { 'SIN' } else { 'PULS' }
+        frequency_hz = 1
         amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'
         burst_mode = 'counted'; burst_count = 3; burst_trigger_source = 'external'; burst_trigger_slope = 'positive'
+        spacing = 'linear'; trigger_source = 'external'; trigger_slope = 'negative'
         readback_verified = $true
         has_errors = $false; empty_confirmed = $true; limit_reached = $false
     }
@@ -1018,14 +1057,14 @@ function Invoke-FullValidationReset {
     }
 }
 Invoke-FullLiveCases -Channels @(1, 2) -CanRun $true
-$case = $cases | Where-Object name -eq 'ch1/burst-external'
-$pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch1/burst-external')
+$case = $cases | Where-Object name -eq $recipeName
+$pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @($recipeName)
 Write-Output ('RESULT:' + (@{
     pass = $pass; case = $case; outputOnCalls = $script:outputOnCalls
     mainOffAtSyncCleanup = $script:mainOffAtSyncCleanup
     ch1 = $script:outputs[1]; ch2 = $script:outputs[2]
 } | ConvertTo-Json -Depth 8 -Compress))
-'''.replace("ANSWER", answer))
+'''.replace("ANSWER", answer).replace("RECIPE", recipe))
     assert result["pass"] is (answer == "Yes"), result["case"]
     assert result["ch1"] == result["ch2"] == "off"
     assert result["mainOffAtSyncCleanup"] is True

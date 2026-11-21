@@ -86,13 +86,16 @@ request validation and safety rules documented for:
 - static sine, square, ramp, triangle, pulse, DC, noise, and PRBS;
 - supported AM, FM, PM, FSK, BPSK, PWM, and Sum carrier combinations;
 - Counted Burst and Gated Burst on supported carriers;
-- sine, square, ramp, and triangle ordinary and List Sweeps;
+- sine, square, ramp, and triangle ordinary Sweeps with Immediate, Bus, or
+  Timer, and List Sweeps with Immediate or Bus;
 - selected-channel status, output configuration, and output control;
 - explicit front-panel Sync OFF control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
 
 Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
 Core rejects these operations in Product Live mode for all models.
+External triggering for ordinary Sweeps is available in dry-run, simulation,
+and Direct CLI contributor validation. Core rejects it in Product Live.
 Front-panel Sync configuration and Sync ON are available in simulation and
 Direct CLI contributor validation. Sync configuration also supports dry-run.
 

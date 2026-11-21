@@ -172,8 +172,13 @@ Sweep numeric ranges, spacing, trigger source, and SCPI planning rules are
 owned by the existing Core `dry_run_*_sweep` functions. The Worker does not
 duplicate those rules.
 
-Ordinary sweeps accept `trigger_source` (default `"immediate"`) and
-`trigger_timer_s` for Timer. List Sweeps use `frequencies_hz` (a JSON array)
+Ordinary sweeps accept `trigger_source` (`"immediate"` by default, `"bus"`,
+`"timer"`, or `"external"`). Timer requires `trigger_timer_s`. Only External
+accepts `trigger_slope` (`"positive"` by default or `"negative"`) and requires
+omitting `trigger_timer_s`. Successful results and dry-run plans report the
+programmed or planned `trigger_slope`, with `null` for other sources. Worker
+supports External Sweep in dry-run and simulation. Core rejects it during
+Product Live execution. List Sweeps use `frequencies_hz` (a JSON array)
 and the same voltage, phase, load and carrier options as their ordinary
 sweep counterparts. With Immediate, supply `dwell_s`. With Bus, omit it.
 

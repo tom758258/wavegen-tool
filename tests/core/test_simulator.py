@@ -740,6 +740,7 @@ def test_prbs_status_preserves_simulator_channel_isolation() -> None:
 def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     factory = SimulatedResourceManagerFactory(state)
+    state.ch2.burst_trigger_slope = "negative"
 
     sweep_result = configure_square_sweep(
         factory.resource_name,
@@ -749,7 +750,9 @@ def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
         2,
         0.2,
         duty_cycle_percent=25,
+        trigger_source="external",
         channel=2,
+        verify_readback=True,
         resource_manager_factory=factory,
     )
 
@@ -762,6 +765,14 @@ def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
     assert state.ch2.frequency_mode == "SWEep"
     assert state.ch2.sweep_start_frequency_hz == 2000.0
     assert state.ch2.sweep_stop_frequency_hz == 20000.0
+    assert state.ch2.output_enabled is False
+    assert state.ch1.trigger_source == "immediate"
+    readback = query_advanced_mode(
+        factory.resource_name, channel=2, resource_manager_factory=factory
+    )
+    assert readback.advanced_mode == "SWEEP"
+    assert readback.settings["trigger_source"] == "external"
+    assert readback.settings["trigger_slope"] == "positive"
 
     configure_square(
         factory.resource_name,

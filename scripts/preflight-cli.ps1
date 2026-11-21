@@ -255,6 +255,11 @@ foreach ($targetProfile in $targets) {
                         } elseif ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') {
                             throw 'Configuration did not leave output off.'
                         }
+                        if ($recipe.family -eq 'sweep' -and $step.result['trigger_source'] -eq 'external') {
+                            if ($payload.trigger_source -cne 'external' -or $payload.trigger_slope -cne $step.result['trigger_slope']) {
+                                throw 'External Sweep trigger source or slope did not match the recipe.'
+                            }
+                        }
                         if ('--verify-readback' -in $step.arguments -and $mode -eq 'simulate' -and $payload.readback_verified -ne $true) {
                             throw 'Advanced Mode simulator readback was not verified.'
                         }

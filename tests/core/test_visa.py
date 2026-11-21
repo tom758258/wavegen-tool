@@ -2232,6 +2232,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
     assert result.hold_time_s == 3.0
     assert result.return_time_s == 4.0
     assert result.trigger_source == "immediate"
+    assert result.trigger_slope is None
     assert result.amplitude_vpp == 0.2
     assert result.offset_v == 0.1
     assert result.phase_deg == 90.0
@@ -2283,17 +2284,41 @@ def test_sine_sweep_bus_and_timer_dry_run_plans() -> None:
 
     assert bus.trigger_source == "bus"
     assert bus.trigger_timer_s is None
+    assert bus.trigger_slope is None
     assert bus.commands[-2:] == (
         "TRIGger1:SOURce BUS",
         "SOURce1:FREQuency:MODE SWEep",
     )
     assert timer.trigger_source == "timer"
     assert timer.trigger_timer_s == 3.0
+    assert timer.trigger_slope is None
     assert timer.commands[-3:] == (
         "TRIGger1:TIMer 3",
         "TRIGger1:SOURce TIMer",
         "SOURce1:FREQuency:MODE SWEep",
     )
+
+
+@pytest.mark.parametrize(
+    ("trigger_options", "message"),
+    [
+        ({"trigger_slope": "positive"}, "only valid for external"),
+        ({"trigger_source": "bus", "trigger_slope": "negative"}, "only valid for external"),
+        (
+            {"trigger_source": "timer", "trigger_timer_s": 1, "trigger_slope": "positive"},
+            "only valid for external",
+        ),
+        ({"trigger_source": "external", "trigger_timer_s": 1}, "timer must be omitted"),
+        ({"trigger_source": "external", "trigger_slope": "rising"}, "positive or negative"),
+        ({"trigger_source": "external", "trigger_slope": True}, "positive or negative"),
+        ({"trigger_source": "unknown"}, "trigger source"),
+    ],
+)
+def test_sweep_rejects_invalid_external_trigger_options(trigger_options, message):
+    with pytest.raises(WaveformParameterError, match=message):
+        dry_run_sine_sweep(
+            "keysight-33521b", 2, 8, "linear", 1, 0.1, **trigger_options
+        )
 
 
 @pytest.mark.parametrize(
@@ -2618,8 +2643,8 @@ def test_33521b_channel_two_sweep_rejects_before_writes():
     assert session.writes == []
 
 
-@pytest.mark.parametrize("channel", [1, 2])
-def test_two_channel_sweep_guard_fails_closed_before_writes(channel):
+@pytest.mark.parametrize(("channel", "trigger_source"), [(1, "immediate"), (2, "external")])
+def test_two_channel_sweep_guard_fails_closed_before_writes(channel, trigger_source):
     session = FakeSession(
         response="Keysight Technologies,33512B,MY00000000,1.00",
         responses_by_command={"SOURce2:TRACk?": "ON"},
@@ -2635,6 +2660,8 @@ def test_two_channel_sweep_guard_fails_closed_before_writes(channel):
             1,
             0.2,
             channel=channel,
+            trigger_source=trigger_source,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
             resource_manager_factory=RecordingFactory(manager),
         )
 
@@ -6075,6 +6102,82 @@ class EchoAdvancedReadbackSession(FakeSession):
                     self.events.append(("query", command))
                     return written[len(prefix):]
         return super().query(command)
+
+
+@pytest.mark.parametrize(
+    ("channel", "trigger_options", "slope", "slope_command", "slope_reply"),
+    [
+        (1, {}, "positive", "POSitive", "POS"),
+        (2, {"trigger_slope": " NEGATIVE "}, "negative", "NEGative", "NEG"),
+    ],
+)
+def test_external_sweep_plan_and_fake_visa_readback(
+    channel, trigger_options, slope, slope_command, slope_reply
+):
+    trigger = f"TRIGger{channel}:"
+    sweep_mode = f"SOURce{channel}:FREQuency:MODE SWEep"
+    session = EchoAdvancedReadbackSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={trigger + "SOURce?": "EXT", trigger + "SLOPe?": slope_reply},
+    )
+    manager = FakeManager(session)
+    options = {"channel": channel, "trigger_source": "External", **trigger_options}
+    plan = dry_run_sine_sweep("keysight-33512b", 2, 8, "linear", 1, 0.1, **options)
+    result = configure_sine_sweep(
+        USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+        verify_readback=True,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        resource_manager_factory=RecordingFactory(manager),
+        **options,
+    )
+
+    assert plan.trigger_slope == result.trigger_slope == slope
+    assert plan.trigger_source == result.trigger_source == "external"
+    assert plan.trigger_timer_s is result.trigger_timer_s is None
+    assert plan.output_state == result.output_state == "off"
+    assert session.writes == list(plan.commands)
+    assert session.writes[0] == f"OUTPut{channel} OFF"
+    assert session.writes[-3:] == [
+        trigger + "SOURce EXTernal", trigger + f"SLOPe {slope_command}", sweep_mode,
+    ]
+    assert all(write not in {"OUTPut1 ON", "OUTPut2 ON", "*TRG", "*RST"} for write in session.writes)
+    assert session.events.index(("write", sweep_mode)) < session.events.index(
+        ("query", trigger + "SOURce?")
+    )
+    assert trigger + "SLOPe?" in session.queries
+    assert session.close_calls == manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    "configure_sweep",
+    [configure_sine_sweep, configure_square_sweep, configure_ramp_sweep, configure_triangle_sweep],
+)
+def test_external_sweep_rejected_before_product_live_visa_io(configure_sweep):
+    factory = Mock(side_effect=AssertionError("Product Live must reject before VISA I/O"))
+    with pytest.raises(UnsupportedInstrumentError, match="outside Product Live feature scope"):
+        configure_sweep(
+            USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+            trigger_source="external",
+            resource_manager_factory=factory,
+        )
+    factory.assert_not_called()
+
+
+def test_external_sweep_slope_readback_mismatch_leaves_output_off():
+    session = EchoAdvancedReadbackSession(responses_by_command={"TRIGger1:SLOPe?": "NEG"})
+    manager = FakeManager(session)
+    with pytest.raises(WaveformVerificationError, match="TRIGger1:SLOPe") as error:
+        configure_sine_sweep(
+            USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+            trigger_source="external",
+            verify_readback=True,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+    assert error.value.output_state == "off"
+    assert session.writes[0] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in session.writes
+    assert session.close_calls == manager.close_calls == 1
 
 
 def test_advanced_mode_readback_queries_written_settings_in_same_session():

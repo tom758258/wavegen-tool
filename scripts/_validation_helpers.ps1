@@ -483,6 +483,10 @@ function Get-AdvancedReadbackExpectation {
             $value = Get-AdvancedOption $Arguments $pair[0]
             if ($null -ne $value) { $settings[$pair[1]] = [double]$value }
         }
+        if ($settings.trigger_source -eq 'external') {
+            $slope = Get-AdvancedOption $Arguments '--trigger-slope'
+            $settings.trigger_slope = if ($null -ne $slope) { $slope } else { 'positive' }
+        }
     }
     if ($null -eq $mode) { $mode = 'CW' }
     return [pscustomobject]@{ advanced_mode = $mode; settings = $settings }
@@ -724,6 +728,27 @@ function Get-FullValidationInventory {
             $observation = @{ expected = $expected; seconds = 7 }
         }
         Add-Recipe "sweep-$variant" 'sweep' $steps ($variant -eq 'sine-linear') -Observation $observation
+    }
+    $externalSweep = @(
+        'configure-sine-sweep', '--start-frequency-hz', '2', '--stop-frequency-hz', '8',
+        '--spacing', 'linear', '--sweep-time-s', '1', '--hold-time-s', '0.2',
+        '--return-time-s', '0.2', '--trigger-source', 'external'
+    ) + $voltage
+    $sweepReadback = @{ function = 'SIN'; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+    foreach ($slope in @('positive', 'negative')) {
+        $args = $externalSweep
+        if ($slope -eq 'negative') { $args += @('--trigger-slope', $slope) }
+        $edge = if ($slope -eq 'positive') { 'rising' } else { 'falling' }
+        Add-Recipe "sweep-external-$slope" 'sweep' @(
+            (New-Step $args $sweepReadback @{ spacing = 'linear'; trigger_source = 'external'; trigger_slope = $slope }),
+            $outputOn
+        ) -Observation @{
+            input = 'external-trigger'
+            idle = if ($slope -eq 'positive') { 'low' } else { 'high' }
+            action = "Observe the start frequency for several seconds, then send one $edge edge. After the sweep returns, restore the idle level to check the opposite edge."
+            expected = 'The frequency stays at 2 Hz before the edge, sweeps once to 8 Hz, holds, returns to 2 Hz, and stays there on the opposite edge.'
+            seconds = 20
+        }
     }
     $steps = @()
     foreach ($wave in @('sine', 'square', 'ramp', 'triangle')) {
