@@ -1004,7 +1004,8 @@ Write-Output ('RESULT:' + (@{
 
 
 @pytest.mark.parametrize("failure", [
-    "none", "initial-off", "after-on", "termination-unconfirmed", "case-off", "final-off",
+    "none", "initial-off", "after-on", "termination-unconfirmed", "case-off",
+    "unexpected-main-on", "final-off",
 ])
 def test_full_sync_case_attempts_off_and_fails_if_off_is_unconfirmed(artifact_root, failure):
     result = _run_powershell_test(artifact_root, r'''
@@ -1016,7 +1017,9 @@ $script:resetCalls = 0
 $script:syncOffAttempts = @()
 $script:syncOnAttempts = 0
 $script:mainOffAttempts = @()
-$fullInventory = @(Get-FullValidationInventory -Channels @(1) -Modes output | Where-Object family -eq 'sync-control')
+$script:caseOffOrder = @()
+$channels = if ($failure -eq 'unexpected-main-on') { @(1, 2) } else { @(1) }
+$fullInventory = @(Get-FullValidationInventory -Channels $channels -Modes output | Where-Object family -eq 'sync-control')
 function Invoke-FullValidationReset {
     param($Name)
     $script:resetCalls++
@@ -1028,6 +1031,10 @@ function Invoke-FullCommand {
             if ($Channel -ne 0) { throw 'Sync is global.' }
             if ($Arguments[2] -eq 'off') { $script:syncOffAttempts += $Name }
             else { $script:syncOnAttempts++ }
+            if ($failure -eq 'unexpected-main-on' -and $Name -like '*/cleanup-sync') {
+                $script:caseOffOrder += 'sync'
+                throw [TimeoutException]::new('Sync OFF timed out during case cleanup.')
+            }
             if (($failure -eq 'initial-off' -and $Name -eq 'sync/initial-safe-off') -or
                 ($failure -eq 'case-off' -and $Name -like '*/cleanup-sync') -or
                 ($failure -eq 'final-off' -and $Name -eq 'sync/final-safe-off')) {
@@ -1045,14 +1052,25 @@ function Invoke-FullCommand {
         'output' {
             if ($Arguments[2] -ne 'off') { throw 'Main output must remain off.' }
             $script:mainOffAttempts += $Name
+            if ($Name -like '*/cleanup*-command') {
+                $script:caseOffOrder += "ch$Channel"
+                if ($failure -eq 'unexpected-main-on' -and $Channel -eq 2) {
+                    throw [TimeoutException]::new('CH2 OFF timed out during case cleanup.')
+                }
+            }
             return [pscustomobject]@{ output_state = 'off' }
         }
-        'status' { return [pscustomobject]@{ output_state = 'off' } }
+        'status' {
+            $state = if ($failure -eq 'unexpected-main-on' -and $Name -like '*/step1-other-ch2') {
+                'on'
+            } else { 'off' }
+            return [pscustomobject]@{ output_state = $state }
+        }
         'read-errors' { return [pscustomobject]@{ has_errors = $false; empty_confirmed = $true; limit_reached = $false } }
         default { throw "Unexpected command: $($Arguments[0])" }
     }
 }
-Invoke-FullLiveCases -Channels @(1) -CanRun $true
+Invoke-FullLiveCases -Channels $channels -CanRun $true
 $pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('sync/initial-safe-off', 'ch1/sync-control', 'sync/final-safe-off')
 $summary = Get-ValidationSummary -Report ([pscustomobject]@{
     cases = @($cases); status = $(if ($pass) { 'PASS' } else { 'FAIL' })
@@ -1065,10 +1083,12 @@ Write-Output ('RESULT:' + (@{
     pass = $pass; syncState = $script:syncState; resetCalls = $script:resetCalls
     syncOffAttempts = $script:syncOffAttempts; syncOnAttempts = $script:syncOnAttempts
     mainOffAttempts = $script:mainOffAttempts
+    caseOffOrder = $script:caseOffOrder
     initial = ($cases | Where-Object name -eq 'sync/initial-safe-off')
     case = ($cases | Where-Object name -eq 'ch1/sync-control')
     final = ($cases | Where-Object name -eq 'sync/final-safe-off')
     mainFinal = ($cases | Where-Object name -eq 'ch1/final-safe-off')
+    otherMainFinal = ($cases | Where-Object name -eq 'ch2/final-safe-off')
     summary = $summary
 } | ConvertTo-Json -Depth 8 -Compress))
 '''.replace("FAILURE", failure))
@@ -1085,7 +1105,7 @@ Write-Output ('RESULT:' + (@{
     assert result["resetCalls"] == result["syncOnAttempts"] == 1
     assert "ch1/sync-control/cleanup-sync" in result["syncOffAttempts"]
     assert "ch1/sync-control/cleanup-command" in result["mainOffAttempts"]
-    unconfirmed = failure in {"case-off", "termination-unconfirmed"}
+    unconfirmed = failure in {"case-off", "termination-unconfirmed", "unexpected-main-on"}
     assert result["case"]["sync_cleanup_status"] == ("unconfirmed" if unconfirmed else "confirmed")
     assert result["case"]["cleanup_status"] == ("FAIL" if unconfirmed else "PASS")
     assert result["final"]["status"] == (
@@ -1099,6 +1119,12 @@ Write-Output ('RESULT:' + (@{
                 "Sync OFF remains unconfirmed" in reason
                 for reason in result[case_name]["failure_reasons"]
             )
+    if failure == "unexpected-main-on":
+        assert result["caseOffOrder"] == ["ch2", "sync", "ch1"]
+        assert result["case"]["status"] == "FAIL"
+        assert result["otherMainFinal"]["status"] == "PASS"
+        assert any("CH2 OFF timed out" in reason for reason in result["case"]["failure_reasons"])
+        assert any("Sync OFF timed out" in reason for reason in result["case"]["failure_reasons"])
 
 
 def test_trigger_validation_guard_keeps_pending_model_out_of_product(monkeypatch, capsys):

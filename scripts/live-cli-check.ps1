@@ -247,7 +247,13 @@ function Invoke-FullCommand {
 }
 
 function Assert-FullReadback {
-    param($Payload, [hashtable]$Expected)
+    param($Payload, [hashtable]$Expected, [int]$MainChannel = 0)
+    if ($MainChannel -gt 0 -and $Expected['output_state'] -ceq 'off' -and
+        'output_state' -in $Payload.PSObject.Properties.Name -and [string]$Payload.output_state -ceq 'on') {
+        $error = [InvalidOperationException]::new("Output OFF was not confirmed for CH${MainChannel}. Main output readback is ON.")
+        $error.Data['MainOutputOnChannel'] = $MainChannel
+        throw $error
+    }
     foreach ($key in $Expected.Keys) {
         if ($key -notin $Payload.PSObject.Properties.Name -or $null -eq $Payload.$key) { throw "Missing readback: $key." }
         $value = $Expected[$key]
@@ -348,10 +354,11 @@ function Set-FullSafeOff {
     param([string]$Name, [int]$Channel)
     try {
         $payload = Invoke-FullCommand -Name "$Name-command" -Arguments @('output', '--state', 'off') -Channel $Channel
-        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' } -MainChannel $Channel
         $payload = Invoke-FullCommand -Name "$Name-status" -Arguments @('status') -Channel $Channel
-        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' } -MainChannel $Channel
     } catch {
+        if ($_.Exception.Data['MainOutputOnChannel']) { throw }
         throw "Output OFF was not confirmed for CH${Channel}. $($_.Exception.Message)"
     }
 }
@@ -433,6 +440,7 @@ function Invoke-FullLiveCases {
             $reasons = @()
             $cleanupReasons = @()
             $mainOnAttempted = $false
+            $unexpectedMainOnChannel = 0
             $syncOnInFlight = $false
             try {
                 foreach ($checked in (@($channel) + @($Channels | Where-Object { $_ -ne $channel }))) {
@@ -451,7 +459,7 @@ function Invoke-FullLiveCases {
                 Invoke-FullValidationReset -Name "$($recipe.name)/reset" -SyncOff $evidence.sync_reset_off
                 foreach ($checked in $Channels) {
                     $state = Invoke-FullCommand -Name "$($recipe.name)/reset-ch$checked" -Arguments @('status') -Channel $checked
-                    Assert-FullReadback -Payload $state -Expected @{ output_state = 'off' }
+                    Assert-FullReadback -Payload $state -Expected @{ output_state = 'off' } -MainChannel $checked
                     $mainOffByChannel[$checked] = $true
                 }
                 Assert-FullErrorQueue -Name "$($recipe.name)/reset-errors"
@@ -505,6 +513,9 @@ function Invoke-FullLiveCases {
                     $syncOnInFlight = $turningSyncOn
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
                     $syncOnInFlight = $false
+                    if ($command -eq 'status') {
+                        Assert-FullReadback -Payload $result -Expected @{ output_state = 'off' } -MainChannel $channel
+                    }
                     Assert-FullReadback -Payload $result -Expected $step.result
                     if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
                         $command -eq 'list-arbitrary-memory' -and $index -eq $recipe.steps.Count) {
@@ -521,11 +532,11 @@ function Invoke-FullLiveCases {
                     $expected = @{ output_state = 'off' }
                     foreach ($key in $step.readback.Keys) { $expected[$key] = $step.readback[$key] }
                     $payload = Invoke-FullCommand -Name "$name-readback" -Arguments @('status') -Channel $channel
-                    Assert-FullReadback -Payload $payload -Expected $expected
+                    Assert-FullReadback -Payload $payload -Expected $expected -MainChannel $channel
                     foreach ($other in @($Channels | Where-Object { $_ -ne $channel })) {
                         $mainOffByChannel[$other] = $false
                         $payload = Invoke-FullCommand -Name "$name-other-ch$other" -Arguments @('status') -Channel $other
-                        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+                        Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' } -MainChannel $other
                         $mainOffByChannel[$other] = $true
                     }
                     Assert-FullErrorQueue -Name "$name-errors"
@@ -537,15 +548,21 @@ function Invoke-FullLiveCases {
                 }
             } catch {
                 $reasons += $_.Exception.Message
+                $unexpectedMainOnChannel = [int]$_.Exception.Data['MainOutputOnChannel']
                 if ($_.Exception.Data['TerminationUnconfirmed']) {
                     $syncOffUnconfirmed = $true
                     if (-not $syncOnInFlight) { $unconfirmedChannels += $channel }
                 }
             } finally {
-                $cleanupOrder = if ($mainOnAttempted) { @('main', 'sync') } else { @('sync', 'main') }
-                $mainOffConfirmed = $false
-                foreach ($output in $cleanupOrder) {
-                    if ($output -eq 'sync') {
+                $cleanupOrder = if ($mainOnAttempted -or $unexpectedMainOnChannel -eq $channel) {
+                    @($channel, 0)
+                } else { @(0, $channel) }
+                if ($unexpectedMainOnChannel -gt 0 -and $unexpectedMainOnChannel -ne $channel) {
+                    $cleanupOrder = @($unexpectedMainOnChannel) + $cleanupOrder
+                }
+                $mainOffConfirmed = $true
+                foreach ($checked in $cleanupOrder) {
+                    if ($checked -eq 0) {
                         try {
                             Set-FullSyncSafeOff -Name "$($recipe.name)/cleanup-sync"
                             $evidence.sync_cleanup_status = 'confirmed'
@@ -554,17 +571,21 @@ function Invoke-FullLiveCases {
                             $cleanupReasons += "Sync OFF was not confirmed. $($_.Exception.Message)"
                         }
                     } else {
+                        $stage = if ($checked -eq $channel) { 'cleanup' } else { "cleanup-ch$checked" }
+                        $mainOffByChannel[$checked] = $false
                         try {
-                            Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel
-                            $mainOffConfirmed = $true
-                        } catch { $cleanupReasons += $_.Exception.Message }
+                            Set-FullSafeOff -Name "$($recipe.name)/$stage" -Channel $checked
+                            $mainOffByChannel[$checked] = $checked -notin $unconfirmedChannels
+                        } catch {
+                            $mainOffConfirmed = $false
+                            $cleanupReasons += $_.Exception.Message
+                        }
                     }
                 }
                 if ($mainOffConfirmed) {
                     try { Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors" }
                     catch { $cleanupReasons += $_.Exception.Message }
                 }
-                $mainOffByChannel[$channel] = $mainOffConfirmed -and ($channel -notin $unconfirmedChannels)
                 if ($channel -in $unconfirmedChannels) {
                     $cleanupReasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
                 }
