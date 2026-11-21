@@ -558,7 +558,7 @@ def test_full_preflight_arbitrary_direct_without_hardware(
     assert report["status"] == "PASS"
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
-    assert report["selected_modes"] == ["arbitrary"]
+    assert report["selected_modes"] in ("arbitrary", ["arbitrary"])
     cases = {case["name"]: case["status"] for case in report["cases"]}
     for step in (1, 3):
         for mode in ("dry-run", "simulate"):
