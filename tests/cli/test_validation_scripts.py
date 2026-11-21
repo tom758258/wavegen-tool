@@ -1107,6 +1107,9 @@ function Assert-FullErrorQueue { param($Name) }
 function Invoke-FullValidationReset { param($Name) }
 function Invoke-FullCommand {
     param($Name, $Arguments, [int]$Channel)
+    if ($Arguments[0] -eq 'sync-output') {
+        return [pscustomobject]@{ sync_state = 'off'; readback_verified = $true }
+    }
     if ($Arguments[0] -eq 'clear-arbitrary-memory') { $script:clearCalls++ }
     return [pscustomobject]@{ output_state = 'off' }
 }
