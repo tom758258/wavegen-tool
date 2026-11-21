@@ -26,7 +26,9 @@ from wavegen_tool_core.errors import (
 from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_VALIDATION
 from wavegen_tool_core.simulator import (
     SIMULATED_33521B_RESOURCE,
+    Simulated33521BState,
     SimulatedResourceManager,
+    SimulatedResourceManagerFactory,
 )
 from wavegen_tool_core.visa import (
     AMConfig,
@@ -6161,6 +6163,27 @@ def test_external_sweep_rejected_before_product_live_visa_io(configure_sweep):
             resource_manager_factory=factory,
         )
     factory.assert_not_called()
+
+
+@pytest.mark.parametrize("configure_sweep", [configure_sine_sweep, configure_ramp_sweep])
+def test_external_sweep_rejects_a_non_simulator_manager_from_simulator_factory(
+    configure_sweep, monkeypatch
+):
+    session = FakeSession()
+    manager = FakeManager(session)
+    factory = SimulatedResourceManagerFactory(Simulated33521BState())
+    monkeypatch.setattr(SimulatedResourceManagerFactory, "__call__", lambda _self, _library: manager)
+
+    with pytest.raises(UnsupportedInstrumentError):
+        configure_sweep(
+            USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+            trigger_source="external",
+            resource_manager_factory=factory,
+        )
+
+    assert manager.open_calls == []
+    assert session.writes == []
+    assert manager.close_calls == 1
 
 
 def test_external_sweep_slope_readback_mismatch_leaves_output_off():

@@ -175,7 +175,8 @@ duplicate those rules.
 Ordinary sweeps accept `trigger_source` (`"immediate"` by default, `"bus"`,
 `"timer"`, or `"external"`). Timer requires `trigger_timer_s`. Only External
 accepts `trigger_slope` (`"positive"` by default or `"negative"`) and requires
-omitting `trigger_timer_s`. Successful results and dry-run plans report the
+omitting `trigger_timer_s`. An explicit JSON `null` for that field is invalid
+with External. Successful results and dry-run plans report the
 programmed or planned `trigger_slope`, with `null` for other sources. Worker
 supports External Sweep in dry-run and simulation. Core rejects it during
 Product Live execution. List Sweeps use `frequencies_hz` (a JSON array)

@@ -604,6 +604,17 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
     for field in ("trigger_source", "trigger_slope"):
         if field in arguments and not isinstance(arguments[field], str):
             raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a string.")
+    trigger_source = arguments.get("trigger_source")
+    if (
+        command in _SWEEP_COMMANDS
+        and "trigger_timer_s" in arguments
+        and arguments["trigger_timer_s"] is None
+        and isinstance(trigger_source, str)
+        and trigger_source.strip().casefold() == "external"
+    ):
+        raise WorkerRequestValidationError(
+            "invalid_arguments", "Omit trigger_timer_s for external trigger source."
+        )
     for field in ("voltage_limits_enabled", "autorange_enabled"):
         if field in arguments and type(arguments[field]) is not bool:
             raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a boolean.")

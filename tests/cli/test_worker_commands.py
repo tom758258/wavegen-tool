@@ -34,6 +34,7 @@ def _sine_arguments() -> dict[str, object]:
     [
         ("configure-sine-sweep", {"trigger_source": "external", "trigger_slope": True}),
         ("configure-sine-sweep", {"trigger_source": "external", "trigger_timer_s": 1}),
+        ("configure-sine-sweep", {"trigger_source": " ExTeRnAl ", "trigger_timer_s": None}),
         ("configure-sine-list-sweep", {"frequencies_hz": [2, 8], "trigger_slope": "positive"}),
     ],
 )
