@@ -221,7 +221,10 @@ foreach ($targetProfile in $targets) {
                 $stepIndex += 1
                 $command = $step.arguments[0]
                 $usesChannel = Test-ValidationCommandUsesChannel $command
-                $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence')) {
+                # Each simulator invocation starts fresh. Built-in configure can
+                # load its own segment; ordinary Arbitrary configure needs a prior upload.
+                $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence') -and
+                    '--load-builtin' -notin $step.arguments) {
                     @('dry-run')
                 } elseif ($command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory')) {
                     @('dry-run', 'simulate')

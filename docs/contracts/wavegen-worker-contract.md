@@ -224,7 +224,7 @@ model and connection policy.
 | Arbitrary command | Arguments in addition to the optional `channel` |
 | --- | --- |
 | `upload-arbitrary` | `name`, `path` as an absolute Worker-host-local CSV path |
-| `configure-arbitrary` | `name` (string), `sample_rate_hz` and `amplitude_vpp` (numbers), optional `offset_v` (number, default `0`) and `load` (string or number, default `"50"`) |
+| `configure-arbitrary` | `name` (string), `sample_rate_hz` and `amplitude_vpp` (numbers), optional `offset_v` (number, default `0`), `load` (string or number, default `"50"`), and `load_builtin` (boolean, default `false`) |
 | `configure-arbitrary-sequence` | `document` as a JSON object using the [sequence format](../cli/README.md#arbitrary-waveforms-and-sequences) |
 | `list-arbitrary-memory` | None |
 | `clear-arbitrary-memory` | Exact boolean `confirm_clear: true` |
@@ -235,6 +235,9 @@ the outcome. Sequence input is supplied directly in `document`. Upload
 results expose metadata such as name and sample count. Memory listing
 reports `names`, `free_points`, and `catalog_truncated`. Dry-run does
 not inspect device memory or verify references to loaded waveforms.
+With `load_builtin: true`, `name` selects a supported [Keysight built-in waveform](../cli/README.md#arbitrary-waveforms-and-sequences).
+The simulator result includes `builtin_loaded: true` when the waveform was
+loaded, or `builtin_loaded: false` when the existing built-in was reused.
 Arbitrary execution is available in simulation. A live request that passes
 admission receives the Core unsupported-instrument error in the job result.
 

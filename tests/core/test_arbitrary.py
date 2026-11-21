@@ -18,6 +18,8 @@ MODEL = "keysight-33512b"
 DEFAULT_ARBITRARY = r"INT:\BUILTIN\EXP_RISE.ARB"
 SAMPLES = (-1, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1)
 PLAYBACK = {"name": "WAVE", "sample_rate_hz": 1e6, "amplitude_vpp": 1.0}
+BUILTIN_PLAYBACK = {**PLAYBACK, "name": "SINC", "load_builtin": True}
+SINC_PATH = r"INT:\BUILTIN\SINC.ARB"
 
 
 @pytest.fixture
@@ -85,6 +87,110 @@ def fake_visa(monkeypatch):
         )
 
     return state, commands, sessions, run
+
+
+@pytest.mark.parametrize("name,stem", [
+    ("Cardiac", "CARDIAC"), ("Exponential Rise", "EXP_RISE"),
+    ("exponential fall", "EXP_FALL"), ("Gaussian", "GAUSSIAN"),
+    ("Haversine", "HAVERSINE"), ("Lorentz", "LORENTZ"),
+    ("D-Lorentz", "D_LORENTZ"), ("Negative Ramp", "NEG_RAMP"), ("Sinc", "SINC"),
+])
+def test_builtin_arbitrary_plan_uses_documented_files(name, stem):
+    path = rf"INT:\BUILTIN\{stem}.ARB"
+    plan = run_arbitrary(
+        "configure-arbitrary", {**BUILTIN_PLAYBACK, "name": name, "channel": 2}, model=MODEL
+    )
+    assert plan["name"] == stem and plan["executed"] is False
+    assert "builtin_loaded" not in plan
+    assert f'MMEMory:LOAD:DATA2 "{path}"' in plan["commands"]
+    assert f'SOURce2:FUNCtion:ARBitrary "{path}"' in plan["commands"]
+
+
+@pytest.mark.parametrize("changes,model,message", [
+    ({"name": r"INT:\BUILTIN\SINC.ARB"}, MODEL, "Unknown built-in"),
+    ({"name": 'SINC";*RST'}, MODEL, "Unknown built-in"),
+    ({"load_builtin": 1}, MODEL, "boolean"),
+    ({}, "keysight-33510b", "standard Arbitrary"),
+    ({"channel": 2}, "keysight-33521b", "Channel 2"),
+])
+def test_builtin_arbitrary_rejects_invalid_requests(changes, model, message):
+    with pytest.raises(WaveformParameterError, match=message):
+        run_arbitrary("configure-arbitrary", {**BUILTIN_PLAYBACK, **changes}, model=model)
+
+
+def test_builtin_arbitrary_loads_and_reuses_without_touching_other_channel(fake_visa):
+    state, commands, sessions, run = fake_visa
+    state.ch1.output_enabled = state.ch2.output_enabled = True
+    state.ch2.arbitrary_points["EXISTING"] = 8
+    settings = {**BUILTIN_PLAYBACK, "channel": 2, "offset_v": 0.1, "load": "high-z"}
+    result = run("configure-arbitrary", **settings)
+    assert result["builtin_loaded"] is True and result["output_state"] == "off"
+    load = f'MMEMory:LOAD:DATA2 "{SINC_PATH}"'
+    assert commands.index("OUTPut2?") < commands.index(load)
+    assert commands.count("SOURce2:DATA:VOLatile:CATalog?") == 2
+    assert sessions[-1].writes[0] == "OUTPut2 OFF"
+    assert state.ch2.selected_arbitrary == SINC_PATH
+    assert state.ch2.active_function == "ARB"
+    assert state.ch2.arbitrary_sample_rate_hz == 1e6
+    assert state.ch2.amplitude_vpp == 1.0 and state.ch2.offset_v == 0.1
+    assert state.ch2.output_load == "high-z" and not state.ch2.output_enabled
+    assert state.ch1.output_enabled and state.ch1.active_function == "SIN"
+    assert state.ch1.arbitrary_points == {DEFAULT_ARBITRARY: 40}
+    assert set(state.ch2.arbitrary_points) == {DEFAULT_ARBITRARY, "EXISTING", SINC_PATH}
+
+    state.ch2.arbitrary_points[SINC_PATH.lower()] = state.ch2.arbitrary_points.pop(SINC_PATH)
+    reused = run("configure-arbitrary", **settings)
+    assert reused["builtin_loaded"] is False and load not in commands
+    assert state.ch2.selected_arbitrary == SINC_PATH.lower()
+    writes = [write for session in sessions for write in session.writes]
+    assert all("CLEar" not in write and write != "*RST" and not write.endswith(" ON") for write in writes)
+
+
+@pytest.mark.parametrize("names", [
+    ("sinc",), (r"USB:\Other\SINC.BARB",), ("sinc.seq",), (SINC_PATH, "sinc"),
+])
+def test_builtin_arbitrary_rejects_catalog_conflicts_before_writes(fake_visa, names):
+    state, _, sessions, run = fake_visa
+    state.ch2.arbitrary_points.update(dict.fromkeys(names, 8))
+    expected = state.ch2.arbitrary_points.copy()
+    with pytest.raises(WaveformVerificationError, match="conflicts|ambiguous"):
+        run("configure-arbitrary", **BUILTIN_PLAYBACK, channel=2)
+    assert sessions[-1].writes == []
+    assert state.ch2.arbitrary_points == expected
+
+
+@pytest.mark.parametrize("failure,message", [
+    ("memory", "SCPI error -225"), ("completion", "did not confirm completion"),
+    ("missing", "missing after loading"),
+])
+def test_builtin_arbitrary_load_failures_stop_before_playback(fake_visa, monkeypatch, failure, message):
+    state, _, sessions, run = fake_visa
+    if failure == "memory":
+        state.ch1.arbitrary_points["FULL"] = state.ch1.arbitrary_free_points
+    elif failure == "completion":
+        query = SimulatedResource.query
+        monkeypatch.setattr(SimulatedResource, "query", lambda self, command:
+                            "0" if command == "*OPC?" else query(self, command))
+    else:
+        write = SimulatedResource._apply_write
+        monkeypatch.setattr(SimulatedResource, "_apply_write", lambda self, command:
+                            None if command.startswith("MMEMory:LOAD:") else write(self, command))
+    with pytest.raises(VisaWriteError, match=message):
+        run("configure-arbitrary", **BUILTIN_PLAYBACK)
+    assert sessions[-1].writes == ["OUTPut1 OFF", f'MMEMory:LOAD:DATA1 "{SINC_PATH}"']
+    assert state.ch1.selected_arbitrary == DEFAULT_ARBITRARY
+    assert not state.ch1.output_enabled and sessions[-1].closed
+
+
+def test_builtin_arbitrary_rejects_wrong_selection_readback(fake_visa, monkeypatch):
+    state, _, _, run = fake_visa
+    query = SimulatedResource.query
+    monkeypatch.setattr(SimulatedResource, "query", lambda self, command:
+                        f'"{DEFAULT_ARBITRARY}"' if command == "SOURce1:FUNCtion:ARBitrary?"
+                        else query(self, command))
+    with pytest.raises(WaveformVerificationError, match="waveform did not match"):
+        run("configure-arbitrary", **BUILTIN_PLAYBACK)
+    assert not state.ch1.output_enabled
 
 
 @pytest.mark.parametrize("order,endian", [("NORM", ">"), ("SWAP", "<")])
@@ -272,10 +378,14 @@ def test_single_waveform_and_confirmed_clear_keep_channel_isolation(csv_path, fa
     assert state.ch2.selected_arbitrary == DEFAULT_ARBITRARY
 
 
-@pytest.mark.parametrize("command", ["configure-arbitrary", "configure-arbitrary-sequence"])
+@pytest.mark.parametrize("command,arguments", [
+    ("configure-arbitrary", PLAYBACK),
+    ("configure-arbitrary", BUILTIN_PLAYBACK),
+    ("configure-arbitrary-sequence", {"document": _sequence()}),
+])
 @pytest.mark.parametrize("response", ["1", "UNKNOWN", None], ids=["on", "unknown", "timeout"])
 def test_playback_rejects_unconfirmed_sample_rate_isolation(
-    csv_path, fake_visa, monkeypatch, command, response
+    csv_path, fake_visa, monkeypatch, command, arguments, response
 ):
     state, commands, sessions, run = fake_visa
     run("upload-arbitrary", name="WAVE", path=csv_path, channel=2)
@@ -293,7 +403,6 @@ def test_playback_rejects_unconfirmed_sample_rate_isolation(
         return original(session, scpi)
 
     monkeypatch.setattr(SimulatedResource, "_query_response", query)
-    arguments = PLAYBACK if command == "configure-arbitrary" else {"document": _sequence()}
     with pytest.raises(WaveformVerificationError, match="sample rate coupling"):
         run(command, **arguments, channel=2)
 

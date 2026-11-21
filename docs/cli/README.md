@@ -667,6 +667,20 @@ For a loaded file shown as a path in the catalog, use its base name without
 the extension in playback or Sequence steps. Matching is case-insensitive,
 and an ambiguous base name is rejected.
 
+To select a Keysight built-in waveform without a CSV, add `--load-builtin`:
+
+```console
+wavegen-tool configure-arbitrary --name SINC --load-builtin --sample-rate-hz 1000000 --amplitude-vpp 1 --simulate
+```
+
+Built-in names are case-insensitive: `CARDIAC`, `EXP_RISE`, `EXP_FALL`,
+`GAUSSIAN`, `HAVERSINE`, `LORENTZ`, `D_LORENTZ`, `NEG_RAMP`, and `SINC`.
+You can also quote `Exponential Rise`, `Exponential Fall`, `D-Lorentz`, or
+`Negative Ramp`. Core loads a missing waveform into the selected channel or
+reuses the verified built-in catalog entry. A same-name entry with an
+unconfirmed origin causes an error. Configuration leaves the selected output
+off and preserves existing memory. A dry-run shows the load-if-absent path.
+
 Use `configure-arbitrary-sequence --file sequence.json` with a version 1
 document. For example, upload each named segment before applying this
 configuration.
@@ -1069,7 +1083,7 @@ identity and final error-queue cases remain mandatory regardless of selection.
 | `sweep` | Linear and logarithmic sweeps with Immediate, Bus, Timer, and both External trigger edges |
 | `list-sweep` | Native frequency List and Bus triggers, CW recovery |
 | `output` | Output setup, controlled ON/OFF |
-| `arbitrary` | Synthetic CSV upload, memory inspection, playback and confirmed volatile Clear |
+| `arbitrary` | Synthetic CSV upload, memory inspection, playback, confirmed volatile Clear, and built-in SINC selection and reuse |
 | `sequence` | Native Bus/External sequences; once, repeat, onceWaitTrig, repeatTilTrig |
 
 33512B admits CH1/CH2 Arbitrary; 33521B admits CH1; 33510B has no

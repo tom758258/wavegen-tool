@@ -12,6 +12,7 @@ import re
 import stat
 import sys
 
+from wavegen_tool_core._keysight_builtin import BUILTIN_ARBITRARY_PATHS
 from wavegen_tool_core.capabilities import WavegenCapabilities
 from wavegen_tool_core.errors import (
     UnsupportedInstrumentError,
@@ -56,9 +57,15 @@ _NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,11}")
 _NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _PLAYBACK_FIELDS = frozenset({"name", "sample_rate_hz", "amplitude_vpp", "offset_v", "load"})
 _SEQUENCE_FIELDS = _PLAYBACK_FIELDS | {"version", "trigger_source", "trigger_slope", "steps"}
+_BUILTIN_NAME_ALIASES = {
+    "EXPONENTIAL RISE": "EXP_RISE",
+    "EXPONENTIAL FALL": "EXP_FALL",
+    "D-LORENTZ": "D_LORENTZ",
+    "NEGATIVE RAMP": "NEG_RAMP",
+}
 _ARGUMENT_FIELDS = {
     "upload-arbitrary": {"name", "path"},
-    "configure-arbitrary": _PLAYBACK_FIELDS,
+    "configure-arbitrary": _PLAYBACK_FIELDS | {"load_builtin"},
     "configure-arbitrary-sequence": {"document"},
     "list-arbitrary-memory": set(),
     "clear-arbitrary-memory": {"confirm_clear"},
@@ -151,8 +158,9 @@ def _name(value: object) -> str:
     return value
 
 
-def _playback(arguments: Mapping[str, object]) -> _Playback:
-    name = _name(arguments.get("name"))
+def _playback(arguments: Mapping[str, object], *, name: str | None = None) -> _Playback:
+    if name is None:
+        name = _name(arguments.get("name"))
     rate = _normalize_finite_number(
         arguments.get("sample_rate_hz"), "sample rate", waveform="Arbitrary"
     )
@@ -263,6 +271,19 @@ def _lookup(catalog: tuple[str, ...], name: str, *, waveform_only: bool = False)
     return entry
 
 
+def _lookup_builtin(catalog: tuple[str, ...], name: str, path: str) -> str | None:
+    entry = _lookup(catalog, name)
+    if entry is not None and entry.casefold() != path.casefold():
+        raise WaveformVerificationError(
+            f"Arbitrary name {name} conflicts with a catalog entry of unconfirmed built-in origin."
+        )
+    return entry
+
+
+def _builtin_load_command(channel: int, path: str) -> str:
+    return f'MMEMory:LOAD:DATA{channel} "{path}"'
+
+
 def _count_query(session: VisaSession, command: str) -> int:
     try:
         response = session.query(command).strip()
@@ -361,6 +382,7 @@ def _plan(
     name: str | None,
     playback: _Playback | None,
     sequence: _Sequence | None,
+    builtin_path: str | None,
 ) -> tuple[str, ...]:
     if command == "list-arbitrary-memory":
         return (f"{source}:DATA:VOLatile:CATalog?", f"{source}:DATA:VOLatile:FREe?")
@@ -369,6 +391,16 @@ def _plan(
     if command == "clear-arbitrary-memory":
         return (f"OUTPut{channel} OFF", f"{source}:DATA:VOLatile:CLEar")
     descriptor = (f"{source}:DATA:SEQuence <definite-length descriptor>",) if sequence else ()
+    if builtin_path is not None:
+        catalog = f"{source}:DATA:VOLatile:CATalog?"
+        return (
+            catalog,
+            f"OUTPut{channel} OFF",
+            _builtin_load_command(channel, builtin_path),
+            catalog,
+            *_playback_commands(channel, builtin_path, playback, None),
+            f"{source}:FUNCtion:ARBitrary?",
+        )
     return (
         f"OUTPut{channel} OFF",
         *descriptor,
@@ -430,9 +462,13 @@ def _apply_playback(
     catalog: tuple[str, ...],
     playback: _Playback,
     sequence: _Sequence | None,
-) -> None:
+    *,
+    builtin_path: str | None,
+) -> bool:
     name = playback.name
-    if sequence is None:
+    if builtin_path is not None:
+        name = _lookup_builtin(catalog, name, builtin_path)
+    elif sequence is None:
         name = _lookup(catalog, name, waveform_only=True)
         if name is None:
             raise WaveformParameterError(
@@ -460,6 +496,21 @@ def _apply_playback(
     _require_no_error(session, before_write=True)
     session.write(f"OUTPut{channel} OFF")
     _require_output_off(session, channel)
+    loaded_builtin = builtin_path is not None and name is None
+    if loaded_builtin:
+        try:
+            session.write(_builtin_load_command(channel, builtin_path))
+            _complete_write(session)
+            name = _lookup_builtin(_catalog(session, source), playback.name, builtin_path)
+            if name is None:
+                raise WaveformVerificationError("Built-in waveform is missing after loading.")
+        except Exception as exc:
+            detail = f" {exc}" if isinstance(exc, WaveformVerificationError) else ""
+            raise VisaWriteError(
+                "Built-in Arbitrary load failed or could not be verified. "
+                f"Volatile memory state may be uncertain.{detail}"
+            ) from exc
+        _require_output_off(session, channel)
     if sequence is not None:
         try:
             message = _binary_block(
@@ -476,6 +527,12 @@ def _apply_playback(
         session.write(write)
     _complete_write(session)
     _require_output_off(session, channel)
+    if builtin_path is not None:
+        selected = session.query(f"{source}:FUNCtion:ARBitrary?").strip().casefold()
+        if selected != f'"{name}"'.casefold():
+            raise WaveformVerificationError("Selected Arbitrary waveform did not match the built-in.")
+        _require_no_error(session)
+    return loaded_builtin
 
 
 def run_arbitrary(
@@ -508,9 +565,22 @@ def run_arbitrary(
         )
     channel = _validate_channel(arguments.get("channel", 1))
     source = f"SOURce{channel}"
-    playback = sequence = name = None
+    playback = sequence = name = builtin_path = None
     if command == "configure-arbitrary":
-        playback = _playback(arguments)
+        load_builtin = arguments.get("load_builtin", False)
+        if type(load_builtin) is not bool:
+            raise WaveformParameterError("load_builtin must be a boolean.")
+        if load_builtin:
+            requested = arguments.get("name")
+            token = requested.upper() if isinstance(requested, str) and requested.isascii() else ""
+            name = _BUILTIN_NAME_ALIASES.get(token, token)
+            builtin_path = BUILTIN_ARBITRARY_PATHS.get(name)
+            if builtin_path is None:
+                raise WaveformParameterError(
+                    "Unknown built-in Arbitrary name. Choose "
+                    + ", ".join(BUILTIN_ARBITRARY_PATHS) + "."
+                )
+        playback = _playback(arguments, name=name)
         name = playback.name
     elif command == "configure-arbitrary-sequence":
         playback, sequence = _sequence(arguments.get("document"))
@@ -553,7 +623,7 @@ def run_arbitrary(
             model=model_info.canonical_model,
             canonical_model_id=model_info.model_id,
             executed=False,
-            commands=_plan(command, channel, source, name, playback, sequence),
+            commands=_plan(command, channel, source, name, playback, sequence, builtin_path),
         )
 
     def operate(session: VisaSession, context: IdentificationResult) -> None:
@@ -587,7 +657,11 @@ def run_arbitrary(
             _upload(session, source, channel, name, samples, transport=context.transport)
             result["output_state"] = "off"
         else:
-            _apply_playback(session, source, channel, catalog, playback, sequence)
+            loaded_builtin = _apply_playback(
+                session, source, channel, catalog, playback, sequence, builtin_path=builtin_path
+            )
+            if builtin_path is not None:
+                result["builtin_loaded"] = loaded_builtin
 
     identity, _ = _run_on_supported_instrument(
         resource,

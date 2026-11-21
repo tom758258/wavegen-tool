@@ -66,7 +66,10 @@ Result families add fields appropriate to the command:
 - Arbitrary results identify `action`, selected `channel`, and
   `status` (`"planned"` or `"completed"`). Depending on the operation,
   they report waveform name and sample count, playback and step metadata,
-  or a bounded catalog and free points.
+  or a bounded catalog and free points. With `configure-arbitrary --load-builtin`,
+  an executed result includes `builtin_loaded`, which is `true` if a built-in
+  waveform was loaded and `false` if it was reused. A dry-run shows the
+  commands for loading an absent built-in.
 - dry-run plans contain `mode: "dry-run"`, the planning model and
   `canonical_model_id`, ordered `commands`, `executed: false`, selected
   `channel`, and the normalized request fields.

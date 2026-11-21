@@ -1388,6 +1388,14 @@ def test_worker_arbitrary_http_workflow_validates_files_in_accepted_jobs(tmp_pat
         uploaded = submit("upload-arbitrary", arguments)["result"]
         assert uploaded["executed"] is True and uploaded["sample_count"] == 8
         assert str(csv_file) not in json.dumps(uploaded)
+        builtin = {"name": "SINC", "load_builtin": True, "channel": 2,
+                   "sample_rate_hz": 1e6, "amplitude_vpp": 1}
+        planned_builtin = submit("configure-arbitrary", builtin, mode="dry_run")["result"]
+        assert planned_builtin["executed"] is False
+        assert r'MMEMory:LOAD:DATA2 "INT:\BUILTIN\SINC.ARB"' in planned_builtin["commands"]
+        for loaded in (True, False):
+            configured = submit("configure-arbitrary", builtin)["result"]
+            assert configured["builtin_loaded"] is loaded and configured["output_state"] == "off"
         document = {
             "version": 1, "name": "SEQ", "trigger_source": "bus", "sample_rate_hz": 1e6,
             "amplitude_vpp": 1, "steps": [{"waveform": "WAVE", "play_control": "onceWaitTrig"}],
