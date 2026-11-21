@@ -211,6 +211,9 @@ support), `mode` (`"normal"` or `"carrier"`), and `polarity` (`"normal"` or
 and reject `channel`. Results expose `sync_state` and `commands`. Configuration
 also reports `source_channel`, `sync_mode`, and `polarity`. An executed success
 includes `readback_verified: true`. Dry-run reports `executed: false`.
+In Product Live, Core rejects Sync configuration and Sync ON during job
+execution. Explicit Sync OFF remains available under the existing live
+model and connection policy.
 
 | Arbitrary command | Arguments in addition to the optional `channel` |
 | --- | --- |

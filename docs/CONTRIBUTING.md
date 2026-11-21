@@ -199,7 +199,9 @@ Before confirming Real Full, check the front-panel Sync BNC wiring and
 disconnect sensitive equipment. A reset may briefly enable Sync. The runner
 verifies Sync OFF before each reset and forces it OFF again after `*OPC?`.
 Case cleanup and final cleanup require confirmed Sync OFF as well as the
-existing main-output checks. A failed Sync OFF check fails the run.
+existing main-output checks. A failed Sync OFF check fails the run. The
+shareable report records the wiring confirmation and per-case Sync OFF
+readback outcomes before reset, after reset, and during cleanup.
 
 Full uses the same selected cases for Preflight, PlanOnly, and Real Live. CH1 covers
 all eight static waveforms, internal AM (normal and DSSC), FM, PM, FSK, BPSK,

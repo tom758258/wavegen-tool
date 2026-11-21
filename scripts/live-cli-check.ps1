@@ -149,15 +149,24 @@ function Get-ValidationSummary {
         "- Backend: $($Report.backend)",
         "- Resource: $($Report.resource)",
         "- Hardware touched: $($Report.hardware_touched.ToString().ToLowerInvariant())",
-        "- VISA I/O performed: $($Report.visa_io_performed.ToString().ToLowerInvariant())",
-        "",
-        "## Cases",
-        ""
+        "- VISA I/O performed: $($Report.visa_io_performed.ToString().ToLowerInvariant())"
     )
+    if ('sync_reset_safety' -in $Report.PSObject.Properties.Name) {
+        $lines += "- Sync reset warning: $($Report.sync_reset_safety.warning)"
+        $lines += "- Safe Sync wiring confirmed by operator: $($Report.sync_reset_safety.wiring_confirmed)"
+    }
+    $lines += @("", "## Cases", "")
     foreach ($case in @($Report.cases)) {
         $lines += "- $($case.status): $($case.name)"
         if ('verification_method' -in $case.PSObject.Properties.Name) {
             $lines += "  - Method: $($case.verification_method). Cleanup: $($case.cleanup_status)."
+            if ('sync_reset_off' -in $case.PSObject.Properties.Name -and $case.sync_reset_off) {
+                $sync = $case.sync_reset_off
+                $lines += "  - Sync OFF before reset: $($sync.before_reset). After reset: $($sync.after_reset). Reset failure cleanup: $($sync.failure_cleanup)."
+            }
+            if ('sync_cleanup_status' -in $case.PSObject.Properties.Name -and $case.sync_cleanup_status) {
+                $lines += "  - Case Sync OFF cleanup: $($case.sync_cleanup_status)."
+            }
             if ($case.evidence_level) { $lines += "  - Evidence: $($case.evidence_level)." }
             if ($case.manual_observation) {
                 $lines += "  - Expected: $($case.manual_observation.expected)"
@@ -294,17 +303,44 @@ function Assert-FullErrorQueue {
 }
 
 function Invoke-FullValidationReset {
-    param([Parameter(Mandatory = $true)][string]$Name)
+    param([Parameter(Mandatory = $true)][string]$Name, [System.Collections.IDictionary]$SyncOff)
 
     $artifactDirectory = Join-Path $run.Private (New-SafeCaseName "$Name-reset")
-    $code = 'import sys; from wavegen_tool_core.visa import reset_for_live_full_validation; reset_for_live_full_validation(sys.argv[1], sys.argv[2], expected_model_id=sys.argv[3])'
+    $stdoutPath = Join-Path $artifactDirectory 'stdout.txt'
+    $code = @'
+import json
+import sys
+from wavegen_tool_core.visa import reset_for_live_full_validation
+
+sync_off = {}
+try:
+    reset_for_live_full_validation(
+        sys.argv[1], sys.argv[2], expected_model_id=sys.argv[3], record_sync_off=sync_off.__setitem__
+    )
+finally:
+    print(json.dumps(sync_off))
+'@
     $process = Invoke-CapturedCommand -Name $Name -FilePath $Python `
         -Arguments @('-c', $code, $Resource, $backendName, $expectedModel) `
-        -StdOutPath (Join-Path $artifactDirectory 'stdout.txt') `
+        -StdOutPath $stdoutPath `
         -StdErrPath (Join-Path $artifactDirectory 'stderr.txt') `
         -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts) -TimeoutSeconds 30
+    $raw = if ($DebugArtifacts) { [IO.File]::ReadAllText($stdoutPath) } else { $process.stdout_text }
+    try { $payload = $raw | ConvertFrom-Json -ErrorAction Stop } catch { $payload = $null }
+    if ($payload -is [pscustomobject]) {
+        foreach ($stage in @('before_reset', 'after_reset', 'failure_cleanup')) {
+            if ($stage -notin $payload.PSObject.Properties.Name) {
+                $SyncOff[$stage] = 'not-run'
+            } elseif ($payload.$stage -is [bool]) {
+                $SyncOff[$stage] = if ($payload.$stage) { 'confirmed' } else { 'unconfirmed' }
+            }
+        }
+    }
     if ($process.exit_code -ne 0) {
         throw "Full validation reset failed (exit code $($process.exit_code))."
+    }
+    if ($SyncOff.before_reset -ne 'confirmed' -or $SyncOff.after_reset -ne 'confirmed') {
+        throw 'Full validation reset did not report confirmed Sync OFF before and after reset.'
     }
 }
 
@@ -348,6 +384,8 @@ function Get-FullCaseEvidence {
             else { 'cli-result-and-instrument-status' }
         evidence_level = $null
         cleanup_status = 'not-run'
+        sync_reset_off = $null
+        sync_cleanup_status = $null
         manual_observation = if ($Recipe.observation) {
             [ordered]@{
                 expected = $Recipe.observation.expected
@@ -394,7 +432,12 @@ function Invoke-FullLiveCases {
                     Set-FullSafeOff -Name "$($recipe.name)/before-ch$other" -Channel $other
                 }
                 Assert-FullErrorQueue -Name "$($recipe.name)/before-errors"
-                Invoke-FullValidationReset -Name "$($recipe.name)/reset"
+                $evidence.sync_reset_off = [ordered]@{
+                    before_reset = 'unreported'
+                    after_reset = 'unreported'
+                    failure_cleanup = 'unreported'
+                }
+                Invoke-FullValidationReset -Name "$($recipe.name)/reset" -SyncOff $evidence.sync_reset_off
                 foreach ($checked in $Channels) {
                     $state = Invoke-FullCommand -Name "$($recipe.name)/reset-ch$checked" -Arguments @('status') -Channel $checked
                     Assert-FullReadback -Payload $state -Expected @{ output_state = 'off' }
@@ -475,12 +518,28 @@ function Invoke-FullLiveCases {
                 $reasons += $_.Exception.Message
                 if ($_.Exception.Data['TerminationUnconfirmed']) { $unconfirmedChannels += $channel }
             } finally {
-                try { Set-FullSyncSafeOff -Name "$($recipe.name)/cleanup-sync" }
-                catch { $cleanupReasons += "Sync OFF was not confirmed. $($_.Exception.Message)" }
-                try {
-                    Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel
-                    Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors"
-                } catch { $cleanupReasons += $_.Exception.Message }
+                $cleanupOrder = if ($recipe.family -eq 'sync-control') { @('sync', 'main') } else { @('main', 'sync') }
+                $mainOffConfirmed = $false
+                foreach ($output in $cleanupOrder) {
+                    if ($output -eq 'sync') {
+                        try {
+                            Set-FullSyncSafeOff -Name "$($recipe.name)/cleanup-sync"
+                            $evidence.sync_cleanup_status = 'confirmed'
+                        } catch {
+                            $evidence.sync_cleanup_status = 'unconfirmed'
+                            $cleanupReasons += "Sync OFF was not confirmed. $($_.Exception.Message)"
+                        }
+                    } else {
+                        try {
+                            Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel
+                            $mainOffConfirmed = $true
+                        } catch { $cleanupReasons += $_.Exception.Message }
+                    }
+                }
+                if ($mainOffConfirmed) {
+                    try { Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors" }
+                    catch { $cleanupReasons += $_.Exception.Message }
+                }
                 if ($channel -in $unconfirmedChannels) {
                     $cleanupReasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
                 }
@@ -789,7 +848,11 @@ Write-Host "  - Best-effort OFF cleanup is attempted after failures."
 Write-Host "  - No resource scanning or guessing is performed."
 if ($Suite -eq 'full' -and -not $PlanOnly) {
     Write-Host "  - Real Full resets the instrument before every independent case; all outputs are checked OFF."
-    Write-Host '  - WARNING: *RST may briefly enable the front-panel Sync BNC. Check its wiring and disconnect any sensitive equipment before continuing.'
+    $report | Add-Member -NotePropertyName sync_reset_safety -NotePropertyValue ([ordered]@{
+        warning = '*RST may briefly enable the front-panel Sync BNC. Check its wiring and disconnect any sensitive equipment before continuing.'
+        wiring_confirmed = $false
+    })
+    Write-Host "  - WARNING: $($report.sync_reset_safety.warning)"
     if ('output' -in $applicableModes) {
         Write-Host '  - The Sync control case explicitly enables Sync before turning it OFF.'
     }
@@ -832,6 +895,7 @@ try {
 } catch {
     Write-Host 'Live confirmation was unavailable.'
 } finally {
+    if ($Suite -eq 'full') { $report.sync_reset_safety.wiring_confirmed = $confirmed }
     if (-not $confirmed) {
         $report.status = 'CANCELLED'
         $report.cases = @($cases)

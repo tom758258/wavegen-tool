@@ -808,6 +808,9 @@ simulated Worker to retain Sync settings across commands. Instrument readback
 reports connector state and settings. Carrier timing depends on the active
 waveform and operating mode.
 
+Product Live supports explicit Sync OFF. For live Sync configuration or Sync ON,
+use the Direct CLI [contributor validation workflow](../CONTRIBUTING.md#real-live).
+
 ### `trigger`
 
 Send one instrument-wide IEEE-488.2 `*TRG` without waiting:

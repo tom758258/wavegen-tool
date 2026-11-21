@@ -7281,6 +7281,8 @@ _SYNC_POLARITY_REPLIES = {"NORM": "normal", "NORMAL": "normal", "INV": "inverted
 
 
 def _sync_configuration_commands(config: SyncConfig) -> tuple[str, ...]:
+    if not isinstance(config, SyncConfig):
+        raise WaveformParameterError("Sync configuration must be a SyncConfig.")
     return (
         _SYNC_OFF,
         f"OUTPut:SYNC:SOURce CH{config.source_channel}",
@@ -7314,18 +7316,40 @@ def _set_sync_off(session: VisaSession) -> None:
     _verify_sync_reply(session, _SYNC_STATE_QUERY, _SYNC_STATE_REPLIES, "off")
 
 
-def _attempt_sync_off(session: VisaSession, error: WavegenError) -> None:
+def _sync_off_failure(session: VisaSession) -> str | None:
     try:
         _set_sync_off(session)
-    except WavegenError as cleanup_error:
-        error.attach_cleanup_errors(
-            error.cleanup_errors + (f"Sync OFF was not confirmed: {cleanup_error}",)
+    except (WavegenError, KeyboardInterrupt) as error:
+        return f"Sync OFF was not confirmed. Sync may remain ON. {error}".strip()
+    return None
+
+
+def _attempt_sync_off(session: VisaSession, error: WavegenError | KeyboardInterrupt) -> bool:
+    failure = _sync_off_failure(session)
+    if failure:
+        if isinstance(error, WavegenError):
+            error.attach_cleanup_errors(error.cleanup_errors + (failure,))
+        else:
+            error.args = (f"{error} {failure}".strip(),)
+    return failure is None
+
+
+def _require_sync_validation(
+    support_policy_mode: str, resource_manager_factory: ResourceManagerFactory | None
+) -> None:
+    if (
+        support_policy_mode == SUPPORT_POLICY_MODE_PRODUCT
+        and not isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
+    ):
+        raise UnsupportedInstrumentError(
+            "Sync configuration and ON are outside Product Live feature scope."
         )
 
 
 def dry_run_sync(model: str, config: SyncConfig) -> SyncDryRunResult:
     """Plan Sync configuration without opening a VISA session."""
 
+    commands = _sync_configuration_commands(config)
     model_info, capabilities = _require_hardware_free_model(model, "Sync")
     _validate_channel(config.source_channel, capabilities, model_info.canonical_model)
     return SyncDryRunResult(
@@ -7334,7 +7358,7 @@ def dry_run_sync(model: str, config: SyncConfig) -> SyncDryRunResult:
         source_channel=config.source_channel,
         sync_mode=config.mode,
         polarity=config.polarity,
-        commands=_sync_configuration_commands(config),
+        commands=commands,
     )
 
 
@@ -7350,6 +7374,7 @@ def configure_sync(
     """Configure the Sync source, mode and polarity with Sync verified OFF."""
 
     commands = _sync_configuration_commands(config)
+    _require_sync_validation(support_policy_mode, resource_manager_factory)
     source = f"CH{config.source_channel}"
     channel_sync = f"OUTPut{config.source_channel}:SYNC"
 
@@ -7369,7 +7394,7 @@ def configure_sync(
             _verify_sync_reply(
                 session, f"{channel_sync}:POLarity?", _SYNC_POLARITY_REPLIES, config.polarity
             )
-        except WavegenError as error:
+        except (WavegenError, KeyboardInterrupt) as error:
             _attempt_sync_off(session, error)
             raise
 
@@ -7406,6 +7431,8 @@ def set_sync_output(
 
     if not isinstance(state, str) or state not in ("on", "off"):
         raise WaveformParameterError("Sync state must be on or off.")
+    if state == "on":
+        _require_sync_validation(support_policy_mode, resource_manager_factory)
     command = f"OUTPut:SYNC {state.upper()}"
 
     def apply(session: VisaSession, context: IdentificationResult) -> None:
@@ -7415,12 +7442,13 @@ def set_sync_output(
         try:
             _write_sync(session, command)
             _verify_sync_reply(session, _SYNC_STATE_QUERY, _SYNC_STATE_REPLIES, state)
-        except WavegenError as error:
+        except (WavegenError, KeyboardInterrupt) as error:
             _attempt_sync_off(session, error)
             raise
 
     context, _ = _run_on_supported_instrument(
         resource, backend, apply,
+        sync_enabled_after_operation=state == "on",
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
         resource_manager_factory=resource_manager_factory,
@@ -7442,8 +7470,9 @@ def reset_for_live_full_validation(
     *,
     expected_model_id: str,
     resource_manager_factory: ResourceManagerFactory | None = None,
+    record_sync_off: Callable[[str, bool], None] | None = None,
 ) -> None:
-    """Reset one explicitly selected instrument only for Real Live Full cases."""
+    """Reset one explicitly selected instrument and optionally record Sync OFF checks."""
 
     if not isinstance(expected_model_id, str) or not expected_model_id.strip():
         raise WaveformParameterError("Full validation reset requires an expected model.")
@@ -7458,17 +7487,30 @@ def reset_for_live_full_validation(
                 raise WaveformVerificationError(
                     "All instrument outputs must be OFF before Full validation reset."
                 )
+
+        def verify_sync_off(stage: str) -> None:
+            confirmed = False
+            try:
+                _set_sync_off(session)
+                confirmed = True
+            finally:
+                if record_sync_off is not None:
+                    record_sync_off(stage, confirmed)
+
         try:
-            _set_sync_off(session)
+            verify_sync_off("before_reset")
             session.write("*RST")
             if str(session.query("*OPC?")).strip() != "1":
                 raise WaveformVerificationError("Full validation reset did not complete.")
-            _set_sync_off(session)
-        except Exception as exc:
-            error = exc if isinstance(exc, WavegenError) else WaveformVerificationError(
-                "Failed to complete the Full validation reset."
-            )
-            _attempt_sync_off(session, error)
+            verify_sync_off("after_reset")
+        except (Exception, KeyboardInterrupt) as exc:
+            if isinstance(exc, (WavegenError, KeyboardInterrupt)):
+                error = exc
+            else:
+                error = WaveformVerificationError("Failed to complete the Full validation reset.")
+            confirmed = _attempt_sync_off(session, error)
+            if record_sync_off is not None:
+                record_sync_off("failure_cleanup", confirmed)
             if error is exc:
                 raise
             raise error from exc
@@ -8008,6 +8050,7 @@ def _run_on_supported_instrument(
     operation: Callable[[VisaSession, IdentificationResult], object],
     *,
     output_state_after_operation: str | None = None,
+    sync_enabled_after_operation: bool = False,
     resource_manager_factory: ResourceManagerFactory | None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -8097,12 +8140,19 @@ def _run_on_supported_instrument(
                         )
                         primary_cause = exc
     finally:
-        cleanup_errors = _close_visa_resources(
-            session,
-            manager,
-            backend=backend_selection.name,
-            transport=transport,
-        )
+        recover_sync_off = sync_enabled_after_operation and operation_completed
+        try:
+            cleanup_errors = _close_visa_resources(
+                session,
+                manager,
+                backend=backend_selection.name,
+                transport=transport,
+                recover_sync_off=recover_sync_off,
+            )
+        except KeyboardInterrupt as error:
+            if recover_sync_off and session is not None:
+                _attempt_sync_off(session, error)
+            raise
 
     if primary_error is not None:
         primary_error.attach_cleanup_errors(primary_error.cleanup_errors + cleanup_errors)
@@ -8856,8 +8906,10 @@ def _close_visa_resources(
     backend: str,
     transport: str,
     close_manager: bool = True,
+    recover_sync_off: bool = False,
 ) -> tuple[str, ...]:
     errors: list[str] = []
+    sync_recovery: str | None = None
     if session is not None:
         if (
             backend == SYSTEM_BACKEND
@@ -8868,12 +8920,18 @@ def _close_visa_resources(
                 session.control_ren(RENLineOperation.address_gtl)
             except Exception:
                 errors.append("return to local failed")
+                if recover_sync_off:
+                    sync_recovery = _sync_off_failure(session) or "Sync OFF was confirmed"
         try:
             session.close()
         except Exception:
             errors.append("session close failed")
+            if recover_sync_off and sync_recovery is None:
+                sync_recovery = _sync_off_failure(session) or "Sync OFF was confirmed"
     if close_manager:
         errors.extend(_close_resource_manager(manager))
+    if errors and recover_sync_off:
+        errors.append(sync_recovery or "Sync OFF was not confirmed. Sync may remain ON")
     return tuple(errors)
 
 

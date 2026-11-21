@@ -88,11 +88,13 @@ request validation and safety rules documented for:
 - Counted Burst and Gated Burst on supported carriers;
 - sine, square, ramp, and triangle ordinary and List Sweeps;
 - selected-channel status, output configuration, and output control;
-- front-panel Sync configuration and independent Sync ON/OFF control;
+- explicit front-panel Sync OFF control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
 
 Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
 Core rejects these operations in Product Live mode for all models.
+Front-panel Sync configuration and Sync ON are available in simulation and
+Direct CLI contributor validation. Sync configuration also supports dry-run.
 
 This overview does not remove command-specific limits. An invalid carrier,
 option combination, channel, value, trigger source, or safety state still fails

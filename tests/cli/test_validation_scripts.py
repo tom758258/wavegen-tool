@@ -780,7 +780,7 @@ Write-Output ('RESULT:' + (@{ head = $head; changed_rejected = $changedRejected 
 
 @pytest.mark.parametrize("failure", [
     "none", "command", "cleanup", "case-dirty", "dirty", "limit", "na", "reset",
-    "before-timeout", "queue-timeout", "off-timeout", "termination-unconfirmed",
+    "reset-unreported", "before-timeout", "queue-timeout", "off-timeout", "termination-unconfirmed",
 ])
 def test_full_failure_gate_and_best_effort_off(artifact_root, failure):
     result = _run_powershell_test(artifact_root, r'''
@@ -790,7 +790,13 @@ $cases = [System.Collections.ArrayList]::new()
 $channelsTested = [System.Collections.ArrayList]::new()
 $targetCapabilityModel = '33512B'
 $liveCommon = @('--json')
-$run = [pscustomobject]@{ Private = (Get-Location).Path }
+$repoRoot = (Get-Location).Path
+$run = [pscustomobject]@{ Private = $repoRoot }
+$Python = 'mock-python'
+$Resource = 'synthetic-resource'
+$backendName = 'system'
+$expectedModel = 'keysight-33512b'
+$DebugArtifacts = $false
 $script:state = 'off'
 $script:offCalls = 0
 $script:onCalls = 0
@@ -841,10 +847,16 @@ function Invoke-WavegenJson {
     }
     return [pscustomobject]@{ Process = @{ exit_code = 0 }; ParseError = $null; Payload = $payload }
 }
-function Invoke-FullValidationReset {
-    param($Name)
+function Invoke-CapturedCommand {
+    param($Name, $FilePath, $Arguments, $StdOutPath, $StdErrPath, $WorkingDirectory, [switch]$CaptureInMemory, $TimeoutSeconds)
     $script:resetCalls++
-    if ($failure -eq 'reset') { throw 'Injected reset failure' }
+    if ($failure -eq 'reset') {
+        return @{ exit_code = 1; stdout_text = '{"before_reset":true,"after_reset":false,"failure_cleanup":true}'; stderr_text = $Resource }
+    }
+    if ($failure -eq 'reset-unreported') {
+        return @{ exit_code = 0; stdout_text = ''; stderr_text = '' }
+    }
+    return @{ exit_code = 0; stdout_text = '{"before_reset":true,"after_reset":true}'; stderr_text = '' }
 }
 Invoke-FullLiveCases -Channels @(2) -CanRun ($failure -ne 'na')
 $finalReasons = @()
@@ -856,17 +868,32 @@ Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $
     assert result["pass"] is (failure == "none")
     assert result["state"] == ("on" if failure == "off-timeout" else "off")
     assert result["off_calls"] >= 2
-    assert result["on_calls"] == (0 if failure in {"na", "reset", "before-timeout"} else 1)
+    assert result["on_calls"] == (0 if failure in {"na", "reset", "reset-unreported", "before-timeout"} else 1)
     assert result["reset_calls"] == (0 if failure == "na" else 2 if failure in {"none", "dirty", "limit"} else 1)
     statuses = {case["name"]: case["status"] for case in result["cases"]}
-    if failure in {"command", "cleanup", "case-dirty", "reset"}:
+    case = next(case for case in result["cases"] if case["name"] == "ch2/output-control")
+    if failure == "reset":
+        assert case["sync_reset_off"] == {
+            "before_reset": "confirmed", "after_reset": "unconfirmed",
+            "failure_cleanup": "confirmed",
+        }
+        assert "synthetic-resource" not in json.dumps(case)
+    elif failure == "reset-unreported":
+        assert case["sync_reset_off"] == {
+            "before_reset": "unreported", "after_reset": "unreported", "failure_cleanup": "unreported",
+        }
+        assert statuses["ch2/status"] == "N/A"
+    elif failure == "none":
+        assert case["sync_reset_off"] == {
+            "before_reset": "confirmed", "after_reset": "confirmed", "failure_cleanup": "not-run",
+        }
+    if failure in {"command", "cleanup", "case-dirty", "reset", "reset-unreported"}:
         assert statuses["ch2/output-control"] == "FAIL"
     if failure == "na":
         assert statuses["ch2/output-control"] == "N/A"
     if failure in {"dirty", "limit"}:
         assert statuses["final-error-queue"] == "FAIL"
     if failure.endswith("-timeout") or failure == "termination-unconfirmed":
-        case = next(case for case in result["cases"] if case["name"] == "ch2/output-control")
         assert case["status"] == "FAIL"
         assert any("timed out" in reason for reason in case["failure_reasons"])
         assert statuses["ch2/status"] == "N/A"
@@ -888,6 +915,7 @@ $channelsTested = [System.Collections.ArrayList]::new()
 $targetCapabilityModel = '33512B'
 $script:outputs = @{ 1 = 'off'; 2 = 'off' }
 $script:outputOnCalls = 0
+$script:mainOffAtSyncCleanup = $false
 $script:onlyExternal = @(Get-FullValidationInventory -Channels @(1, 2) | Where-Object name -eq 'ch1/burst-external')
 $fullInventory = @($script:onlyExternal)
 function Read-LiveConfirmation {
@@ -907,6 +935,7 @@ function Invoke-FullCommand {
     $command = $Arguments[0]
     if ($command -eq 'sync-output') {
         if ($Channel -ne 0 -or $Arguments[2] -ne 'off') { throw 'Unexpected Sync control' }
+        if ($Name -like '*/cleanup-sync') { $script:mainOffAtSyncCleanup = $script:outputs[1] -eq 'off' }
         return [pscustomobject]@{ sync_state = 'off'; readback_verified = $true }
     }
     if ($command -eq 'trigger') { throw 'External case must use a physical trigger' }
@@ -948,11 +977,13 @@ $case = $cases | Where-Object name -eq 'ch1/burst-external'
 $pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch1/burst-external')
 Write-Output ('RESULT:' + (@{
     pass = $pass; case = $case; outputOnCalls = $script:outputOnCalls
+    mainOffAtSyncCleanup = $script:mainOffAtSyncCleanup
     ch1 = $script:outputs[1]; ch2 = $script:outputs[2]
 } | ConvertTo-Json -Depth 8 -Compress))
 '''.replace("ANSWER", answer))
     assert result["pass"] is (answer == "Yes"), result["case"]
     assert result["ch1"] == result["ch2"] == "off"
+    assert result["mainOffAtSyncCleanup"] is True
     assert result["outputOnCalls"] == (0 if answer == "skip" else 1)
     case = result["case"]
     assert case["cleanup_status"] == "PASS"
@@ -962,7 +993,7 @@ Write-Output ('RESULT:' + (@{
     assert case["evidence_level"] == ("live-functional" if answer == "Yes" else None)
 
 
-@pytest.mark.parametrize("failure", ["none", "after-on", "case-off", "final-off"])
+@pytest.mark.parametrize("failure", ["none", "initial-off", "after-on", "case-off", "final-off"])
 def test_full_sync_case_attempts_off_and_fails_if_off_is_unconfirmed(artifact_root, failure):
     result = _run_powershell_test(artifact_root, r'''
 $failure = 'FAILURE'
@@ -971,6 +1002,7 @@ $channelsTested = [System.Collections.ArrayList]::new()
 $script:syncState = 'on'
 $script:resetCalls = 0
 $script:syncOffAttempts = @()
+$script:syncOnAttempts = 0
 $script:mainOffAttempts = @()
 $fullInventory = @(Get-FullValidationInventory -Channels @(1) -Modes output | Where-Object family -eq 'sync-control')
 function Invoke-FullValidationReset {
@@ -983,7 +1015,9 @@ function Invoke-FullCommand {
         'sync-output' {
             if ($Channel -ne 0) { throw 'Sync is global.' }
             if ($Arguments[2] -eq 'off') { $script:syncOffAttempts += $Name }
-            if (($failure -eq 'case-off' -and $Name -like '*/cleanup-sync') -or
+            else { $script:syncOnAttempts++ }
+            if (($failure -eq 'initial-off' -and $Name -eq 'sync/initial-safe-off') -or
+                ($failure -eq 'case-off' -and $Name -like '*/cleanup-sync') -or
                 ($failure -eq 'final-off' -and $Name -eq 'sync/final-safe-off')) {
                 return [pscustomobject]@{ sync_state = 'on'; readback_verified = $true }
             }
@@ -1002,20 +1036,28 @@ function Invoke-FullCommand {
     }
 }
 Invoke-FullLiveCases -Channels @(1) -CanRun $true
-$pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch1/sync-control', 'sync/final-safe-off')
+$pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('sync/initial-safe-off', 'ch1/sync-control', 'sync/final-safe-off')
 Write-Output ('RESULT:' + (@{
     pass = $pass; syncState = $script:syncState; resetCalls = $script:resetCalls
-    syncOffAttempts = $script:syncOffAttempts; mainOffAttempts = $script:mainOffAttempts
+    syncOffAttempts = $script:syncOffAttempts; syncOnAttempts = $script:syncOnAttempts
+    mainOffAttempts = $script:mainOffAttempts
+    initial = ($cases | Where-Object name -eq 'sync/initial-safe-off')
     case = ($cases | Where-Object name -eq 'ch1/sync-control')
     final = ($cases | Where-Object name -eq 'sync/final-safe-off')
 } | ConvertTo-Json -Depth 8 -Compress))
 '''.replace("FAILURE", failure))
     assert result["pass"] is (failure == "none")
     assert result["syncState"] == "off"
-    assert result["resetCalls"] == 1
+    assert "sync/final-safe-off" in result["syncOffAttempts"]
+    if failure == "initial-off":
+        assert result["initial"]["status"] == "FAIL"
+        assert result["case"]["status"] == "N/A"
+        assert result["resetCalls"] == result["syncOnAttempts"] == 0
+        assert result["final"]["status"] == "PASS"
+        return
+    assert result["resetCalls"] == result["syncOnAttempts"] == 1
     assert "ch1/sync-control/cleanup-sync" in result["syncOffAttempts"]
     assert "ch1/sync-control/cleanup-command" in result["mainOffAttempts"]
-    assert "sync/final-safe-off" in result["syncOffAttempts"]
     assert result["case"]["cleanup_status"] == ("FAIL" if failure == "case-off" else "PASS")
     assert result["final"]["status"] == ("FAIL" if failure == "final-off" else "PASS")
 
