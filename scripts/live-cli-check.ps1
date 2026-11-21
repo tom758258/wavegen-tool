@@ -399,6 +399,8 @@ function Invoke-FullLiveCases {
     param([int[]]$Channels, [bool]$CanRun)
 
     $unconfirmedChannels = @()
+    $mainOffByChannel = @{}
+    $syncOffUnconfirmed = $false
 
     try {
         $name = 'sync/initial-safe-off'
@@ -409,7 +411,11 @@ function Invoke-FullLiveCases {
         foreach ($channel in $Channels) {
             $name = "ch${channel}/initial-safe-off"
             $reasons = @()
-            try { Set-FullSafeOff -Name $name -Channel $channel; Assert-FullErrorQueue -Name "$name-errors" }
+            try {
+                Set-FullSafeOff -Name $name -Channel $channel
+                $mainOffByChannel[$channel] = $true
+                Assert-FullErrorQueue -Name "$name-errors"
+            }
             catch { $reasons += $_.Exception.Message; $CanRun = $false }
             Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         }
@@ -427,10 +433,13 @@ function Invoke-FullLiveCases {
             $reasons = @()
             $cleanupReasons = @()
             $mainOnAttempted = $false
+            $syncOnInFlight = $false
             try {
-                Set-FullSafeOff -Name "$($recipe.name)/before" -Channel $channel
-                foreach ($other in @($Channels | Where-Object { $_ -ne $channel })) {
-                    Set-FullSafeOff -Name "$($recipe.name)/before-ch$other" -Channel $other
+                foreach ($checked in (@($channel) + @($Channels | Where-Object { $_ -ne $channel }))) {
+                    $stage = if ($checked -eq $channel) { 'before' } else { "before-ch$checked" }
+                    $mainOffByChannel[$checked] = $false
+                    Set-FullSafeOff -Name "$($recipe.name)/$stage" -Channel $checked
+                    $mainOffByChannel[$checked] = $true
                 }
                 Assert-FullErrorQueue -Name "$($recipe.name)/before-errors"
                 $evidence.sync_reset_off = [ordered]@{
@@ -438,10 +447,12 @@ function Invoke-FullLiveCases {
                     after_reset = 'unreported'
                     failure_cleanup = 'unreported'
                 }
+                foreach ($checked in $Channels) { $mainOffByChannel[$checked] = $false }
                 Invoke-FullValidationReset -Name "$($recipe.name)/reset" -SyncOff $evidence.sync_reset_off
                 foreach ($checked in $Channels) {
                     $state = Invoke-FullCommand -Name "$($recipe.name)/reset-ch$checked" -Arguments @('status') -Channel $checked
                     Assert-FullReadback -Payload $state -Expected @{ output_state = 'off' }
+                    $mainOffByChannel[$checked] = $true
                 }
                 Assert-FullErrorQueue -Name "$($recipe.name)/reset-errors"
                 if ($observation) {
@@ -478,7 +489,8 @@ function Invoke-FullLiveCases {
                     if ($turningOn -and -not $observation -and $recipe.family -cne 'output-control') {
                         throw 'Output ON is restricted to output-control and confirmed observation cases.'
                     }
-                    if ($command -eq 'sync-output' -and $step.arguments[2] -eq 'on' -and $recipe.family -cne 'sync-control') {
+                    $turningSyncOn = $command -eq 'sync-output' -and $step.arguments[2] -eq 'on'
+                    if ($turningSyncOn -and $recipe.family -cne 'sync-control') {
                         throw 'Sync ON is restricted to its dedicated control case.'
                     }
                     if ($command -eq 'trigger' -and $observation) {
@@ -486,8 +498,13 @@ function Invoke-FullLiveCases {
                         Write-Host 'Sending Bus trigger.'
                     }
                     $commandChannel = if (Test-ValidationCommandUsesChannel $command) { $channel } else { 0 }
-                    if ($turningOn) { $mainOnAttempted = $true }
+                    if ($turningOn) {
+                        $mainOnAttempted = $true
+                        $mainOffByChannel[$channel] = $false
+                    }
+                    $syncOnInFlight = $turningSyncOn
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
+                    $syncOnInFlight = $false
                     Assert-FullReadback -Payload $result -Expected $step.result
                     if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
                         $command -eq 'list-arbitrary-memory' -and $index -eq $recipe.steps.Count) {
@@ -506,8 +523,10 @@ function Invoke-FullLiveCases {
                     $payload = Invoke-FullCommand -Name "$name-readback" -Arguments @('status') -Channel $channel
                     Assert-FullReadback -Payload $payload -Expected $expected
                     foreach ($other in @($Channels | Where-Object { $_ -ne $channel })) {
+                        $mainOffByChannel[$other] = $false
                         $payload = Invoke-FullCommand -Name "$name-other-ch$other" -Arguments @('status') -Channel $other
                         Assert-FullReadback -Payload $payload -Expected @{ output_state = 'off' }
+                        $mainOffByChannel[$other] = $true
                     }
                     Assert-FullErrorQueue -Name "$name-errors"
                 }
@@ -518,7 +537,10 @@ function Invoke-FullLiveCases {
                 }
             } catch {
                 $reasons += $_.Exception.Message
-                if ($_.Exception.Data['TerminationUnconfirmed']) { $unconfirmedChannels += $channel }
+                if ($_.Exception.Data['TerminationUnconfirmed']) {
+                    $syncOffUnconfirmed = $true
+                    if (-not $syncOnInFlight) { $unconfirmedChannels += $channel }
+                }
             } finally {
                 $cleanupOrder = if ($mainOnAttempted) { @('main', 'sync') } else { @('sync', 'main') }
                 $mainOffConfirmed = $false
@@ -542,8 +564,14 @@ function Invoke-FullLiveCases {
                     try { Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors" }
                     catch { $cleanupReasons += $_.Exception.Message }
                 }
+                $mainOffByChannel[$channel] = $mainOffConfirmed -and ($channel -notin $unconfirmedChannels)
                 if ($channel -in $unconfirmedChannels) {
                     $cleanupReasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
+                }
+                if ($syncOffUnconfirmed) {
+                    # An OFF readback cannot rule out a write from a process that may still run.
+                    $evidence.sync_cleanup_status = 'unconfirmed'
+                    $cleanupReasons += 'Sync OFF remains unconfirmed after incomplete subprocess termination.'
                 }
                 $evidence.cleanup_status = if ($cleanupReasons.Count) { 'FAIL' } else { 'PASS' }
                 $reasons += $cleanupReasons | ForEach-Object { "Cleanup: $_" }
@@ -570,21 +598,25 @@ function Invoke-FullLiveCases {
             if ($reasons.Count) { $CanRun = $false }
         }
     } finally {
-        $name = 'sync/final-safe-off'
-        $reasons = @()
-        try { Set-FullSyncSafeOff -Name $name }
-        catch { $reasons += "Sync OFF was not confirmed. $($_.Exception.Message)" }
-        if ($unconfirmedChannels.Count) {
-            $reasons += 'Sync OFF remains unconfirmed after incomplete subprocess termination.'
-        }
-        Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
-        foreach ($channel in $Channels) {
-            $name = "ch${channel}/final-safe-off"
+        # Recheck unconfirmed main outputs before global Sync (channel 0).
+        $finalOffOrder = @($Channels | Where-Object { -not $mainOffByChannel[$_] }) +
+            @(0) + @($Channels | Where-Object { $mainOffByChannel[$_] })
+        foreach ($channel in $finalOffOrder) {
             $reasons = @()
-            try { Set-FullSafeOff -Name $name -Channel $channel }
-            catch { $reasons += $_.Exception.Message }
-            if ($channel -in $unconfirmedChannels) {
-                $reasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
+            if ($channel -eq 0) {
+                $name = 'sync/final-safe-off'
+                try { Set-FullSyncSafeOff -Name $name }
+                catch { $reasons += "Sync OFF was not confirmed. $($_.Exception.Message)" }
+                if ($syncOffUnconfirmed) {
+                    $reasons += 'Sync OFF remains unconfirmed after incomplete subprocess termination.'
+                }
+            } else {
+                $name = "ch${channel}/final-safe-off"
+                try { Set-FullSafeOff -Name $name -Channel $channel }
+                catch { $reasons += $_.Exception.Message }
+                if ($channel -in $unconfirmedChannels) {
+                    $reasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
+                }
             }
             Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         }

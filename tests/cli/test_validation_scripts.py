@@ -801,6 +801,7 @@ $script:state = 'off'
 $script:offCalls = 0
 $script:onCalls = 0
 $script:resetCalls = 0
+$script:finalOffAttempts = @()
 $inventory = @(Get-FullValidationInventory -Channels @(2))
 $script:casesUnderTest = @($inventory | Where-Object family -eq 'output-control') +
     @($inventory | Where-Object name -eq 'ch2/status')
@@ -808,6 +809,9 @@ $fullInventory = @($script:casesUnderTest)
 function Invoke-WavegenJson {
     param($Name, $CliArguments, $ArtifactDirectory)
     $command = $CliArguments[0]
+    if ($Name -eq 'sync/final-safe-off' -or $Name -eq 'ch2/final-safe-off-command') {
+        $script:finalOffAttempts += $Name
+    }
     if ($command -eq 'sync-output') {
         if ('--channel' -in $CliArguments -or $CliArguments[2] -ne 'off') { throw 'Unexpected Sync control' }
         $payload = [pscustomobject]@{
@@ -863,7 +867,10 @@ $finalReasons = @()
 try { Assert-FullErrorQueue -Name 'final-error-queue' } catch { $finalReasons += $_.Exception.Message }
 Add-LiveCase -Cases $cases -Name 'final-error-queue' -Status $(if ($finalReasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $finalReasons
 $pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch2/initial-safe-off', 'ch2/output-control', 'ch2/final-safe-off', 'final-error-queue')
-Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $script:offCalls; on_calls = $script:onCalls; reset_calls = $script:resetCalls; cases = @($cases) } | ConvertTo-Json -Depth 10 -Compress))
+Write-Output ('RESULT:' + (@{
+    pass = $pass; state = $script:state; off_calls = $script:offCalls; on_calls = $script:onCalls
+    reset_calls = $script:resetCalls; final_off_attempts = $script:finalOffAttempts; cases = @($cases)
+} | ConvertTo-Json -Depth 10 -Compress))
 '''.replace("FAILURE", failure))
     assert result["pass"] is (failure == "none")
     assert result["state"] == ("on" if failure == "off-timeout" else "off")
@@ -904,6 +911,9 @@ Write-Output ('RESULT:' + (@{ pass = $pass; state = $script:state; off_calls = $
                        for reason in case["failure_reasons"])
         else:
             assert case["cleanup_status"] == "PASS"
+    if failure == "off-timeout":
+        assert result["final_off_attempts"] == ["ch2/final-safe-off-command", "sync/final-safe-off"]
+        assert statuses["sync/final-safe-off"] == "PASS"
 
 
 @pytest.mark.parametrize("answer", ["Yes", "No", "", "skip", "interrupted", "status-timeout"])
@@ -993,7 +1003,9 @@ Write-Output ('RESULT:' + (@{
     assert case["evidence_level"] == ("live-functional" if answer == "Yes" else None)
 
 
-@pytest.mark.parametrize("failure", ["none", "initial-off", "after-on", "case-off", "final-off"])
+@pytest.mark.parametrize("failure", [
+    "none", "initial-off", "after-on", "termination-unconfirmed", "case-off", "final-off",
+])
 def test_full_sync_case_attempts_off_and_fails_if_off_is_unconfirmed(artifact_root, failure):
     result = _run_powershell_test(artifact_root, r'''
 $failure = 'FAILURE'
@@ -1023,6 +1035,11 @@ function Invoke-FullCommand {
             }
             $script:syncState = $Arguments[2]
             if ($failure -eq 'after-on' -and $script:syncState -eq 'on') { throw 'Lost connection after ON.' }
+            if ($failure -eq 'termination-unconfirmed' -and $script:syncState -eq 'on') {
+                $timeout = [TimeoutException]::new('Sync ON timed out. Subprocess termination could not be confirmed.')
+                $timeout.Data['TerminationUnconfirmed'] = $true
+                throw $timeout
+            }
             return [pscustomobject]@{ sync_state = $script:syncState; readback_verified = $true }
         }
         'output' {
@@ -1037,6 +1054,13 @@ function Invoke-FullCommand {
 }
 Invoke-FullLiveCases -Channels @(1) -CanRun $true
 $pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('sync/initial-safe-off', 'ch1/sync-control', 'sync/final-safe-off')
+$summary = Get-ValidationSummary -Report ([pscustomobject]@{
+    cases = @($cases); status = $(if ($pass) { 'PASS' } else { 'FAIL' })
+    hardware_touched = $false; visa_io_performed = $false
+    suite = 'full'; selected_modes = @('output'); applicable_modes = @('output')
+    validation_mode = 'live'; expected_model = 'keysight-33521b'; git_head = ('a' * 40)
+    connection = 'usb'; backend = 'system'; resource = '<redacted-resource>'
+})
 Write-Output ('RESULT:' + (@{
     pass = $pass; syncState = $script:syncState; resetCalls = $script:resetCalls
     syncOffAttempts = $script:syncOffAttempts; syncOnAttempts = $script:syncOnAttempts
@@ -1044,11 +1068,14 @@ Write-Output ('RESULT:' + (@{
     initial = ($cases | Where-Object name -eq 'sync/initial-safe-off')
     case = ($cases | Where-Object name -eq 'ch1/sync-control')
     final = ($cases | Where-Object name -eq 'sync/final-safe-off')
+    mainFinal = ($cases | Where-Object name -eq 'ch1/final-safe-off')
+    summary = $summary
 } | ConvertTo-Json -Depth 8 -Compress))
 '''.replace("FAILURE", failure))
     assert result["pass"] is (failure == "none")
     assert result["syncState"] == "off"
     assert "sync/final-safe-off" in result["syncOffAttempts"]
+    assert "ch1/final-safe-off-command" in result["mainOffAttempts"]
     if failure == "initial-off":
         assert result["initial"]["status"] == "FAIL"
         assert result["case"]["status"] == "N/A"
@@ -1058,8 +1085,20 @@ Write-Output ('RESULT:' + (@{
     assert result["resetCalls"] == result["syncOnAttempts"] == 1
     assert "ch1/sync-control/cleanup-sync" in result["syncOffAttempts"]
     assert "ch1/sync-control/cleanup-command" in result["mainOffAttempts"]
-    assert result["case"]["cleanup_status"] == ("FAIL" if failure == "case-off" else "PASS")
-    assert result["final"]["status"] == ("FAIL" if failure == "final-off" else "PASS")
+    unconfirmed = failure in {"case-off", "termination-unconfirmed"}
+    assert result["case"]["sync_cleanup_status"] == ("unconfirmed" if unconfirmed else "confirmed")
+    assert result["case"]["cleanup_status"] == ("FAIL" if unconfirmed else "PASS")
+    assert result["final"]["status"] == (
+        "FAIL" if failure in {"final-off", "termination-unconfirmed"} else "PASS"
+    )
+    if failure == "termination-unconfirmed":
+        assert result["mainFinal"]["status"] == "PASS"
+        assert "Case Sync OFF cleanup: unconfirmed." in result["summary"]
+        for case_name in ("case", "final"):
+            assert any(
+                "Sync OFF remains unconfirmed" in reason
+                for reason in result[case_name]["failure_reasons"]
+            )
 
 
 def test_trigger_validation_guard_keeps_pending_model_out_of_product(monkeypatch, capsys):
