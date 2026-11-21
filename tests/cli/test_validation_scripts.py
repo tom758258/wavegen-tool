@@ -601,6 +601,7 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         builtin = next(x for x in private_report["full_inventory"] if x["name"] == expected)
         load, catalog, reuse = builtin["steps"]
         assert load["arguments"] == reuse["arguments"] and "--load-builtin" in load["arguments"]
+        assert load["result"]["builtin_loaded"] is True
         assert catalog["arguments"] == ["list-arbitrary-memory"]
         assert catalog["result"]["names"] == [r"INT:\BUILTIN\SINC.ARB"]
         assert reuse["result"]["builtin_loaded"] is False

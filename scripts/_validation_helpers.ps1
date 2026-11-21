@@ -801,7 +801,7 @@ function Get-FullValidationInventory {
         $builtinArgs = @('configure-arbitrary', '--name', 'SINC', '--load-builtin', '--sample-rate-hz', '1000000') + $voltage
         $builtinReadback = @{ function = 'ARB'; sample_rate_hz = 1000000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'; output_state = 'off' }
         Add-Recipe 'arbitrary-builtin-select' 'arbitrary' @(
-            (New-Step $builtinArgs $builtinReadback @{ name = 'SINC'; output_state = 'off' }),
+            (New-Step $builtinArgs $builtinReadback @{ name = 'SINC'; output_state = 'off'; builtin_loaded = $true }),
             (New-Step @('list-arbitrary-memory') @{} @{ names = @('INT:\BUILTIN\SINC.ARB') }),
             (New-Step $builtinArgs $builtinReadback @{ name = 'SINC'; output_state = 'off'; builtin_loaded = $false })
         )
