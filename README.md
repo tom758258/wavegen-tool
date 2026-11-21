@@ -19,11 +19,13 @@ is a separate, bounded reset exception described below.
 - Static sine, square, ramp, triangle, pulse, DC, noise, and PRBS waveforms
 - Supported AM, FM, PM, FSK, BPSK, PWM, and Sum configurations
 - Counted Burst, Gated Burst, linear/logarithmic frequency sweeps, and List Sweep
+- Named arbitrary-waveform CSV upload, playback, native sequences, and
+  selected-channel volatile memory management in dry-run and simulation
 - Selected-channel status, output configuration, output control, and bounded
   error-queue reads
 - Explicit USB or TCPIP/LAN Product Live access through admitted VISA backends
 - Human-readable and JSON Direct CLI output; loopback-only Worker lifecycle
-  and its narrower command set
+  and instrument commands
 - Hardware-free preflight and separately approved real-instrument validation
 
 See the [CLI guide](docs/cli/README.md) for exact commands, parameters, safety

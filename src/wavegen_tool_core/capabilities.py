@@ -12,13 +12,18 @@ class WavegenCapabilities:
 
     max_sine_square_pulse_noise_frequency_hz: float
     channel_count: int = 1
+    max_arbitrary_sample_rate_hz: float | None = None
 
 
 _CAPABILITY_REGISTRY = MappingProxyType(
     {
         "keysight-33510b": WavegenCapabilities(20_000_000.0, channel_count=2),
-        "keysight-33512b": WavegenCapabilities(20_000_000.0, channel_count=2),
-        "keysight-33521b": WavegenCapabilities(30_000_000.0, channel_count=1),
+        "keysight-33512b": WavegenCapabilities(
+            20_000_000.0, channel_count=2, max_arbitrary_sample_rate_hz=160_000_000.0
+        ),
+        "keysight-33521b": WavegenCapabilities(
+            30_000_000.0, max_arbitrary_sample_rate_hz=250_000_000.0
+        ),
     }
 )
 

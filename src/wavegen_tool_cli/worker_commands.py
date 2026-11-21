@@ -4,13 +4,32 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 from wavegen_tool_core import resolve_voltage_inputs
+from wavegen_tool_core.arbitrary import ARBITRARY_COMMANDS
 from wavegen_tool_core.errors import WaveformParameterError
 from wavegen_tool_core.identity import model_info_for_model_id
 from wavegen_tool_cli.worker_protocol import WORKER_SCHEMA_VERSION
 from wavegen_tool_core.visa import (
+    AMConfig,
+    BPSKConfig,
+    CountedBurstConfig,
+    FMConfig,
+    FSKConfig,
+    GatedBurstConfig,
+    OutputConfig,
+    PMConfig,
+    PWMConfig,
+    SumConfig,
+    SyncConfig,
     dry_run_dc,
+    dry_run_output,
+    dry_run_sync,
+    dry_run_ramp_list_sweep,
+    dry_run_sine_list_sweep,
+    dry_run_square_list_sweep,
+    dry_run_triangle_list_sweep,
     dry_run_noise,
     dry_run_prbs,
     dry_run_pulse,
@@ -59,48 +78,47 @@ _ALLOWED_CONTEXT_FIELDS = frozenset(
 )
 _REQUEST_MODES = frozenset({"live", "simulate", "dry_run"})
 _WORKER_MODES = frozenset({"live", "simulate"})
-SUPPORTED_WORKER_COMMANDS = frozenset(
-    {
-        "identify",
-        "status",
-        "read-errors",
-        "readback-advanced",
-        "configure-sine",
-        "configure-sine-sweep",
-        "configure-square-sweep",
-        "configure-ramp-sweep",
-        "configure-triangle-sweep",
-        "configure-square",
-        "configure-ramp",
-        "configure-triangle",
-        "configure-pulse",
-        "configure-dc",
-        "configure-noise",
-        "configure-prbs",
-        "output",
-    }
+_SWEEP_COMMANDS = frozenset(
+    f"configure-{waveform}-sweep" for waveform in ("sine", "square", "ramp", "triangle")
 )
-_CONFIGURE_COMMANDS = frozenset(
-    {
-        "configure-sine",
-        "configure-sine-sweep",
-        "configure-square-sweep",
-        "configure-ramp-sweep",
-        "configure-triangle-sweep",
-        "configure-square",
-        "configure-ramp",
-        "configure-triangle",
-        "configure-pulse",
-        "configure-dc",
-        "configure-noise",
-        "configure-prbs",
-    }
+_LIST_SWEEP_COMMANDS = frozenset(
+    command.replace("-sweep", "-list-sweep") for command in _SWEEP_COMMANDS
 )
-_DRY_RUN_COMMANDS = _CONFIGURE_COMMANDS
-_CHANNEL_COMMANDS = _CONFIGURE_COMMANDS | frozenset({"status", "readback-advanced", "output"})
+_STATIC_ADVANCED_FIELDS = {
+    "configure-sine": {"am", "fm", "pm", "fsk", "bpsk", "sum", "burst"},
+    "configure-square": {"am", "fm", "pm", "fsk", "bpsk", "sum", "burst"},
+    "configure-ramp": {"am", "fm", "pm", "fsk", "bpsk", "sum", "burst"},
+    "configure-triangle": {"am", "fm", "pm", "fsk", "bpsk", "sum", "burst"},
+    "configure-pulse": {"am", "pwm", "sum", "burst"},
+    "configure-prbs": {"burst"},
+}
+_CONFIGURE_COMMANDS = (
+    _SWEEP_COMMANDS | _LIST_SWEEP_COMMANDS | frozenset(_STATIC_ADVANCED_FIELDS)
+    | {"configure-dc", "configure-noise", "configure-output", "configure-sync"}
+)
+SUPPORTED_WORKER_COMMANDS = _CONFIGURE_COMMANDS | ARBITRARY_COMMANDS | {
+    "identify", "status", "read-errors", "readback-advanced", "output", "sync-output", "trigger",
+}
+_DRY_RUN_COMMANDS = _CONFIGURE_COMMANDS | ARBITRARY_COMMANDS
+_CHANNEL_COMMANDS = (_DRY_RUN_COMMANDS - {"configure-sync"}) | {"status", "readback-advanced", "output"}
+_LIVE_WRITE_COMMANDS = _DRY_RUN_COMMANDS - {"list-arbitrary-memory"} | {"trigger"}
+
+_MODULATION_CONFIGS = {
+    "am": AMConfig, "fm": FMConfig, "pm": PMConfig, "fsk": FSKConfig,
+    "bpsk": BPSKConfig, "pwm": PWMConfig, "sum": SumConfig,
+}
 
 _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "identify": frozenset(),
+    "trigger": frozenset(),
+    "configure-output": frozenset(OutputConfig.__dataclass_fields__),
+    "configure-sync": frozenset(SyncConfig.__dataclass_fields__),
+    "sync-output": frozenset({"state", "confirm_output"}),
+    "upload-arbitrary": frozenset({"name", "path"}),
+    "configure-arbitrary": frozenset({"name", "sample_rate_hz", "amplitude_vpp", "offset_v", "load"}),
+    "configure-arbitrary-sequence": frozenset({"document"}),
+    "list-arbitrary-memory": frozenset(),
+    "clear-arbitrary-memory": frozenset({"confirm_clear"}),
     "status": frozenset(),
     "readback-advanced": frozenset(),
     "read-errors": frozenset({"max_reads"}),
@@ -258,6 +276,12 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
 }
 _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "read-errors": frozenset(),
+    "configure-sync": _ARGUMENT_FIELDS["configure-sync"],
+    "sync-output": frozenset({"state"}),
+    "upload-arbitrary": frozenset({"name", "path"}),
+    "configure-arbitrary": frozenset({"name", "sample_rate_hz", "amplitude_vpp"}),
+    "configure-arbitrary-sequence": frozenset({"document"}),
+    "clear-arbitrary-memory": frozenset({"confirm_clear"}),
     "configure-sine": frozenset({"frequency_hz"}),
     "configure-sine-sweep": frozenset(
         {"start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s"}
@@ -336,6 +360,26 @@ _DEFAULT_ARGUMENTS: dict[str, dict[str, object]] = {
 }
 
 
+for _command in _SWEEP_COMMANDS:
+    _ARGUMENT_FIELDS[_command] |= {"trigger_source", "trigger_timer_s", "verify_readback"}
+    _list_command = _command.replace("-sweep", "-list-sweep")
+    _ARGUMENT_FIELDS[_list_command] = (
+        (_ARGUMENT_FIELDS[_command] - {
+            "start_frequency_hz", "stop_frequency_hz", "spacing", "sweep_time_s",
+            "hold_time_s", "return_time_s", "trigger_timer_s",
+        }) | {"frequencies_hz", "dwell_s"}
+    )
+    _ARGUMENT_FIELDS[_command] |= {"trigger_slope"}
+    _REQUIRED_ARGUMENT_FIELDS[_list_command] = frozenset({"frequencies_hz"})
+    _DEFAULT_ARGUMENTS[_list_command] = {
+        field: value for field, value in _DEFAULT_ARGUMENTS[_command].items()
+        if field not in {"hold_time_s", "return_time_s"}
+    }
+
+for _command, _fields in _STATIC_ADVANCED_FIELDS.items():
+    _ARGUMENT_FIELDS[_command] |= _fields | {"verify_readback"}
+
+
 def validate_worker_command_request(
     payload: object,
     *,
@@ -400,7 +444,7 @@ def validate_worker_command_request(
     if request_mode == "dry_run" and command not in _DRY_RUN_COMMANDS:
         raise WorkerRequestValidationError(
             "unsupported_command",
-            "dry_run context only supports configure-* commands.",
+            "dry_run context only supports configure-* and Arbitrary commands.",
         )
 
     _validate_arguments(command, arguments)
@@ -423,7 +467,7 @@ def validate_worker_command_request(
                 command,
                 arguments,
                 validation_model_id,
-                channel=arguments["channel"],
+                channel=arguments.get("channel", 1),
             )
 
     return ValidatedWorkerCommand(
@@ -549,20 +593,59 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
         if not has_shared and not has_leading:
             arguments["edge_time_s"] = 1e-8
 
+    if command in _STATIC_ADVANCED_FIELDS or command in _SWEEP_COMMANDS | _LIST_SWEEP_COMMANDS:
+        if "verify_readback" in arguments and type(arguments["verify_readback"]) is not bool:
+            raise WorkerRequestValidationError("invalid_arguments", "verify_readback must be a boolean.")
+        options = configuration_options(command, arguments)
+        if command in _STATIC_ADVANCED_FIELDS and arguments.get("verify_readback") and not options:
+            raise WorkerRequestValidationError(
+                "invalid_arguments", "verify_readback requires an Advanced Mode option."
+            )
+    for field in ("trigger_source", "trigger_slope"):
+        if field in arguments and not isinstance(arguments[field], str):
+            raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a string.")
+    trigger_source = arguments.get("trigger_source")
+    if (
+        command in _SWEEP_COMMANDS
+        and "trigger_timer_s" in arguments
+        and arguments["trigger_timer_s"] is None
+        and isinstance(trigger_source, str)
+        and trigger_source.strip().casefold() == "external"
+    ):
+        raise WorkerRequestValidationError(
+            "invalid_arguments", "Omit trigger_timer_s for external trigger source."
+        )
+    for field in ("voltage_limits_enabled", "autorange_enabled"):
+        if field in arguments and type(arguments[field]) is not bool:
+            raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a boolean.")
+    if command in _LIST_SWEEP_COMMANDS and not isinstance(arguments["frequencies_hz"], list):
+        raise WorkerRequestValidationError("invalid_arguments", "frequencies_hz must be an array.")
+    if command in ARBITRARY_COMMANDS:
+        _validate_arbitrary_fields(command, arguments)
+    if command == "configure-sync":
+        try:
+            SyncConfig(**arguments)
+        except WaveformParameterError as exc:
+            raise WorkerRequestValidationError("invalid_arguments", str(exc)) from exc
+
     if command == "read-errors":
         max_reads = arguments["max_reads"]
         if isinstance(max_reads, bool) or not isinstance(max_reads, int) or not 1 <= max_reads <= 100:
             raise WorkerRequestValidationError(
                 "invalid_arguments", "read-errors max_reads must be an integer from 1 to 100."
             )
-    elif command == "output":
-        if type(arguments["enabled"]) is not bool:
+    elif command in {"output", "sync-output"}:
+        if command == "output" and type(arguments["enabled"]) is not bool:
             raise WorkerRequestValidationError(
                 "invalid_arguments", "output enabled must be a boolean."
             )
+        if command == "sync-output" and arguments["state"] not in ("on", "off"):
+            raise WorkerRequestValidationError(
+                "invalid_arguments", "sync-output state must be on or off."
+            )
         if "confirm_output" in arguments and type(arguments["confirm_output"]) is not bool:
             raise WorkerRequestValidationError(
-                "invalid_arguments", "output confirm_output must be a boolean."
+                "invalid_arguments", f"{command} confirm_output must be a boolean."
             )
 
 
@@ -576,24 +659,86 @@ def _validate_live_write_safety(
     if request_mode != "live":
         return
 
-    if command in _CONFIGURE_COMMANDS and not allow_output_writes:
+    if command in _LIVE_WRITE_COMMANDS and not allow_output_writes:
         raise WorkerRequestValidationError(
             "live_write_not_allowed",
             f"{command} requires allow_output_writes=True in live context.",
         )
 
-    if command != "output" or arguments["enabled"] is False:
+    enabling_output = (
+        (command == "output" and arguments["enabled"])
+        or (command == "sync-output" and arguments["state"] == "on")
+    )
+    if not enabling_output:
         return
     if not allow_output_writes:
         raise WorkerRequestValidationError(
             "live_write_not_allowed",
-            "live output enable requires allow_output_writes=True.",
+            f"live {command} enable requires allow_output_writes=True.",
         )
     if arguments.get("confirm_output") is not True:
         raise WorkerRequestValidationError(
             "output_confirmation_required",
-            "live output enable requires confirm_output=True.",
+            f"live {command} enable requires confirm_output=True.",
         )
+
+
+def _validate_arbitrary_fields(command: str, arguments: Mapping[str, object]) -> None:
+    if "name" in arguments and not isinstance(arguments["name"], str):
+        raise WorkerRequestValidationError("invalid_arguments", "name must be a string.")
+    if command == "upload-arbitrary":
+        path = arguments["path"]
+        if not isinstance(path, str) or "\x00" in path or not Path(path).is_absolute():
+            raise WorkerRequestValidationError(
+                "invalid_arguments", "path must be a Worker-host-local absolute path."
+            )
+    elif command == "configure-arbitrary":
+        for field in ("sample_rate_hz", "amplitude_vpp", "offset_v"):
+            if field in arguments and type(arguments[field]) not in (int, float):
+                raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a number.")
+        if "load" in arguments and type(arguments["load"]) not in (str, int, float):
+            raise WorkerRequestValidationError("invalid_arguments", "load must be a string or number.")
+    elif command == "configure-arbitrary-sequence" and not isinstance(arguments["document"], Mapping):
+        raise WorkerRequestValidationError("invalid_arguments", "document must be a JSON object.")
+    elif command == "clear-arbitrary-memory" and arguments["confirm_clear"] is not True:
+        raise WorkerRequestValidationError(
+            "invalid_arguments", "clear-arbitrary-memory requires confirm_clear=true."
+        )
+
+
+def configuration_options(
+    command: str, arguments: Mapping[str, object], *, readback: bool = False
+) -> dict[str, object]:
+    """Translate explicitly supplied Worker options to existing Core parameters."""
+    options = {}
+    for field in _STATIC_ADVANCED_FIELDS.get(command, ()):
+        if field not in arguments:
+            continue
+        group = arguments[field]
+        try:
+            if not isinstance(group, Mapping):
+                raise TypeError
+            values = dict(group)
+            if field == "burst":
+                mode = values.pop("mode", None)
+                if mode == "counted":
+                    options[field] = CountedBurstConfig(**values)
+                elif mode == "gated":
+                    options[field] = GatedBurstConfig(**values)
+                else:
+                    raise TypeError
+            else:
+                options[field] = _MODULATION_CONFIGS[field](**values)
+        except TypeError as exc:
+            raise WorkerRequestValidationError(
+                "invalid_arguments", f"Invalid {field} object for {command}."
+            ) from exc
+    for field in ("trigger_source", "trigger_timer_s", "trigger_slope", "dwell_s"):
+        if field in arguments:
+            options[field] = arguments[field]
+    if readback and "verify_readback" in arguments:
+        options["verify_readback"] = arguments["verify_readback"]
+    return options
 
 
 _VOLTAGE_WAVEFORMS = {
@@ -602,6 +747,8 @@ _VOLTAGE_WAVEFORMS = {
     "configure-square-sweep": "Square sweep",
     "configure-ramp-sweep": "Ramp sweep",
     "configure-triangle-sweep": "Triangle sweep",
+    **{command: command.removeprefix("configure-").replace("-", " ").capitalize()
+       for command in _LIST_SWEEP_COMMANDS},
     "configure-square": "Square",
     "configure-ramp": "Ramp",
     "configure-triangle": "Triangle",
@@ -678,7 +825,12 @@ def _validate_waveform_arguments(
     channel: int,
 ) -> None:
     try:
-        if command == "configure-sine":
+        if command == "configure-sync":
+            dry_run_sync(model_id, SyncConfig(**arguments))
+        elif command == "configure-output":
+            config = OutputConfig(**{key: value for key, value in arguments.items() if key != "channel"})
+            dry_run_output(model_id, config, channel=channel)
+        elif command == "configure-sine":
             dry_run_sine(
                 model_id,
                 arguments["frequency_hz"],
@@ -687,142 +839,30 @@ def _validate_waveform_arguments(
                 arguments["load"],
                 arguments["phase_deg"],
                 channel=channel,
+                **configuration_options(command, arguments),
             )
-        elif command == "configure-sine-sweep":
-            dry_run_sine_sweep(
-                model_id,
-                arguments["start_frequency_hz"],
-                arguments["stop_frequency_hz"],
-                arguments["spacing"],
-                arguments["sweep_time_s"],
-                arguments["amplitude_vpp"],
-                arguments["offset_v"],
-                arguments["hold_time_s"],
-                arguments["return_time_s"],
-                arguments["load"],
-                arguments["phase_deg"],
-                channel=channel,
-            )
-        elif command == "configure-square-sweep":
-            dry_run_square_sweep(
-                model_id,
-                arguments["start_frequency_hz"],
-                arguments["stop_frequency_hz"],
-                arguments["spacing"],
-                arguments["sweep_time_s"],
-                arguments["amplitude_vpp"],
-                arguments["offset_v"],
-                arguments["hold_time_s"],
-                arguments["return_time_s"],
-                arguments["load"],
-                arguments["phase_deg"],
-                duty_cycle_percent=arguments["duty_cycle_percent"],
-                channel=channel,
-            )
-        elif command == "configure-ramp-sweep":
-            dry_run_ramp_sweep(
-                model_id,
-                arguments["start_frequency_hz"],
-                arguments["stop_frequency_hz"],
-                arguments["spacing"],
-                arguments["sweep_time_s"],
-                arguments["amplitude_vpp"],
-                arguments["offset_v"],
-                arguments["hold_time_s"],
-                arguments["return_time_s"],
-                arguments["load"],
-                arguments["phase_deg"],
-                symmetry_percent=arguments["symmetry_percent"],
-                channel=channel,
-            )
-        elif command == "configure-triangle-sweep":
-            dry_run_triangle_sweep(
-                model_id,
-                arguments["start_frequency_hz"],
-                arguments["stop_frequency_hz"],
-                arguments["spacing"],
-                arguments["sweep_time_s"],
-                arguments["amplitude_vpp"],
-                arguments["offset_v"],
-                arguments["hold_time_s"],
-                arguments["return_time_s"],
-                arguments["load"],
-                arguments["phase_deg"],
-                channel=channel,
-            )
-        elif command == "configure-square":
-            dry_run_square(
-                model_id,
-                arguments["frequency_hz"],
-                arguments["amplitude_vpp"],
-                arguments["offset_v"],
-                arguments["duty_cycle_percent"],
-                arguments["load"],
-                arguments["phase_deg"],
-                channel=channel,
-            )
-        elif command == "configure-ramp":
-            dry_run_ramp(
-                model_id,
-                arguments["frequency_hz"],
-                arguments["amplitude_vpp"],
-                arguments["offset_v"],
-                arguments["symmetry_percent"],
-                arguments["load"],
-                arguments["phase_deg"],
-                channel=channel,
-            )
-        elif command == "configure-triangle":
-            dry_run_triangle(
-                model_id,
-                arguments["frequency_hz"],
-                arguments["amplitude_vpp"],
-                arguments["offset_v"],
-                arguments["load"],
-                arguments["phase_deg"],
-                channel=channel,
-            )
-        elif command == "configure-pulse":
-            dry_run_pulse(
-                model_id,
-                arguments["frequency_hz"],
-                arguments["amplitude_vpp"],
-                arguments["pulse_width_s"],
-                arguments["offset_v"],
-                arguments.get("edge_time_s"),
-                arguments["load"],
-                arguments["phase_deg"],
-                arguments.get("leading_edge_s"),
-                arguments.get("trailing_edge_s"),
-                channel=channel,
-            )
-        elif command == "configure-dc":
-            dry_run_dc(
-                model_id,
-                arguments["voltage_v"],
-                arguments["load"],
-                channel=channel,
-            )
-        elif command == "configure-noise":
-            dry_run_noise(
-                model_id,
-                arguments["amplitude_vpp"],
-                arguments["bandwidth_hz"],
-                arguments["offset_v"],
-                arguments["load"],
-                channel=channel,
-            )
-        elif command == "configure-prbs":
-            dry_run_prbs(
-                model_id,
-                arguments["bit_rate_bps"],
-                arguments["amplitude_vpp"],
-                arguments["pattern"],
-                arguments["offset_v"],
-                arguments["edge_time_s"],
-                arguments["load"],
-                channel=channel,
-            )
+        else:
+            operation = {
+                "configure-sine-sweep": dry_run_sine_sweep,
+                "configure-square-sweep": dry_run_square_sweep,
+                "configure-ramp-sweep": dry_run_ramp_sweep,
+                "configure-triangle-sweep": dry_run_triangle_sweep,
+                "configure-sine-list-sweep": dry_run_sine_list_sweep,
+                "configure-square-list-sweep": dry_run_square_list_sweep,
+                "configure-ramp-list-sweep": dry_run_ramp_list_sweep,
+                "configure-triangle-list-sweep": dry_run_triangle_list_sweep,
+                "configure-square": dry_run_square,
+                "configure-ramp": dry_run_ramp,
+                "configure-triangle": dry_run_triangle,
+                "configure-pulse": dry_run_pulse,
+                "configure-dc": dry_run_dc,
+                "configure-noise": dry_run_noise,
+                "configure-prbs": dry_run_prbs,
+            }[command]
+            options = configuration_options(command, arguments)
+            values = {key: value for key, value in arguments.items()
+                      if key not in options and key not in {"verify_readback", *_MODULATION_CONFIGS, "burst"}}
+            operation(model_id, **values, **options)
     except WaveformParameterError as exc:
         raise WorkerRequestValidationError("invalid_arguments", str(exc)) from exc
 

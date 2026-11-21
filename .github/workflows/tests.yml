@@ -235,7 +235,7 @@ jobs:
           --basetemp .tmp_tests/ci-windows-core
           tests/core/test_identity.py tests/core/test_capabilities.py
           tests/core/test_transport.py tests/core/test_backends.py
-          tests/core/test_simulator.py tests/core/test_visa.py
+          tests/core/test_simulator.py tests/core/test_visa.py tests/core/test_arbitrary.py
       - name: Core compatibility contracts (Windows)
         if: needs.detect-changes.outputs.core == 'true' && matrix.python-version != '3.13'
         run: >-
@@ -305,7 +305,7 @@ jobs:
         run: New-Item -ItemType Directory -Force .tmp_tests | Out-Null
       - name: Test preflight, PlanOnly and privacy contracts without hardware
         run: >-
-          .\.venv\Scripts\python.exe -m pytest -q -rs -p no:cacheprovider
+          .\.venv\Scripts\python.exe -m pytest -vv -rs --durations=12 -p no:cacheprovider
           --basetemp .tmp_tests/ci-windows-validation
           tests/cli/test_validation_scripts.py
           tests/cli/test_validation_script_helpers.py

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 import sys
 from enum import IntEnum
 from typing import Any, Sequence
 
+from wavegen_tool_core.arbitrary import (
+    ARBITRARY_COMMANDS,
+    read_arbitrary_sequence_file,
+    run_arbitrary,
+)
 from wavegen_tool_core import (
     AMConfig,
     BPSKConfig,
@@ -20,6 +26,8 @@ from wavegen_tool_core import (
     PMConfig,
     PWMConfig,
     SumConfig,
+    SyncConfig,
+    SyncDryRunResult,
     ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
@@ -40,6 +48,7 @@ from wavegen_tool_core import (
     configure_dc,
     configure_noise,
     configure_output,
+    configure_sync,
     configure_prbs,
     configure_pulse,
     configure_ramp,
@@ -57,6 +66,7 @@ from wavegen_tool_core import (
     dry_run_dc,
     dry_run_noise,
     dry_run_output,
+    dry_run_sync,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
@@ -80,6 +90,7 @@ from wavegen_tool_core import (
     resolve_voltage_inputs,
     send_bus_trigger,
     set_output,
+    set_sync_output,
 )
 from wavegen_tool_core.identity import (
     CANONICAL_MODEL_ID,
@@ -502,7 +513,7 @@ def _burst_config_from_args(
 def _add_sweep_trigger_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--trigger-source",
-        choices=("immediate", "bus", "timer"),
+        choices=("immediate", "bus", "timer", "external"),
         default="immediate",
         help="Sweep trigger source (default: immediate).",
     )
@@ -510,6 +521,11 @@ def _add_sweep_trigger_arguments(parser: argparse.ArgumentParser) -> None:
         "--trigger-timer-s",
         default=None,
         help="Sweep Timer trigger interval in seconds.",
+    )
+    parser.add_argument(
+        "--trigger-slope",
+        choices=("positive", "negative"),
+        help="External Sweep trigger edge (default: positive).",
     )
 
 
@@ -722,6 +738,39 @@ def _add_list_sweep_arguments(
     )
 
 
+def _add_arbitrary_parsers(subparsers: Any) -> None:
+    help_text = {
+        "upload-arbitrary": "Upload a named CSV waveform to volatile memory.",
+        "configure-arbitrary": "Configure playback of a loaded arbitrary waveform.",
+        "configure-arbitrary-sequence": "Create and configure a native arbitrary sequence.",
+        "list-arbitrary-memory": "List the selected channel's volatile arbitrary memory.",
+        "clear-arbitrary-memory": "Clear all volatile arbitrary data on the selected channel.",
+    }
+    for command, description in help_text.items():
+        parser = subparsers.add_parser(command, help=description, allow_abbrev=False)
+        _add_simulate_argument(parser)
+        _add_channel_argument(parser)
+        _add_validation_support_policy_argument(parser)
+        parser.add_argument("--resource", help="Explicit VISA resource or WAVEGEN_TOOL_RESOURCE.")
+        parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
+        parser.add_argument("--dry-run", action="store_true", help="Plan without using VISA.")
+        parser.add_argument("--model", choices=_REGISTERED_MODEL_IDS, default=CANONICAL_MODEL_ID)
+        parser.add_argument("--json", action="store_true", dest="json_output")
+        if command in {"upload-arbitrary", "configure-arbitrary"}:
+            parser.add_argument("--name", required=True)
+        if command in {"upload-arbitrary", "configure-arbitrary-sequence"}:
+            kind = "one-column CSV" if command == "upload-arbitrary" else "sequence JSON"
+            parser.add_argument("--file", required=True, help=f"Local {kind} file.")
+        if command == "configure-arbitrary":
+            parser.add_argument("--sample-rate-hz", required=True)
+            parser.add_argument("--amplitude-vpp", required=True)
+            parser.add_argument("--offset-v", default=0)
+            parser.add_argument("--load", choices=("50", "high-z"), default="50")
+        if command == "clear-arbitrary-memory":
+            parser.add_argument("--confirm-clear", action="store_true",
+                                help="Confirm removal of all volatile segments and sequences.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser without touching VISA."""
 
@@ -730,6 +779,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Safely identify and control an explicitly selected waveform generator.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    _add_arbitrary_parsers(subparsers)
 
     identify_parser = subparsers.add_parser(
         "identify",
@@ -1743,6 +1793,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    sync_config_parser = subparsers.add_parser(
+        "configure-sync", help="Configure the front-panel Sync connector with Sync off.",
+        allow_abbrev=False,
+    )
+    sync_output_parser = subparsers.add_parser(
+        "sync-output", help="Explicitly set the front-panel Sync connector on or off.",
+        allow_abbrev=False,
+    )
+    for sync_parser in (sync_config_parser, sync_output_parser):
+        _add_simulate_argument(sync_parser)
+        _add_validation_support_policy_argument(sync_parser)
+        sync_parser.add_argument(
+            "--resource",
+            help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
+        )
+        sync_parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
+        sync_parser.add_argument(
+            "--model", choices=_REGISTERED_MODEL_IDS,
+            help="Model for hardware-free use (default: keysight-33521b).",
+        )
+        sync_parser.add_argument("--json", action="store_true", dest="json_output")
+    sync_config_parser.add_argument("--dry-run", action="store_true", help="Preview SCPI without VISA I/O.")
+    sync_config_parser.add_argument("--source-channel", type=int, choices=(1, 2), required=True)
+    sync_config_parser.add_argument("--mode", choices=("normal", "carrier"), required=True)
+    sync_config_parser.add_argument("--polarity", choices=("normal", "inverted"), required=True)
+    sync_output_parser.add_argument("--state", choices=("on", "off"), required=True)
+
     trigger_parser = subparsers.add_parser(
         "trigger",
         help="Send one instrument-wide IEEE-488.2 bus trigger without waiting.",
@@ -2009,16 +2086,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-noise",
         "configure-prbs",
         "configure-output",
-    }
+        "configure-sync",
+    } | ARBITRARY_COMMANDS
     validation_only_live_commands = {
         "identify",
         "status",
         "readback-advanced",
         "read-errors",
         "output",
+        "sync-output",
         "trigger",
     }
-    standalone_simulator_model_commands = {"status", "readback-advanced", "output", "trigger"}
+    standalone_simulator_model_commands = {
+        "status", "readback-advanced", "output", "sync-output", "trigger",
+    }
     if (
         args.command in waveform_commands
         and args.dry_run
@@ -2062,12 +2143,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(
                 "--model requires --validation-allow-pending-live-support"
             )
+    if args.command == "configure-sync" and args.validation_allow_pending_live_support:
+        if args.dry_run or args.simulate or args.model is None:
+            parser.error("Sync validation policy requires an explicit --model in live mode")
     if (
         args.command in waveform_commands
         and not args.dry_run
         and not args.simulate
-        and args.model != CANONICAL_MODEL_ID
-        and not args.validation_allow_pending_live_support
+        and args.model not in (None, CANONICAL_MODEL_ID)
+        and not getattr(args, "validation_allow_pending_live_support", False)
     ):
         parser.error(
             "non-default --model selection requires --dry-run or --simulate"
@@ -2090,11 +2174,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
     if (
-        args.command in {"identify", "status", "readback-advanced", "output", "read-errors", "trigger"}
+        args.command in validation_only_live_commands
         and not args.simulate
         and args.resource is None
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
+    if args.command in ARBITRARY_COMMANDS:
+        return _run_arbitrary(args)
     if args.command == "list-resources":
         return _run_list_resources(args)
     if args.command == "configure-sine":
@@ -2131,6 +2217,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_prbs(args)
     if args.command == "configure-output":
         return _run_configure_output(args)
+    if args.command in {"configure-sync", "sync-output"}:
+        return _run_sync(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "trigger":
@@ -2426,6 +2514,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2451,6 +2540,7 @@ def _run_sine_sweep_dry_run(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2513,6 +2603,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             duty_cycle_percent=args.duty_cycle_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2539,6 +2630,7 @@ def _run_square_sweep_dry_run(args: argparse.Namespace) -> int:
             duty_cycle_percent=args.duty_cycle_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2601,6 +2693,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             symmetry_percent=args.symmetry_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2627,6 +2720,7 @@ def _run_ramp_sweep_dry_run(args: argparse.Namespace) -> int:
             symmetry_percent=args.symmetry_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2688,6 +2782,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2713,6 +2808,7 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -3518,6 +3614,48 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_arbitrary(args: argparse.Namespace) -> int:
+    def operation() -> dict[str, object]:
+        arguments = {"channel": args.channel}
+        for field in ("name", "sample_rate_hz", "amplitude_vpp", "offset_v", "load", "confirm_clear"):
+            if hasattr(args, field):
+                arguments[field] = getattr(args, field)
+        if args.command == "upload-arbitrary":
+            arguments["path"] = args.file
+        elif args.command == "configure-arbitrary-sequence":
+            arguments["document"] = read_arbitrary_sequence_file(args.file)
+        if args.dry_run:
+            return run_arbitrary(args.command, arguments, model=args.model)
+        resource, factory = (
+            _simulated_target(args.model) if args.simulate else (args.resource, None)
+        )
+        return run_arbitrary(
+            args.command, arguments, resource=resource, backend=args.backend,
+            **_validation_live_injection(args),
+            **_factory_injection(args.simulate, factory),
+        )
+
+    return _run_control(args, operation)
+
+
+def _run_sync(args: argparse.Namespace) -> int:
+    def operation() -> Any:
+        model = args.model or CANONICAL_MODEL_ID
+        if args.command == "configure-sync":
+            config = SyncConfig(args.source_channel, args.mode, args.polarity)
+            if args.dry_run:
+                return dry_run_sync(model, config)
+        resource, factory = (
+            _simulated_target(model) if args.simulate else (args.resource, None)
+        )
+        options = _validation_live_injection(args) | _factory_injection(args.simulate, factory)
+        if args.command == "configure-sync":
+            return configure_sync(resource, config, args.backend, **options)
+        return set_sync_output(resource, args.state, args.backend, **options)
+
+    return _run_control(args, operation)
+
+
 def _run_configure_output(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_output_dry_run(args)
@@ -4097,6 +4235,13 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
 
 
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
+    if action in ARBITRARY_COMMANDS:
+        payload = dict(result, success=True, action=action, error=None)
+        if not result["executed"]:
+            payload["mode"] = "dry-run"
+        return payload
+    if isinstance(result, SyncDryRunResult):
+        return dict(asdict(result), success=True, action=action, mode="dry-run", error=None)
     payload = {
         "success": True,
         "action": action,
@@ -4106,6 +4251,19 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "model": result.identity.model,
         "error": None,
     }
+    if action in {"configure-sync", "sync-output"}:
+        payload.update(
+            sync_state=result.sync_state,
+            commands=list(result.commands),
+            readback_verified=result.readback_verified,
+        )
+        if action == "configure-sync":
+            payload.update(
+                source_channel=result.source_channel,
+                sync_mode=result.sync_mode,
+                polarity=result.polarity,
+            )
+        return payload
     if action != "trigger":
         payload["output_state"] = result.output_state
     if action in {
@@ -4154,6 +4312,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             return_time_s=result.return_time_s,
             trigger_source=result.trigger_source,
             trigger_timer_s=result.trigger_timer_s,
+            trigger_slope=result.trigger_slope,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
             phase_deg=result.phase_deg,
@@ -4292,6 +4451,7 @@ def _sine_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4337,6 +4497,7 @@ def _square_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4383,6 +4544,7 @@ def _ramp_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4429,6 +4591,7 @@ def _triangle_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4861,6 +5024,9 @@ def _control_error_payload(
         "output_state": error.output_state,
         "error": _error_text(error),
     }
+    if action in {"configure-sync", "sync-output"}:
+        payload.pop("output_state")
+        payload["sync_state"] = None
     if action in {
         "configure-sine",
         "configure-sine-sweep",
@@ -4876,7 +5042,7 @@ def _control_error_payload(
         "configure-prbs",
         "configure-output",
         "output",
-    } | _LIST_SWEEP_ACTIONS:
+    } | _LIST_SWEEP_ACTIONS | ARBITRARY_COMMANDS:
         payload["channel"] = channel
     return payload
 
@@ -4889,13 +5055,13 @@ def _control_internal_error_payload(action: str) -> dict[str, object]:
         "transport": None,
         "manufacturer": None,
         "model": None,
-        "output_state": None,
+        ("sync_state" if action in {"configure-sync", "sync-output"} else "output_state"): None,
         "error": "internal_error: unexpected internal failure",
     }
 
 
 def _status_success_payload(result: Any) -> dict[str, object]:
-    return {
+    payload = {
         "success": True,
         "action": "status",
         "channel": getattr(result, "channel", 1),
@@ -4914,6 +5080,9 @@ def _status_success_payload(result: Any) -> dict[str, object]:
         "load": result.load,
         "error": None,
     }
+    if result.function == "ARB":
+        payload["sample_rate_hz"] = result.sample_rate_hz
+    return payload
 
 
 def _error_queue_success_payload(result: Any) -> dict[str, object]:
@@ -5162,6 +5331,30 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
 
 
 def _human_control_success(action: str, result: Any) -> str:
+    if action in {"configure-sync", "sync-output"}:
+        planned = isinstance(result, SyncDryRunResult)
+        lines = [f"Sync {'plan' if planned else 'readback'} for {result.model if planned else result.identity.model}."]
+        if action == "configure-sync":
+            lines.append(
+                f"Source CH{result.source_channel}, mode {result.sync_mode}, polarity {result.polarity}."
+            )
+        lines.append(f"Sync state: {result.sync_state}")
+        return "\n".join([*lines, *result.commands])
+    if action in ARBITRARY_COMMANDS:
+        lines = [f"{action} {result['status']} on channel {result['channel']}."]
+        for field, label in (
+            ("name", "Name"), ("sample_count", "Samples"), ("step_count", "Steps"),
+            ("sample_rate_hz", "Sample rate (Sa/s)"), ("output_state", "Output"),
+            ("free_points", "Free points"),
+        ):
+            if field in result:
+                lines.append(f"{label}: {result[field]}")
+        if "names" in result:
+            lines.extend(result["names"] or ("Volatile memory is empty.",))
+            if result["catalog_truncated"]:
+                lines.append("Additional catalog entries omitted.")
+        lines.extend(result.get("commands", ()))
+        return "\n".join(lines)
     channel = getattr(result, "channel", 1)
     if action == "trigger":
         heading = "One instrument-wide bus trigger was sent without waiting."
@@ -5254,6 +5447,8 @@ def _human_control_success(action: str, result: Any) -> str:
         )
         if result.trigger_timer_s is not None:
             lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
+        elif result.trigger_slope is not None:
+            lines.append(f"Trigger slope: {result.trigger_slope}")
     if action in {
         "configure-square-sweep",
         "configure-ramp-sweep",
@@ -5275,6 +5470,8 @@ def _human_control_success(action: str, result: Any) -> str:
         )
         if result.trigger_timer_s is not None:
             lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
+        elif result.trigger_slope is not None:
+            lines.append(f"Trigger slope: {result.trigger_slope}")
         if action == "configure-square-sweep":
             lines.append(
                 f"Duty cycle (percent): {result.duty_cycle_percent}"
@@ -5646,6 +5843,14 @@ def _human_status_success(result: Any) -> str:
         lines.extend(
             (
                 f"Bit rate: {result.bit_rate_bps:g} bit/s",
+                f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
+                f"Offset: {result.offset_v:g} V",
+            )
+        )
+    elif result.function == "ARB":
+        lines.extend(
+            (
+                f"Sample rate: {result.sample_rate_hz:g} Sa/s",
                 f"Amplitude: {result.amplitude:g} {result.amplitude_unit}",
                 f"Offset: {result.offset_v:g} V",
             )

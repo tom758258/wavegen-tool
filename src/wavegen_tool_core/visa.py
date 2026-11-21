@@ -238,6 +238,9 @@ class VisaSession(Protocol):
     def write(self, command: str) -> object:
         """Send one state-changing command."""
 
+    def write_raw(self, message: bytes) -> int:
+        """Send one complete binary message and return bytes written."""
+
     def control_ren(self, mode: RENLineOperation) -> None:
         """Control the VISA remote-enable line."""
 
@@ -289,6 +292,13 @@ class StatusResult:
     load: str
     channel: int = 1
     bit_rate_bps: float | None = None
+
+
+@dataclass(frozen=True)
+class ArbitraryStatusResult(StatusResult):
+    """Status of an arbitrary waveform or sequence."""
+
+    sample_rate_hz: float | None = None
 
 
 @dataclass(frozen=True)
@@ -439,6 +449,7 @@ class SineSweepConfigurationResult:
     load: str
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -463,6 +474,7 @@ class SineSweepDryRunResult:
     executed: bool = False
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -488,6 +500,7 @@ class SquareSweepConfigurationResult:
     load: str
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -513,6 +526,7 @@ class SquareSweepDryRunResult:
     executed: bool = False
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -538,6 +552,7 @@ class RampSweepConfigurationResult:
     load: str
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -563,6 +578,7 @@ class RampSweepDryRunResult:
     executed: bool = False
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -587,6 +603,7 @@ class TriangleSweepConfigurationResult:
     load: str
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -611,6 +628,7 @@ class TriangleSweepDryRunResult:
     executed: bool = False
     output_state: str = "off"
     channel: int = 1
+    trigger_slope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -968,6 +986,53 @@ class OutputDryRunResult:
     voltage_limit_high: float | None = None
     voltage_limits_enabled: bool | None = None
     autorange_enabled: bool | None = None
+
+
+@dataclass(frozen=True)
+class SyncConfig:
+    """Settings for the instrument-wide Sync connector's selected source."""
+
+    source_channel: int
+    mode: str
+    polarity: str
+
+    def __post_init__(self) -> None:
+        if type(self.source_channel) is not int or self.source_channel not in (1, 2):
+            raise WaveformParameterError("Sync source_channel must be 1 or 2.")
+        if not isinstance(self.mode, str) or self.mode not in ("normal", "carrier"):
+            raise WaveformParameterError("Sync mode must be normal or carrier.")
+        if not isinstance(self.polarity, str) or self.polarity not in ("normal", "inverted"):
+            raise WaveformParameterError("Sync polarity must be normal or inverted.")
+
+
+@dataclass(frozen=True)
+class SyncOutputResult:
+    resource: str
+    backend: str
+    transport: str
+    identity: InstrumentIdentity
+    sync_state: str
+    commands: tuple[str, ...]
+    readback_verified: bool
+
+
+@dataclass(frozen=True)
+class SyncConfigurationResult(SyncOutputResult):
+    source_channel: int
+    sync_mode: str
+    polarity: str
+
+
+@dataclass(frozen=True)
+class SyncDryRunResult:
+    model: str
+    canonical_model_id: str
+    source_channel: int
+    sync_mode: str
+    polarity: str
+    commands: tuple[str, ...]
+    sync_state: str = "off"
+    executed: bool = False
 
 
 @dataclass(frozen=True)
@@ -1609,6 +1674,11 @@ def query_status(
                                 function_queries = STATUS_NOISE_QUERIES
                             elif function == "PRBS":
                                 function_queries = STATUS_PRBS_QUERIES
+                            elif function == "ARB":
+                                function_queries = (
+                                    "SOURce1:FUNCtion:ARBitrary:SRATe?",
+                                    *STATUS_FREQUENCY_AMPLITUDE_QUERIES[1:],
+                                )
                             else:
                                 function_queries = STATUS_FREQUENCY_AMPLITUDE_QUERIES
                             function_queries = tuple(
@@ -1679,7 +1749,15 @@ def query_status(
                                     if bit_rate_query in responses
                                     else None
                                 )
-                                result = StatusResult(
+                                status_type = StatusResult
+                                specific_fields = {}
+                                if function == "ARB":
+                                    status_type = ArbitraryStatusResult
+                                    specific_fields["sample_rate_hz"] = _parse_status_number(
+                                        responses[f"SOURce{selected_channel}:FUNCtion:ARBitrary:SRATe?"],
+                                        "sample rate",
+                                    )
+                                result = status_type(
                                     resource=resource_name,
                                     backend=backend_selection.name,
                                     transport=transport,
@@ -1699,6 +1777,7 @@ def query_status(
                                     load=_parse_status_load(responses[load_query]),
                                     channel=selected_channel,
                                     bit_rate_bps=bit_rate_bps,
+                                    **specific_fields,
                                 )
                             except StatusQueryError as exc:
                                 primary_error = exc.attach_context(
@@ -2045,6 +2124,7 @@ def configure_sine_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
     verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
@@ -2052,6 +2132,10 @@ def configure_sine_sweep(
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SineSweepConfigurationResult:
     """Validate and configure a selected-channel sine frequency sweep."""
+
+    trigger_source, validation_only_feature = _prepare_live_sweep_source(
+        trigger_source, waveform="Sine sweep"
+    )
 
     def prepare_configuration(
         capabilities: WavegenCapabilities,
@@ -2069,6 +2153,7 @@ def configure_sine_sweep(
             phase_deg,
             trigger_source,
             trigger_timer_s,
+            trigger_slope,
             capabilities=capabilities,
         )
         return prepared[:-1], prepared[-1]
@@ -2083,6 +2168,7 @@ def configure_sine_sweep(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=validation_only_feature,
     )
     (
         start_frequency,
@@ -2097,6 +2183,7 @@ def configure_sine_sweep(
         phase,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
     ) = prepared
     return SineSweepConfigurationResult(
         resource=context.resource,
@@ -2111,6 +2198,7 @@ def configure_sine_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2134,6 +2222,7 @@ def dry_run_sine_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
 ) -> SineSweepDryRunResult:
     """Preview a validated selected-channel sine sweep without VISA I/O."""
@@ -2155,6 +2244,7 @@ def dry_run_sine_sweep(
         phase,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     ) = _prepare_sine_sweep(
         start_frequency_hz,
@@ -2169,6 +2259,7 @@ def dry_run_sine_sweep(
         phase_deg,
         trigger_source,
         trigger_timer_s,
+        trigger_slope,
         capabilities=capabilities,
     )
     return SineSweepDryRunResult(
@@ -2182,6 +2273,7 @@ def dry_run_sine_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2208,6 +2300,7 @@ def configure_square_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
     verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
@@ -2215,6 +2308,10 @@ def configure_square_sweep(
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> SquareSweepConfigurationResult:
     """Validate and configure a selected-channel square frequency sweep."""
+
+    trigger_source, validation_only_feature = _prepare_live_sweep_source(
+        trigger_source, waveform="Square sweep"
+    )
 
     def prepare_configuration(
         capabilities: WavegenCapabilities,
@@ -2233,6 +2330,7 @@ def configure_square_sweep(
             phase_deg,
             trigger_source,
             trigger_timer_s,
+            trigger_slope,
             capabilities=capabilities,
         )
         return prepared[:-1], prepared[-1]
@@ -2247,6 +2345,7 @@ def configure_square_sweep(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=validation_only_feature,
     )
     (
         start_frequency,
@@ -2262,6 +2361,7 @@ def configure_square_sweep(
         duty_cycle,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
     ) = prepared
     return SquareSweepConfigurationResult(
         resource=context.resource,
@@ -2276,6 +2376,7 @@ def configure_square_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2301,6 +2402,7 @@ def dry_run_square_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
 ) -> SquareSweepDryRunResult:
     """Preview a validated selected-channel square sweep without VISA I/O."""
@@ -2323,6 +2425,7 @@ def dry_run_square_sweep(
         duty_cycle,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     ) = _prepare_square_sweep(
         start_frequency_hz,
@@ -2338,6 +2441,7 @@ def dry_run_square_sweep(
         phase_deg,
         trigger_source,
         trigger_timer_s,
+        trigger_slope,
         capabilities=capabilities,
     )
     return SquareSweepDryRunResult(
@@ -2351,6 +2455,7 @@ def dry_run_square_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2378,6 +2483,7 @@ def configure_ramp_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
     verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
@@ -2385,6 +2491,10 @@ def configure_ramp_sweep(
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> RampSweepConfigurationResult:
     """Validate and configure a selected-channel ramp frequency sweep."""
+
+    trigger_source, validation_only_feature = _prepare_live_sweep_source(
+        trigger_source, waveform="Ramp sweep"
+    )
 
     (
         start_frequency,
@@ -2400,6 +2510,7 @@ def configure_ramp_sweep(
         symmetry,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     ) = _prepare_ramp_sweep(
         start_frequency_hz,
@@ -2415,6 +2526,7 @@ def configure_ramp_sweep(
         phase_deg,
         trigger_source,
         trigger_timer_s,
+        trigger_slope,
     )
     context = _write_to_supported_instrument(
         resource,
@@ -2427,6 +2539,7 @@ def configure_ramp_sweep(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=validation_only_feature,
     )
     return RampSweepConfigurationResult(
         resource=context.resource,
@@ -2441,6 +2554,7 @@ def configure_ramp_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2466,6 +2580,7 @@ def dry_run_ramp_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
 ) -> RampSweepDryRunResult:
     """Preview a validated selected-channel ramp sweep without VISA I/O."""
@@ -2488,6 +2603,7 @@ def dry_run_ramp_sweep(
         symmetry,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     ) = _prepare_ramp_sweep(
         start_frequency_hz,
@@ -2503,6 +2619,7 @@ def dry_run_ramp_sweep(
         phase_deg,
         trigger_source,
         trigger_timer_s,
+        trigger_slope,
     )
     return RampSweepDryRunResult(
         model=model_info.canonical_model,
@@ -2515,6 +2632,7 @@ def dry_run_ramp_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2541,6 +2659,7 @@ def configure_triangle_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
     verify_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
@@ -2548,6 +2667,10 @@ def configure_triangle_sweep(
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> TriangleSweepConfigurationResult:
     """Validate and configure a selected-channel triangle frequency sweep."""
+
+    trigger_source, validation_only_feature = _prepare_live_sweep_source(
+        trigger_source, waveform="Triangle sweep"
+    )
 
     (
         start_frequency,
@@ -2562,6 +2685,7 @@ def configure_triangle_sweep(
         phase,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     ) = _prepare_triangle_sweep(
         start_frequency_hz,
@@ -2576,6 +2700,7 @@ def configure_triangle_sweep(
         phase_deg,
         trigger_source,
         trigger_timer_s,
+        trigger_slope,
     )
     context = _write_to_supported_instrument(
         resource,
@@ -2588,6 +2713,7 @@ def configure_triangle_sweep(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=validation_only_feature,
     )
     return TriangleSweepConfigurationResult(
         resource=context.resource,
@@ -2602,6 +2728,7 @@ def configure_triangle_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -2625,6 +2752,7 @@ def dry_run_triangle_sweep(
     *,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     channel: int = 1,
 ) -> TriangleSweepDryRunResult:
     """Preview a validated selected-channel triangle sweep without VISA I/O."""
@@ -2646,6 +2774,7 @@ def dry_run_triangle_sweep(
         phase,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     ) = _prepare_triangle_sweep(
         start_frequency_hz,
@@ -2660,6 +2789,7 @@ def dry_run_triangle_sweep(
         phase_deg,
         trigger_source,
         trigger_timer_s,
+        trigger_slope,
     )
     return TriangleSweepDryRunResult(
         model=model_info.canonical_model,
@@ -2672,6 +2802,7 @@ def dry_run_triangle_sweep(
         return_time_s=return_time,
         trigger_source=normalized_trigger_source,
         trigger_timer_s=normalized_trigger_timer,
+        trigger_slope=normalized_trigger_slope,
         amplitude_vpp=amplitude,
         offset_v=offset,
         phase_deg=phase,
@@ -3717,8 +3848,16 @@ def _build_sweep_tail(
     return_time: float,
     trigger_source: str,
     trigger_timer_s: float | None,
+    trigger_slope: str | None,
 ) -> tuple[str, ...]:
-    trigger_commands = _build_trigger_commands(trigger_source, trigger_timer_s)
+    if trigger_slope is None:
+        trigger_commands = _build_trigger_commands(trigger_source, trigger_timer_s)
+    else:
+        slope_command = "POSitive" if trigger_slope == "positive" else "NEGative"
+        trigger_commands = (
+            "TRIGger1:SOURce EXTernal",
+            f"TRIGger1:SLOPe {slope_command}",
+        )
     return (
         f"SOURce1:FREQuency:STARt {_format_scpi_number(start_frequency)}",
         f"SOURce1:FREQuency:STOP {_format_scpi_number(stop_frequency)}",
@@ -3731,16 +3870,17 @@ def _build_sweep_tail(
     )
 
 
-def _normalize_trigger_source(value: object, *, waveform: str) -> str:
-    if not isinstance(value, str):
-        raise WaveformParameterError(
-            f"{waveform} trigger source must be immediate, bus, or timer."
-        )
-    normalized = value.strip().casefold()
+def _normalize_trigger_source(
+    value: object, *, waveform: str, allow_external: bool = False
+) -> str:
+    normalized = value.strip().casefold() if isinstance(value, str) else ""
+    if allow_external and normalized == "external":
+        return normalized
     if normalized not in {"immediate", "bus", "timer"}:
-        raise WaveformParameterError(
-            f"{waveform} trigger source must be immediate, bus, or timer."
+        choices = (
+            "immediate, bus, timer, or external" if allow_external else "immediate, bus, or timer"
         )
+        raise WaveformParameterError(f"{waveform} trigger source must be {choices}.")
     return normalized
 
 
@@ -3750,8 +3890,11 @@ def _prepare_trigger(
     *,
     waveform: str,
     minimum_timer_s: float | None = None,
+    allow_external: bool = False,
 ) -> tuple[str, float | None]:
-    source = _normalize_trigger_source(trigger_source, waveform=waveform)
+    source = _normalize_trigger_source(
+        trigger_source, waveform=waveform, allow_external=allow_external
+    )
     if source != "timer":
         if trigger_timer_s is not None:
             raise WaveformParameterError(
@@ -3776,6 +3919,44 @@ def _prepare_trigger(
             f"{waveform} trigger timer is too short for the configured operation."
         )
     return source, timer
+
+
+def _prepare_live_sweep_source(
+    trigger_source: object, *, waveform: str
+) -> tuple[str, str | None]:
+    source = _normalize_trigger_source(trigger_source, waveform=waveform, allow_external=True)
+    feature = "External trigger for ordinary sweeps" if source == "external" else None
+    return source, feature
+
+
+def _prepare_sweep_trigger(
+    trigger_source: object,
+    trigger_timer_s: object,
+    trigger_slope: object,
+    *,
+    waveform: str,
+    minimum_timer_s: float,
+) -> tuple[str, float | None, str | None]:
+    source, timer = _prepare_trigger(
+        trigger_source,
+        trigger_timer_s,
+        waveform=waveform,
+        minimum_timer_s=minimum_timer_s,
+        allow_external=True,
+    )
+    if source != "external":
+        if trigger_slope is not None:
+            raise WaveformParameterError(
+                f"{waveform} trigger slope is only valid for external trigger source."
+            )
+        return source, timer, None
+
+    if trigger_slope is None:
+        trigger_slope = "positive"
+    slope = trigger_slope.strip().casefold() if isinstance(trigger_slope, str) else ""
+    if slope not in {"positive", "negative"}:
+        raise WaveformParameterError(f"{waveform} trigger slope must be positive or negative.")
+    return source, timer, slope
 
 
 def _build_trigger_commands(
@@ -3809,6 +3990,7 @@ def _prepare_square_sweep(
     phase_deg: object,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     *,
     capabilities: WavegenCapabilities,
 ) -> tuple[
@@ -3825,6 +4007,7 @@ def _prepare_square_sweep(
     float,
     str,
     float | None,
+    str | None,
     tuple[str, ...],
 ]:
     start_frequency = _normalize_finite_number(
@@ -3890,11 +4073,14 @@ def _prepare_square_sweep(
         return_time_s,
         waveform="Square sweep",
     )
-    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
-        trigger_source,
-        trigger_timer_s,
-        waveform="Square sweep",
-        minimum_timer_s=sweep_time + hold_time + return_time,
+    normalized_trigger_source, normalized_trigger_timer, normalized_trigger_slope = (
+        _prepare_sweep_trigger(
+            trigger_source,
+            trigger_timer_s,
+            trigger_slope,
+            waveform="Square sweep",
+            minimum_timer_s=sweep_time + hold_time + return_time,
+        )
     )
     commands = (
         base_commands[0],
@@ -3908,14 +4094,15 @@ def _prepare_square_sweep(
         "SOURce1:SUM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
-        start_frequency,
-        stop_frequency,
-        spacing_command,
-        sweep_time,
-        hold_time,
-        return_time,
-        normalized_trigger_source,
-        normalized_trigger_timer,
+            start_frequency,
+            stop_frequency,
+            spacing_command,
+            sweep_time,
+            hold_time,
+            return_time,
+            normalized_trigger_source,
+            normalized_trigger_timer,
+            normalized_trigger_slope,
         ),
     )
     return (
@@ -3932,6 +4119,7 @@ def _prepare_square_sweep(
         duty_cycle,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     )
 
@@ -3950,6 +4138,7 @@ def _prepare_ramp_sweep(
     phase_deg: object,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
 ) -> tuple[
     float,
     float,
@@ -3964,6 +4153,7 @@ def _prepare_ramp_sweep(
     float,
     str,
     float | None,
+    str | None,
     tuple[str, ...],
 ]:
     start_frequency = _normalize_finite_number(
@@ -4021,11 +4211,14 @@ def _prepare_ramp_sweep(
         return_time_s,
         waveform="Ramp sweep",
     )
-    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
-        trigger_source,
-        trigger_timer_s,
-        waveform="Ramp sweep",
-        minimum_timer_s=sweep_time + hold_time + return_time,
+    normalized_trigger_source, normalized_trigger_timer, normalized_trigger_slope = (
+        _prepare_sweep_trigger(
+            trigger_source,
+            trigger_timer_s,
+            trigger_slope,
+            waveform="Ramp sweep",
+            minimum_timer_s=sweep_time + hold_time + return_time,
+        )
     )
     commands = (
         base_commands[0],
@@ -4039,14 +4232,15 @@ def _prepare_ramp_sweep(
         "SOURce1:SUM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
-        start_frequency,
-        stop_frequency,
-        spacing_command,
-        sweep_time,
-        hold_time,
-        return_time,
-        normalized_trigger_source,
-        normalized_trigger_timer,
+            start_frequency,
+            stop_frequency,
+            spacing_command,
+            sweep_time,
+            hold_time,
+            return_time,
+            normalized_trigger_source,
+            normalized_trigger_timer,
+            normalized_trigger_slope,
         ),
     )
     return (
@@ -4063,6 +4257,7 @@ def _prepare_ramp_sweep(
         symmetry,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     )
 
@@ -4080,6 +4275,7 @@ def _prepare_triangle_sweep(
     phase_deg: object,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
 ) -> tuple[
     float,
     float,
@@ -4093,6 +4289,7 @@ def _prepare_triangle_sweep(
     float,
     str,
     float | None,
+    str | None,
     tuple[str, ...],
 ]:
     start_frequency = _normalize_finite_number(
@@ -4148,11 +4345,14 @@ def _prepare_triangle_sweep(
         return_time_s,
         waveform="Triangle sweep",
     )
-    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
-        trigger_source,
-        trigger_timer_s,
-        waveform="Triangle sweep",
-        minimum_timer_s=sweep_time + hold_time + return_time,
+    normalized_trigger_source, normalized_trigger_timer, normalized_trigger_slope = (
+        _prepare_sweep_trigger(
+            trigger_source,
+            trigger_timer_s,
+            trigger_slope,
+            waveform="Triangle sweep",
+            minimum_timer_s=sweep_time + hold_time + return_time,
+        )
     )
     commands = (
         base_commands[0],
@@ -4166,14 +4366,15 @@ def _prepare_triangle_sweep(
         "SOURce1:SUM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
-        start_frequency,
-        stop_frequency,
-        spacing_command,
-        sweep_time,
-        hold_time,
-        return_time,
-        normalized_trigger_source,
-        normalized_trigger_timer,
+            start_frequency,
+            stop_frequency,
+            spacing_command,
+            sweep_time,
+            hold_time,
+            return_time,
+            normalized_trigger_source,
+            normalized_trigger_timer,
+            normalized_trigger_slope,
         ),
     )
     return (
@@ -4189,6 +4390,7 @@ def _prepare_triangle_sweep(
         phase,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     )
 
@@ -4206,6 +4408,7 @@ def _prepare_sine_sweep(
     phase_deg: object,
     trigger_source: object = "immediate",
     trigger_timer_s: object = None,
+    trigger_slope: object = None,
     *,
     capabilities: WavegenCapabilities,
 ) -> tuple[
@@ -4221,6 +4424,7 @@ def _prepare_sine_sweep(
     float,
     str,
     float | None,
+    str | None,
     tuple[str, ...],
 ]:
     (
@@ -4271,11 +4475,14 @@ def _prepare_sine_sweep(
         return_time_s,
         waveform="Sine sweep",
     )
-    normalized_trigger_source, normalized_trigger_timer = _prepare_trigger(
-        trigger_source,
-        trigger_timer_s,
-        waveform="Sine sweep",
-        minimum_timer_s=sweep_time + hold_time + return_time,
+    normalized_trigger_source, normalized_trigger_timer, normalized_trigger_slope = (
+        _prepare_sweep_trigger(
+            trigger_source,
+            trigger_timer_s,
+            trigger_slope,
+            waveform="Sine sweep",
+            minimum_timer_s=sweep_time + hold_time + return_time,
+        )
     )
     commands = (
         base_commands[0],
@@ -4289,14 +4496,15 @@ def _prepare_sine_sweep(
         "SOURce1:SUM:STATe OFF",
         *base_commands[1:],
         *_build_sweep_tail(
-        start_frequency,
-        stop_frequency,
-        spacing_command,
-        sweep_time,
-        hold_time,
-        return_time,
-        normalized_trigger_source,
-        normalized_trigger_timer,
+            start_frequency,
+            stop_frequency,
+            spacing_command,
+            sweep_time,
+            hold_time,
+            return_time,
+            normalized_trigger_source,
+            normalized_trigger_timer,
+            normalized_trigger_slope,
         ),
     )
     return (
@@ -4312,6 +4520,7 @@ def _prepare_sine_sweep(
         phase,
         normalized_trigger_source,
         normalized_trigger_timer,
+        normalized_trigger_slope,
         commands,
     )
 
@@ -7200,14 +7409,221 @@ def send_bus_trigger(
     )
 
 
+_SYNC_OFF = "OUTPut:SYNC OFF"
+_SYNC_STATE_QUERY = "OUTPut:SYNC?"
+_SYNC_STATE_REPLIES = {"0": "off", "1": "on", "OFF": "off", "ON": "on"}
+_SYNC_MODES = {"normal": "NORMal", "carrier": "CARRier"}
+_SYNC_POLARITIES = {"normal": "NORMal", "inverted": "INVerted"}
+_SYNC_MODE_REPLIES = {"NORM": "normal", "NORMAL": "normal", "CARR": "carrier", "CARRIER": "carrier"}
+_SYNC_POLARITY_REPLIES = {"NORM": "normal", "NORMAL": "normal", "INV": "inverted", "INVERTED": "inverted"}
+
+
+def _sync_configuration_commands(config: SyncConfig) -> tuple[str, ...]:
+    if not isinstance(config, SyncConfig):
+        raise WaveformParameterError("Sync configuration must be a SyncConfig.")
+    return (
+        _SYNC_OFF,
+        f"OUTPut:SYNC:SOURce CH{config.source_channel}",
+        f"OUTPut{config.source_channel}:SYNC:MODE {_SYNC_MODES[config.mode]}",
+        f"OUTPut{config.source_channel}:SYNC:POLarity {_SYNC_POLARITIES[config.polarity]}",
+        _SYNC_OFF,
+    )
+
+
+def _write_sync(session: VisaSession, command: str) -> None:
+    try:
+        session.write(command)
+    except Exception as exc:
+        raise VisaWriteError(f"Could not send {command}.") from exc
+
+
+def _verify_sync_reply(
+    session: VisaSession, query: str, replies: dict[str, str], expected: str
+) -> None:
+    try:
+        response = session.query(query)
+        actual = replies[response.strip().upper()]
+    except Exception as exc:
+        raise WaveformVerificationError(f"Failed to read or interpret {query}.") from exc
+    if actual != expected:
+        raise WaveformVerificationError(f"{query} returned {actual}; expected {expected}.")
+
+
+def _set_sync_off(session: VisaSession) -> None:
+    _write_sync(session, _SYNC_OFF)
+    _verify_sync_reply(session, _SYNC_STATE_QUERY, _SYNC_STATE_REPLIES, "off")
+
+
+def _sync_off_failure(session: VisaSession) -> str | None:
+    try:
+        _set_sync_off(session)
+    except (WavegenError, KeyboardInterrupt) as error:
+        return f"Sync OFF was not confirmed. Sync may remain ON. {error}".strip()
+    return None
+
+
+def _attempt_sync_off(session: VisaSession, error: WavegenError | KeyboardInterrupt) -> bool:
+    failure = _sync_off_failure(session)
+    if failure:
+        if isinstance(error, WavegenError):
+            error.attach_cleanup_errors(error.cleanup_errors + (failure,))
+        else:
+            error.args = (f"{error} {failure}".strip(),)
+    return failure is None
+
+
+def _require_sync_validation(
+    support_policy_mode: str, resource_manager_factory: ResourceManagerFactory | None
+) -> None:
+    if (
+        support_policy_mode == SUPPORT_POLICY_MODE_PRODUCT
+        and not isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
+    ):
+        raise UnsupportedInstrumentError(
+            "Sync configuration and ON are outside Product Live feature scope."
+        )
+
+
+def dry_run_sync(model: str, config: SyncConfig) -> SyncDryRunResult:
+    """Plan Sync configuration without opening a VISA session."""
+
+    commands = _sync_configuration_commands(config)
+    model_info, capabilities = _require_hardware_free_model(model, "Sync")
+    _validate_channel(config.source_channel, capabilities, model_info.canonical_model)
+    return SyncDryRunResult(
+        model=model_info.canonical_model,
+        canonical_model_id=model_info.model_id,
+        source_channel=config.source_channel,
+        sync_mode=config.mode,
+        polarity=config.polarity,
+        commands=commands,
+    )
+
+
+def configure_sync(
+    resource: str,
+    config: SyncConfig,
+    backend: str | None = None,
+    *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> SyncConfigurationResult:
+    """Configure the Sync source, mode and polarity with Sync verified OFF."""
+
+    commands = _sync_configuration_commands(config)
+    _require_sync_validation(support_policy_mode, resource_manager_factory)
+    source = f"CH{config.source_channel}"
+    channel_sync = f"OUTPut{config.source_channel}:SYNC"
+
+    def apply(session: VisaSession, context: IdentificationResult) -> None:
+        capabilities = _capabilities_for_identity(context.identity)
+        _validate_channel(config.source_channel, capabilities, context.identity.model)
+        _check_independent_channel_guard(session, capabilities, context)
+        try:
+            _set_sync_off(session)
+            for command in commands[1:]:
+                _write_sync(session, command)
+            _verify_sync_reply(session, _SYNC_STATE_QUERY, _SYNC_STATE_REPLIES, "off")
+            _verify_sync_reply(
+                session, "OUTPut:SYNC:SOURce?", {"CH1": "CH1", "CH2": "CH2"}, source
+            )
+            _verify_sync_reply(session, f"{channel_sync}:MODE?", _SYNC_MODE_REPLIES, config.mode)
+            _verify_sync_reply(
+                session, f"{channel_sync}:POLarity?", _SYNC_POLARITY_REPLIES, config.polarity
+            )
+        except (WavegenError, KeyboardInterrupt) as error:
+            _attempt_sync_off(session, error)
+            raise
+
+    context, _ = _run_on_supported_instrument(
+        resource, backend, apply,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+        resource_manager_factory=resource_manager_factory,
+    )
+    return SyncConfigurationResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        sync_state="off",
+        commands=commands,
+        readback_verified=True,
+        source_channel=config.source_channel,
+        sync_mode=config.mode,
+        polarity=config.polarity,
+    )
+
+
+def set_sync_output(
+    resource: str,
+    state: str,
+    backend: str | None = None,
+    *,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> SyncOutputResult:
+    """Set and verify the instrument-wide Sync state without changing main outputs."""
+
+    if not isinstance(state, str) or state not in ("on", "off"):
+        raise WaveformParameterError("Sync state must be on or off.")
+    if state == "on":
+        _require_sync_validation(support_policy_mode, resource_manager_factory)
+    command = f"OUTPut:SYNC {state.upper()}"
+
+    def apply(session: VisaSession, context: IdentificationResult) -> None:
+        if state == "on":
+            capabilities = _capabilities_for_identity(context.identity)
+            _check_independent_channel_guard(session, capabilities, context)
+        try:
+            _write_sync(session, command)
+            _verify_sync_reply(session, _SYNC_STATE_QUERY, _SYNC_STATE_REPLIES, state)
+        except (WavegenError, KeyboardInterrupt) as error:
+            _attempt_sync_off(session, error)
+            raise
+
+    context, _ = _run_on_supported_instrument(
+        resource, backend, apply,
+        sync_enabled_after_operation=state == "on",
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+        resource_manager_factory=resource_manager_factory,
+    )
+    return SyncOutputResult(
+        resource=context.resource,
+        backend=context.backend,
+        transport=context.transport,
+        identity=context.identity,
+        sync_state=state,
+        commands=(command,),
+        readback_verified=True,
+    )
+
+
+class FullValidationOutputOnError(WaveformVerificationError):
+    """A main output was read back ON at a Full validation reset boundary."""
+
+    def __init__(self, channel: int, *, after_reset: bool) -> None:
+        phase = "after" if after_reset else "before"
+        super().__init__(
+            f"CH{channel} output was ON {phase} Full validation reset.",
+            output_state="on",
+        )
+        self.channel = channel
+        self.after_reset = after_reset
+
+
 def reset_for_live_full_validation(
     resource: str,
     backend: str | None = None,
     *,
     expected_model_id: str,
     resource_manager_factory: ResourceManagerFactory | None = None,
+    record_sync_off: Callable[[str, bool], None] | None = None,
 ) -> None:
-    """Reset one explicitly selected instrument only for Real Live Full cases."""
+    """Reset one explicitly selected instrument and optionally record Sync OFF checks."""
 
     if not isinstance(expected_model_id, str) or not expected_model_id.strip():
         raise WaveformParameterError("Full validation reset requires an expected model.")
@@ -7217,19 +7633,40 @@ def reset_for_live_full_validation(
         context: IdentificationResult,
     ) -> None:
         channel_count = _capabilities_for_identity(context.identity).channel_count
-        for channel in range(1, channel_count + 1):
-            if _parse_status_output(session.query(f"OUTPut{channel}?")) != "off":
-                raise WaveformVerificationError(
-                    "All instrument outputs must be OFF before Full validation reset."
-                )
-        session.write("*RST")
-        if str(session.query("*OPC?")).strip() != "1":
-            raise WaveformVerificationError("Full validation reset did not complete.")
-        for channel in range(1, channel_count + 1):
-            if _parse_status_output(session.query(f"OUTPut{channel}?")) != "off":
-                raise WaveformVerificationError(
-                    "An instrument output was not OFF after Full validation reset."
-                )
+
+        def verify_main_outputs_off(*, after_reset: bool) -> None:
+            for channel in range(1, channel_count + 1):
+                if _parse_status_output(session.query(f"OUTPut{channel}?")) == "on":
+                    raise FullValidationOutputOnError(channel, after_reset=after_reset)
+
+        def verify_sync_off(stage: str) -> None:
+            confirmed = False
+            try:
+                _set_sync_off(session)
+                confirmed = True
+            finally:
+                if record_sync_off is not None:
+                    record_sync_off(stage, confirmed)
+
+        verify_main_outputs_off(after_reset=False)
+        try:
+            verify_sync_off("before_reset")
+            session.write("*RST")
+            if str(session.query("*OPC?")).strip() != "1":
+                raise WaveformVerificationError("Full validation reset did not complete.")
+            verify_sync_off("after_reset")
+        except (Exception, KeyboardInterrupt) as exc:
+            if isinstance(exc, (WavegenError, KeyboardInterrupt)):
+                error = exc
+            else:
+                error = WaveformVerificationError("Failed to complete the Full validation reset.")
+            confirmed = _attempt_sync_off(session, error)
+            if record_sync_off is not None:
+                record_sync_off("failure_cleanup", confirmed)
+            if error is exc:
+                raise
+            raise error from exc
+        verify_main_outputs_off(after_reset=True)
 
     _run_on_supported_instrument(
         resource,
@@ -7761,10 +8198,21 @@ def _run_on_supported_instrument(
     operation: Callable[[VisaSession, IdentificationResult], object],
     *,
     output_state_after_operation: str | None = None,
+    sync_enabled_after_operation: bool = False,
     resource_manager_factory: ResourceManagerFactory | None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
+    validation_only_feature: str | None = None,
 ) -> tuple[IdentificationResult, object]:
+    factory = resource_manager_factory or create_resource_manager
+    live_feature_error = None
+    if validation_only_feature is not None and support_policy_mode != SUPPORT_POLICY_MODE_VALIDATION:
+        live_feature_error = UnsupportedInstrumentError(
+            f"{validation_only_feature} is outside Product Live feature scope."
+        )
+        if not isinstance(factory, SimulatedResourceManagerFactory):
+            raise live_feature_error
+
     backend_selection = normalize_backend(backend)
     resource_name = normalize_resource(resource)
     try:
@@ -7773,7 +8221,6 @@ def _run_on_supported_instrument(
         raise exc.attach_context(backend=backend_selection.name)
     validate_backend_transport(backend_selection, transport)
 
-    factory = resource_manager_factory or create_resource_manager
     try:
         manager = factory(backend_selection.pyvisa_library)
     except Exception as exc:
@@ -7782,6 +8229,11 @@ def _run_on_supported_instrument(
             backend=backend_selection.name,
             transport=transport,
         ) from exc
+
+    # A simulator factory qualifies only when it returns a simulator manager.
+    if live_feature_error is not None and not isinstance(manager, SimulatedResourceManager):
+        live_feature_error.attach_context(backend=backend_selection.name, transport=transport)
+        raise live_feature_error.attach_cleanup_errors(_close_resource_manager(manager))
 
     session: VisaSession | None = None
     identity: InstrumentIdentity | None = None
@@ -7850,15 +8302,22 @@ def _run_on_supported_instrument(
                         )
                         primary_cause = exc
     finally:
-        cleanup_errors = _close_visa_resources(
-            session,
-            manager,
-            backend=backend_selection.name,
-            transport=transport,
-        )
+        recover_sync_off = sync_enabled_after_operation and operation_completed
+        try:
+            cleanup_errors = _close_visa_resources(
+                session,
+                manager,
+                backend=backend_selection.name,
+                transport=transport,
+                recover_sync_off=recover_sync_off,
+            )
+        except KeyboardInterrupt as error:
+            if recover_sync_off and session is not None:
+                _attempt_sync_off(session, error)
+            raise
 
     if primary_error is not None:
-        primary_error.attach_cleanup_errors(cleanup_errors)
+        primary_error.attach_cleanup_errors(primary_error.cleanup_errors + cleanup_errors)
         if primary_cause is not None:
             raise primary_error from primary_cause
         raise primary_error
@@ -8323,6 +8782,7 @@ def _write_to_supported_instrument(
     channel: int = 1,
     independent_channel_guard: bool = False,
     verify_readback: bool = False,
+    validation_only_feature: str | None = None,
 ) -> IdentificationResult:
     def write_commands(
         session: VisaSession,
@@ -8353,6 +8813,7 @@ def _write_to_supported_instrument(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=validation_only_feature,
     )
     return context
 
@@ -8371,6 +8832,7 @@ def _prepare_and_write_to_supported_instrument(
     channel: int = 1,
     independent_channel_guard: bool = False,
     verify_readback: bool = False,
+    validation_only_feature: str | None = None,
 ) -> tuple[IdentificationResult, tuple[object, ...]]:
     preflight = prepare_configuration(
         _preflight_capabilities_for_configuration(resource_manager_factory)
@@ -8407,6 +8869,7 @@ def _prepare_and_write_to_supported_instrument(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=validation_only_feature,
     )
     if not isinstance(values, tuple):  # pragma: no cover - defensive invariant
         raise RuntimeError("configuration completed without prepared values")
@@ -8609,8 +9072,10 @@ def _close_visa_resources(
     backend: str,
     transport: str,
     close_manager: bool = True,
+    recover_sync_off: bool = False,
 ) -> tuple[str, ...]:
     errors: list[str] = []
+    sync_recovery: str | None = None
     if session is not None:
         if (
             backend == SYSTEM_BACKEND
@@ -8621,12 +9086,18 @@ def _close_visa_resources(
                 session.control_ren(RENLineOperation.address_gtl)
             except Exception:
                 errors.append("return to local failed")
+                if recover_sync_off:
+                    sync_recovery = _sync_off_failure(session) or "Sync OFF was confirmed"
         try:
             session.close()
         except Exception:
             errors.append("session close failed")
+            if recover_sync_off and sync_recovery is None:
+                sync_recovery = _sync_off_failure(session) or "Sync OFF was confirmed"
     if close_manager:
         errors.extend(_close_resource_manager(manager))
+    if errors and recover_sync_off:
+        errors.append(sync_recovery or "Sync OFF was not confirmed. Sync may remain ON")
     return tuple(errors)
 
 

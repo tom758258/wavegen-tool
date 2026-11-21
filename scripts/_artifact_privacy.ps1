@@ -397,7 +397,7 @@ function Publish-ValidationArtifacts {
             -MinimalArtifacts:(-not $DebugArtifacts) -RunRoot $runPath `
             -PrivateRoot $privatePath -ShareableRoot $shareablePath -RepoRoot $RepoRoot `
             -Resource $Resource -ExtraSensitiveValues $SensitiveValues
-        if (-not $DebugArtifacts) { [IO.Directory]::Delete($privatePath) }
+        if (-not $DebugArtifacts) { [IO.Directory]::Delete($privatePath, $true) }
         return $true
     } catch {
         $Report.status = 'FAIL'

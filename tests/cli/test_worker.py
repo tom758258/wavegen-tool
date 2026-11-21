@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import http.client
 import json
 import threading
@@ -1132,6 +1133,48 @@ def test_worker_cooperative_stop_emits_lifecycle_events(capsys, monkeypatch):
     assert event_names.count("job_finished") == 1
 
 
+@pytest.mark.parametrize("disconnect", [False, True])
+def test_idle_worker_waits_for_http_stop_acknowledgment(monkeypatch, disconnect):
+    runtime = WorkerRuntime(_worker_config())
+    sending_response = threading.Event()
+    release_response = threading.Event()
+    send_json = worker_module._WorkerRequestHandler._send_json
+
+    def delay_stop_response(handler, status, payload):
+        if handler.path == "/stop" and status == 202:
+            assert handler.connection.gettimeout() is not None
+            sending_response.set()
+            assert release_response.wait(timeout=2.0)
+            if disconnect:
+                raise BrokenPipeError("client disconnected during stop acknowledgement")
+        send_json(handler, status, payload)
+
+    monkeypatch.setattr(worker_module._WorkerRequestHandler, "_send_json", delay_stop_response)
+    runtime.start()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            response = executor.submit(_request, runtime, "POST", "/stop", {})
+            try:
+                assert sending_response.wait(timeout=1.0)
+                assert not runtime.wait(timeout=0.3)
+                assert _request(runtime, "GET", "/status")[1]["status"] == "stopping"
+                code, rejected = _request(runtime, "POST", "/command", _payload("status"))
+                assert (code, rejected["reason"]) == (409, "stopping")
+            finally:
+                release_response.set()
+            if disconnect:
+                with pytest.raises(http.client.RemoteDisconnected):
+                    response.result(timeout=1.0)
+            else:
+                assert response.result(timeout=1.0) == (
+                    202, {"schema_version": 3, "run_id": runtime.run_id, "status": "accepted", "error": None}
+                )
+            assert runtime.wait(timeout=2.0)
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
 def test_worker_serialization_keeps_core_channel_field_in_worker_results():
     result = worker_module._json_safe(
         cli_module.dry_run_sine(
@@ -1260,26 +1303,188 @@ def test_worker_independent_readback_preserves_simulated_sweep():
     runtime = WorkerRuntime(_worker_config())
     runtime.start()
     try:
+        settings = {
+            "start_frequency_hz": 1000, "stop_frequency_hz": 2000,
+            "spacing": "linear", "sweep_time_s": 1, "amplitude_vpp": 0.1,
+            "trigger_source": "external", "trigger_slope": " Negative ",
+            "verify_readback": True,
+        }
         sequence = [
-            ("configure-sine-sweep", {
-                "start_frequency_hz": 1000, "stop_frequency_hz": 2000,
-                "spacing": "linear", "sweep_time_s": 1, "amplitude_vpp": 0.1,
-            }),
-            ("readback-advanced", {}),
+            ("configure-sine-sweep", settings, "dry_run"),
+            ("configure-sine-sweep", settings, "simulate"),
+            ("readback-advanced", {}, "simulate"),
         ]
-        for index, (command, arguments) in enumerate(sequence):
+        for index, (command, arguments, mode) in enumerate(sequence):
             code, accepted = _request(
                 runtime, "POST", "/command",
-                _payload(command, arguments, job_id=f"readback-{index}"),
+                _payload(command, arguments, mode=mode, job_id=f"readback-{index}"),
             )
             assert code == 202
-            finished = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")
+            result = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")["result"]
             if command == "readback-advanced":
-                result = finished["result"]
                 assert result["advanced_mode"] == "SWEEP"
                 assert result["settings"]["start_frequency_hz"] == 1000
                 assert result["settings"]["stop_frequency_hz"] == 2000
+                assert result["settings"]["trigger_slope"] == "negative"
+                assert "readback_verified" not in result
+            elif mode == "dry_run":
+                assert result["executed"] is False
+                assert result["trigger_slope"] == "negative"
+            else:
+                assert result["trigger_slope"] == "negative"
+                assert result["readback_verified"] is True
         assert runtime.simulator_state.ch1.output_enabled is False
     finally:
         runtime.request_stop()
         assert runtime.wait(timeout=2.0)
+
+
+def test_worker_live_cannot_execute_external_sweep_with_write_permission(monkeypatch):
+    import wavegen_tool_core.visa as visa
+
+    def unexpected_visa_io(_library):
+        pytest.fail("External Sweep must be rejected before VISA I/O")
+
+    monkeypatch.setattr(visa, "create_resource_manager", unexpected_visa_io)
+    runtime = WorkerRuntime(_worker_config("live"))
+    job = _admitted_job(
+        runtime, "configure-square-sweep",
+        {"start_frequency_hz": 2, "stop_frequency_hz": 8, "spacing": "linear",
+         "sweep_time_s": 1, "amplitude_vpp": 0.1, "trigger_source": "external"},
+        mode="live",
+        expected_model_id=MODEL_ID,
+    )
+
+    with pytest.raises(WavegenError, match="outside Product Live feature scope") as error:
+        runtime._execute_command(job)
+    assert error.value.code == "unsupported_instrument"
+
+
+def test_worker_arbitrary_http_workflow_validates_files_in_accepted_jobs(tmp_path):
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        csv_file = tmp_path / "wave.csv"
+        arguments = {"name": "WAVE", "path": str(csv_file), "channel": 2}
+        model = "keysight-33512b"
+
+        def submit(command, args, mode="simulate", state="succeeded"):
+            code, accepted = _request(
+                runtime, "POST", "/command", _payload(command, args, model_id=model, mode=mode),
+            )
+            assert code == 202
+            assert accepted["schema_version"] == 3 and accepted["status"] == "accepted"
+            return _wait_for_job(runtime, accepted["worker_job_id"], state)
+
+        missing = submit("upload-arbitrary", arguments, state="failed")
+        assert missing["error"]["category"] == "execution"
+        assert str(csv_file) not in json.dumps(missing)
+        csv_file.write_text("0\n" * 8, encoding="utf-8")
+        planned = submit("upload-arbitrary", arguments, mode="dry_run")["result"]
+        assert planned["executed"] is False and planned["sample_count"] == 8
+        assert submit("list-arbitrary-memory", {"channel": 2})["result"]["names"] == [
+            r"INT:\BUILTIN\EXP_RISE.ARB"
+        ]
+        uploaded = submit("upload-arbitrary", arguments)["result"]
+        assert uploaded["executed"] is True and uploaded["sample_count"] == 8
+        assert str(csv_file) not in json.dumps(uploaded)
+        document = {
+            "version": 1, "name": "SEQ", "trigger_source": "bus", "sample_rate_hz": 1e6,
+            "amplitude_vpp": 1, "steps": [{"waveform": "WAVE", "play_control": "onceWaitTrig"}],
+        }
+        result = submit("configure-arbitrary-sequence", {"document": document, "channel": 2})["result"]
+        assert result["name"] == "SEQ" and result["output_state"] == "off"
+        assert submit("status", {"channel": 2})["result"]["sample_rate_hz"] == 1e6
+        submit("output", {"enabled": True, "channel": 2})
+        submit("trigger", {})
+        assert runtime.simulator_state.ch2.arbitrary_bus_triggers == 1
+        submit("clear-arbitrary-memory", {"channel": 2, "confirm_clear": True})
+        assert submit("list-arbitrary-memory", {"channel": 2})["result"]["names"] == [
+            r"INT:\BUILTIN\EXP_RISE.ARB"
+        ]
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
+@pytest.mark.parametrize(("command", "arguments", "state_field", "expected"), [
+    (
+        "configure-sine",
+        {**_sine_arguments(), "am": {
+            "modulation_frequency_hz": 100, "depth_percent": 50, "am_type": "dssc",
+        }, "verify_readback": True},
+        "am_type", "dssc",
+    ),
+    (
+        "configure-sine",
+        {**_sine_arguments(), "burst": {
+            "mode": "counted", "count": 3, "trigger_source": "external", "trigger_slope": "negative",
+        }, "verify_readback": True},
+        "burst_trigger_slope", "negative",
+    ),
+    (
+        "configure-square",
+        {**_sine_arguments(), "burst": {"mode": "gated", "polarity": "inverted"}},
+        "burst_gate_polarity", "inverted",
+    ),
+    (
+        "configure-ramp-sweep",
+        {"start_frequency_hz": 2, "stop_frequency_hz": 8, "spacing": "linear",
+         "sweep_time_s": 1, "amplitude_vpp": 1, "trigger_source": "timer", "trigger_timer_s": 2},
+        "trigger_timer_s", 2.0,
+    ),
+    (
+        "configure-triangle-list-sweep",
+        {"frequencies_hz": [2, 5, 8], "amplitude_vpp": 1, "trigger_source": "bus",
+         "verify_readback": True},
+        "list_frequencies_hz", (2.0, 5.0, 8.0),
+    ),
+    ("configure-output", {"polarity": "inverted", "autorange_enabled": False},
+     "output_polarity", "inverted"),
+])
+def test_worker_parity_forwards_advanced_operations(command, arguments, state_field, expected):
+    runtime = WorkerRuntime(_worker_config())
+    runtime._execute_command(_admitted_job(runtime, command, arguments))
+    assert getattr(runtime.simulator_state.ch1, state_field) == expected
+    assert runtime.simulator_state.ch1.output_enabled is False
+
+
+def test_worker_sync_dispatch_uses_shared_core_for_plan_and_simulator():
+    runtime = WorkerRuntime(_worker_config())
+    arguments = {"source_channel": 1, "mode": "normal", "polarity": "inverted"}
+    runtime.start()
+    try:
+        def submit(command, args, mode="simulate"):
+            code, response = _request(
+                runtime, "POST", "/command", _payload(command, args, mode=mode),
+            )
+            assert code == 202
+            return _wait_for_job(runtime, response["worker_job_id"], "succeeded")["result"]
+
+        plan = submit("configure-sync", arguments, mode="dry_run")
+        assert plan["executed"] is False
+        assert runtime.simulator_state is None
+        configured = submit("configure-sync", arguments)
+        assert configured["sync_state"] == "off"
+        assert configured["commands"] == plan["commands"]
+        for state in ("on", "off"):
+            result = submit("sync-output", {"state": state})
+            assert result["sync_state"] == state and result["readback_verified"]
+            assert runtime.simulator_state.sync_enabled is (state == "on")
+            assert runtime.simulator_state.ch1.output_enabled is False
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
+def test_worker_parity_dry_run_plans_list_trigger():
+    runtime = WorkerRuntime(_worker_config())
+    job = _admitted_job(
+        runtime, "configure-square-list-sweep",
+        {"frequencies_hz": [2, 5, 8], "amplitude_vpp": 1, "trigger_source": "bus"},
+        mode="dry_run",
+    )
+    result = runtime._execute_command(job)
+    assert result.executed is False
+    assert result.trigger_source == "bus"
+    assert runtime.simulator_state is None

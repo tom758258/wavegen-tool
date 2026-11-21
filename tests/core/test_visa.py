@@ -26,7 +26,9 @@ from wavegen_tool_core.errors import (
 from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_VALIDATION
 from wavegen_tool_core.simulator import (
     SIMULATED_33521B_RESOURCE,
+    Simulated33521BState,
     SimulatedResourceManager,
+    SimulatedResourceManagerFactory,
 )
 from wavegen_tool_core.visa import (
     AMConfig,
@@ -40,6 +42,7 @@ from wavegen_tool_core.visa import (
     PMConfig,
     PWMConfig,
     SumConfig,
+    SyncConfig,
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
@@ -51,6 +54,7 @@ from wavegen_tool_core.visa import (
     configure_ramp_sweep,
     configure_sine,
     configure_output,
+    configure_sync,
     configure_sine_list_sweep,
     configure_sine_sweep,
     configure_square,
@@ -61,6 +65,7 @@ from wavegen_tool_core.visa import (
     dry_run_dc,
     dry_run_noise,
     dry_run_output,
+    dry_run_sync,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
@@ -84,6 +89,7 @@ from wavegen_tool_core.visa import (
     resolve_voltage_inputs,
     send_bus_trigger,
     set_output,
+    set_sync_output,
 )
 
 
@@ -2228,6 +2234,7 @@ def test_sine_sweep_core_and_dry_run_share_ordered_write_plan(
     assert result.hold_time_s == 3.0
     assert result.return_time_s == 4.0
     assert result.trigger_source == "immediate"
+    assert result.trigger_slope is None
     assert result.amplitude_vpp == 0.2
     assert result.offset_v == 0.1
     assert result.phase_deg == 90.0
@@ -2279,17 +2286,41 @@ def test_sine_sweep_bus_and_timer_dry_run_plans() -> None:
 
     assert bus.trigger_source == "bus"
     assert bus.trigger_timer_s is None
+    assert bus.trigger_slope is None
     assert bus.commands[-2:] == (
         "TRIGger1:SOURce BUS",
         "SOURce1:FREQuency:MODE SWEep",
     )
     assert timer.trigger_source == "timer"
     assert timer.trigger_timer_s == 3.0
+    assert timer.trigger_slope is None
     assert timer.commands[-3:] == (
         "TRIGger1:TIMer 3",
         "TRIGger1:SOURce TIMer",
         "SOURce1:FREQuency:MODE SWEep",
     )
+
+
+@pytest.mark.parametrize(
+    ("trigger_options", "message"),
+    [
+        ({"trigger_slope": "positive"}, "only valid for external"),
+        ({"trigger_source": "bus", "trigger_slope": "negative"}, "only valid for external"),
+        (
+            {"trigger_source": "timer", "trigger_timer_s": 1, "trigger_slope": "positive"},
+            "only valid for external",
+        ),
+        ({"trigger_source": "external", "trigger_timer_s": 1}, "timer must be omitted"),
+        ({"trigger_source": "external", "trigger_slope": "rising"}, "positive or negative"),
+        ({"trigger_source": "external", "trigger_slope": True}, "positive or negative"),
+        ({"trigger_source": "unknown"}, "trigger source"),
+    ],
+)
+def test_sweep_rejects_invalid_external_trigger_options(trigger_options, message):
+    with pytest.raises(WaveformParameterError, match=message):
+        dry_run_sine_sweep(
+            "keysight-33521b", 2, 8, "linear", 1, 0.1, **trigger_options
+        )
 
 
 @pytest.mark.parametrize(
@@ -2614,8 +2645,8 @@ def test_33521b_channel_two_sweep_rejects_before_writes():
     assert session.writes == []
 
 
-@pytest.mark.parametrize("channel", [1, 2])
-def test_two_channel_sweep_guard_fails_closed_before_writes(channel):
+@pytest.mark.parametrize(("channel", "trigger_source"), [(1, "immediate"), (2, "external")])
+def test_two_channel_sweep_guard_fails_closed_before_writes(channel, trigger_source):
     session = FakeSession(
         response="Keysight Technologies,33512B,MY00000000,1.00",
         responses_by_command={"SOURce2:TRACk?": "ON"},
@@ -2631,6 +2662,8 @@ def test_two_channel_sweep_guard_fails_closed_before_writes(channel):
             1,
             0.2,
             channel=channel,
+            trigger_source=trigger_source,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
             resource_manager_factory=RecordingFactory(manager),
         )
 
@@ -5723,40 +5756,260 @@ def test_configure_output_independent_channel_guard_fails_before_write():
         )
     assert session.writes == []
 
+@pytest.mark.parametrize("source,mode,polarity", [
+    (True, "normal", "normal"),
+    ("1", "normal", "normal"),
+    (1, "marker", "normal"),
+    (1, "normal", None),
+])
+def test_sync_config_rejects_invalid_fields(source, mode, polarity):
+    with pytest.raises(WaveformParameterError):
+        SyncConfig(source, mode, polarity)
+
+
+def test_sync_entry_points_reject_invalid_config_before_visa():
+    factory = RecordingFactory(FakeManager())
+    with pytest.raises(WaveformParameterError):
+        dry_run_sync("keysight-33521b", None)
+    with pytest.raises(WaveformParameterError):
+        configure_sync(USB_RESOURCE, None, resource_manager_factory=factory)
+    assert not factory.calls
+
+
+@pytest.mark.parametrize("model,channel", [
+    ("keysight-33521b", 1), ("keysight-33512b", 2), ("keysight-33510b", 2),
+])
+def test_sync_dry_run_keeps_global_and_source_channel_commands_separate(model, channel):
+    plan = dry_run_sync(model, SyncConfig(channel, "carrier", "inverted"))
+    assert plan.commands == (
+        "OUTPut:SYNC OFF",
+        f"OUTPut:SYNC:SOURce CH{channel}",
+        f"OUTPut{channel}:SYNC:MODE CARRier",
+        f"OUTPut{channel}:SYNC:POLarity INVerted",
+        "OUTPut:SYNC OFF",
+    )
+    assert plan.canonical_model_id == model
+    assert plan.executed is False
+    assert plan.sync_state == "off"
+
+
+def test_configure_sync_verifies_off_before_settings_and_reads_every_setting():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={
+            "OUTPut:SYNC?": "0",
+            "OUTPut:SYNC:SOURce?": "CH2",
+            "OUTPut2:SYNC:MODE?": "CARR",
+            "OUTPut2:SYNC:POLarity?": "INV",
+        },
+    )
+    result = configure_sync(
+        USB_RESOURCE, SyncConfig(2, "carrier", "inverted"),
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        resource_manager_factory=RecordingFactory(FakeManager(session)),
+    )
+    assert result.sync_state == "off"
+    assert result.readback_verified
+    assert result.source_channel == 2
+    assert tuple(session.writes) == result.commands
+    sync_events = [
+        event for event in session.events if event[0] in {"query", "write"} and ":SYNC" in event[1]
+    ]
+    assert sync_events == [
+        ("write", "OUTPut:SYNC OFF"),
+        ("query", "OUTPut:SYNC?"),
+        ("write", "OUTPut:SYNC:SOURce CH2"),
+        ("write", "OUTPut2:SYNC:MODE CARRier"),
+        ("write", "OUTPut2:SYNC:POLarity INVerted"),
+        ("write", "OUTPut:SYNC OFF"),
+        ("query", "OUTPut:SYNC?"),
+        ("query", "OUTPut:SYNC:SOURce?"),
+        ("query", "OUTPut2:SYNC:MODE?"),
+        ("query", "OUTPut2:SYNC:POLarity?"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "model,channel,guard,expected_model,error",
+    [
+        ("33521B", 2, "0", None, WaveformParameterError),
+        ("33512B", 1, "1", None, WaveformVerificationError),
+        ("33512B", 1, "unknown", None, WaveformVerificationError),
+        ("33512B", 1, "0", "keysight-33521b", UnsupportedInstrumentError),
+    ],
+)
+def test_configure_sync_fails_before_write_on_unsupported_scope(
+    model, channel, guard, expected_model, error,
+):
+    session = FakeSession(
+        response=f"Keysight Technologies,{model},MY00000000,1.00",
+        responses_by_command={"SOURce1:FREQuency:COUPle:STATe?": guard},
+    )
+    with pytest.raises(error):
+        configure_sync(
+            USB_RESOURCE, SyncConfig(channel, "normal", "normal"), expected_model_id=expected_model,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == []
+
+
+@pytest.mark.parametrize("failure", ["write", "query", "mismatch", "initial-off"])
+def test_configure_sync_preserves_failure_and_attempts_safe_off(failure):
+    class FaultySyncSession(FakeSession):
+        def write(self, command):
+            super().write(command)
+            if command == "OUTPut1:SYNC:MODE NORMal" and failure == "write":
+                raise TimeoutError
+
+        def query(self, command):
+            if command == "OUTPut:SYNC?" and failure == "initial-off":
+                return "1"
+            if command == "OUTPut:SYNC:SOURce?" and failure == "mismatch":
+                return "CH2"
+            if command == "OUTPut:SYNC:SOURce?" and failure == "query":
+                raise TimeoutError
+            return super().query(command)
+
+    session = FaultySyncSession(responses_by_command={"OUTPut:SYNC?": "0"})
+    with pytest.raises(VisaWriteError if failure == "write" else WaveformVerificationError) as error:
+        configure_sync(
+            USB_RESOURCE, SyncConfig(1, "normal", "normal"),
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes.count("OUTPut:SYNC OFF") == (
+        2 if failure in {"write", "initial-off"} else 3
+    )
+    assert session.writes[-1] == "OUTPut:SYNC OFF"
+    if failure == "initial-off":
+        assert session.writes == ["OUTPut:SYNC OFF", "OUTPut:SYNC OFF"]
+        assert "Sync OFF was not confirmed" in error.value.cleanup_errors[0]
+    else:
+        assert not error.value.cleanup_errors
+
+
+def test_sync_product_live_rejects_configure_and_on_but_admits_off():
+    session = FakeSession(responses_by_command={"OUTPut:SYNC?": "0"})
+    factory = RecordingFactory(FakeManager(session))
+    with pytest.raises(UnsupportedInstrumentError):
+        configure_sync(
+            USB_RESOURCE, SyncConfig(1, "normal", "normal"), resource_manager_factory=factory,
+        )
+    with pytest.raises(UnsupportedInstrumentError):
+        set_sync_output(USB_RESOURCE, "on", resource_manager_factory=factory)
+    assert not factory.calls
+
+    result = set_sync_output(USB_RESOURCE, "off", resource_manager_factory=factory)
+    assert result.sync_state == "off" and result.readback_verified
+    assert session.writes == ["OUTPut:SYNC OFF"]
+
+
+def test_sync_output_on_uses_guard_but_safe_off_remains_available():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={"SOURce1:TRACk?": "ON", "OUTPut:SYNC?": "0"},
+    )
+    factory = RecordingFactory(FakeManager(session))
+    with pytest.raises(WaveformVerificationError):
+        set_sync_output(
+            USB_RESOURCE, "on", support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=factory,
+        )
+    assert session.writes == []
+    result = set_sync_output(USB_RESOURCE, "off", resource_manager_factory=factory)
+    assert result.sync_state == "off" and result.readback_verified
+    assert session.writes == ["OUTPut:SYNC OFF"]
+
+
+@pytest.mark.parametrize(
+    "failure,error,detail",
+    [
+        ("readback", WaveformVerificationError, "expected on"),
+        ("interrupt", KeyboardInterrupt, "readback interrupted"),
+        ("interrupt-off-unconfirmed", KeyboardInterrupt, "readback interrupted.*Sync may remain ON"),
+        ("session-close", VisaCleanupError, "session close failed; Sync OFF was confirmed"),
+        ("resource-manager-close", VisaCleanupError, "Sync OFF was not confirmed"),
+    ],
+)
+def test_sync_output_failed_enable_attempts_off(failure, error, detail):
+    session = FakeSession(
+        responses_by_command={"OUTPut:SYNC?": "0" if failure == "readback" else "1"},
+        close_error=OSError() if failure == "session-close" else None,
+    )
+    original_query = session.query
+
+    def readback(command):
+        if command == "OUTPut:SYNC?":
+            if session.writes[-1] == "OUTPut:SYNC OFF":
+                return "1" if failure == "interrupt-off-unconfirmed" else "0"
+            if failure.startswith("interrupt"):
+                raise KeyboardInterrupt("readback interrupted")
+        return original_query(command)
+
+    session.query = readback
+    manager = FakeManager(
+        session, close_error=OSError() if failure == "resource-manager-close" else None,
+    )
+    with pytest.raises(error, match=detail):
+        set_sync_output(
+            USB_RESOURCE, "on", support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+    expected = ["OUTPut:SYNC ON"]
+    if failure != "resource-manager-close":
+        expected.append("OUTPut:SYNC OFF")
+    assert session.writes == expected
+
+
 def test_full_validation_reset_checks_outputs_around_bounded_opc() -> None:
     session = FakeSession(
-        responses_by_command={"OUTPut1?": "0", "*OPC?": "1"},
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1", "OUTPut:SYNC?": "0"},
     )
     manager = FakeManager(session)
+    sync_off = {}
     visa_module.reset_for_live_full_validation(
         USB_RESOURCE,
         expected_model_id="keysight-33521b",
         resource_manager_factory=RecordingFactory(manager),
+        record_sync_off=sync_off.__setitem__,
     )
 
-    assert session.queries == [
-        IDN_QUERY, "OUTPut1?", "*OPC?", "OUTPut1?",
+    operations = [event for event in session.events if event[0] in {"query", "write"}]
+    assert operations == [
+        ("query", IDN_QUERY), ("query", "OUTPut1?"),
+        ("write", "OUTPut:SYNC OFF"), ("query", "OUTPut:SYNC?"),
+        ("write", "*RST"), ("query", "*OPC?"),
+        ("write", "OUTPut:SYNC OFF"), ("query", "OUTPut:SYNC?"),
+        ("query", "OUTPut1?"),
     ]
-    assert session.writes == ["*RST"]
+    assert sync_off == {"before_reset": True, "after_reset": True}
     assert session.close_calls == manager.close_calls == 1
 
 
 @pytest.mark.parametrize(
-    ("responses", "writes"),
+    ("responses", "writes", "sync_off"),
     [
-        ({"OUTPut1?": "1", "*OPC?": "1"}, []),
-        ({"OUTPut1?": "0", "*OPC?": "0"}, ["*RST"]),
+        ({"OUTPut1?": "1", "*OPC?": "1"}, [], {}),
+        ({"OUTPut1?": "0", "OUTPut:SYNC?": "1"}, ["OUTPut:SYNC OFF", "OUTPut:SYNC OFF"],
+         {"before_reset": False, "failure_cleanup": False}),
+        ({"OUTPut1?": "0", "OUTPut:SYNC?": "0", "*OPC?": "0"},
+         ["OUTPut:SYNC OFF", "*RST", "OUTPut:SYNC OFF"],
+         {"before_reset": True, "failure_cleanup": True}),
     ],
 )
-def test_full_validation_reset_fails_closed_on_output_or_opc(responses, writes) -> None:
+def test_full_validation_reset_fails_closed_on_output_or_opc(responses, writes, sync_off) -> None:
     session = FakeSession(responses_by_command=responses)
+    evidence = {}
     with pytest.raises(WaveformVerificationError):
         visa_module.reset_for_live_full_validation(
             USB_RESOURCE,
             expected_model_id="keysight-33521b",
             resource_manager_factory=RecordingFactory(FakeManager(session)),
+            record_sync_off=evidence.__setitem__,
         )
     assert session.writes == writes
+    assert evidence == sync_off
 
 
 def test_full_validation_reset_fails_when_output_turns_on_after_reset() -> None:
@@ -5767,15 +6020,40 @@ def test_full_validation_reset_fails_when_output_turns_on_after_reset() -> None:
             return super().query(command)
 
     session = PostResetOutputOn(
-        responses_by_command={"OUTPut1?": "0", "*OPC?": "1"},
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1", "OUTPut:SYNC?": "0"},
     )
-    with pytest.raises(WaveformVerificationError):
+    with pytest.raises(visa_module.FullValidationOutputOnError) as error:
         visa_module.reset_for_live_full_validation(
             USB_RESOURCE,
             expected_model_id="keysight-33521b",
             resource_manager_factory=RecordingFactory(FakeManager(session)),
         )
-    assert session.writes == ["*RST"]
+    assert session.writes == ["OUTPut:SYNC OFF", "*RST", "OUTPut:SYNC OFF"]
+    assert error.value.channel == 1
+    assert error.value.after_reset is True
+
+
+def test_full_validation_reset_fails_when_sync_will_not_turn_off_after_reset():
+    class SyncOnAfterReset(FakeSession):
+        def query(self, command):
+            if command == "OUTPut:SYNC?" and "*RST" in self.writes:
+                self.responses_by_command[command] = "1"
+            return super().query(command)
+
+    session = SyncOnAfterReset(
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1", "OUTPut:SYNC?": "0"},
+    )
+    sync_off = {}
+    with pytest.raises(WaveformVerificationError, match="expected off") as error:
+        visa_module.reset_for_live_full_validation(
+            USB_RESOURCE,
+            expected_model_id="keysight-33521b",
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+            record_sync_off=sync_off.__setitem__,
+        )
+    assert session.writes == ["OUTPut:SYNC OFF", "*RST", "OUTPut:SYNC OFF", "OUTPut:SYNC OFF"]
+    assert "Sync OFF was not confirmed" in error.value.cleanup_errors[0]
+    assert sync_off == {"before_reset": True, "after_reset": False, "failure_cleanup": False}
 
 
 def test_full_validation_reset_rejects_mismatched_identity_before_write() -> None:
@@ -5798,7 +6076,7 @@ def test_full_validation_reset_guards_every_channel() -> None:
             "*OPC?": "1",
         },
     )
-    with pytest.raises(WaveformVerificationError):
+    with pytest.raises(visa_module.FullValidationOutputOnError) as error:
         visa_module.reset_for_live_full_validation(
             USB_RESOURCE,
             expected_model_id="keysight-33512b",
@@ -5806,6 +6084,8 @@ def test_full_validation_reset_guards_every_channel() -> None:
         )
     assert session.writes == []
     assert session.queries == [IDN_QUERY, "OUTPut1?", "OUTPut2?"]
+    assert error.value.channel == 2
+    assert error.value.after_reset is False
 
 
 class EchoAdvancedReadbackSession(FakeSession):
@@ -5824,6 +6104,103 @@ class EchoAdvancedReadbackSession(FakeSession):
                     self.events.append(("query", command))
                     return written[len(prefix):]
         return super().query(command)
+
+
+@pytest.mark.parametrize(
+    ("channel", "trigger_options", "slope", "slope_command", "slope_reply"),
+    [
+        (1, {}, "positive", "POSitive", "POS"),
+        (2, {"trigger_slope": " NEGATIVE "}, "negative", "NEGative", "NEG"),
+    ],
+)
+def test_external_sweep_plan_and_fake_visa_readback(
+    channel, trigger_options, slope, slope_command, slope_reply
+):
+    trigger = f"TRIGger{channel}:"
+    sweep_mode = f"SOURce{channel}:FREQuency:MODE SWEep"
+    session = EchoAdvancedReadbackSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={trigger + "SOURce?": "EXT", trigger + "SLOPe?": slope_reply},
+    )
+    manager = FakeManager(session)
+    options = {"channel": channel, "trigger_source": "External", **trigger_options}
+    plan = dry_run_sine_sweep("keysight-33512b", 2, 8, "linear", 1, 0.1, **options)
+    result = configure_sine_sweep(
+        USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+        verify_readback=True,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        resource_manager_factory=RecordingFactory(manager),
+        **options,
+    )
+
+    assert plan.trigger_slope == result.trigger_slope == slope
+    assert plan.trigger_source == result.trigger_source == "external"
+    assert plan.trigger_timer_s is result.trigger_timer_s is None
+    assert plan.output_state == result.output_state == "off"
+    assert session.writes == list(plan.commands)
+    assert session.writes[0] == f"OUTPut{channel} OFF"
+    assert session.writes[-3:] == [
+        trigger + "SOURce EXTernal", trigger + f"SLOPe {slope_command}", sweep_mode,
+    ]
+    assert all(write not in {"OUTPut1 ON", "OUTPut2 ON", "*TRG", "*RST"} for write in session.writes)
+    assert session.events.index(("write", sweep_mode)) < session.events.index(
+        ("query", trigger + "SOURce?")
+    )
+    assert trigger + "SLOPe?" in session.queries
+    assert session.close_calls == manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
+    "configure_sweep",
+    [configure_sine_sweep, configure_square_sweep, configure_ramp_sweep, configure_triangle_sweep],
+)
+def test_external_sweep_rejected_before_product_live_visa_io(configure_sweep):
+    factory = Mock(side_effect=AssertionError("Product Live must reject before VISA I/O"))
+    with pytest.raises(UnsupportedInstrumentError, match="outside Product Live feature scope"):
+        configure_sweep(
+            USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+            trigger_source="external",
+            resource_manager_factory=factory,
+        )
+    factory.assert_not_called()
+
+
+@pytest.mark.parametrize("configure_sweep", [configure_sine_sweep, configure_ramp_sweep])
+def test_external_sweep_rejects_a_non_simulator_manager_from_simulator_factory(
+    configure_sweep, monkeypatch
+):
+    session = FakeSession()
+    manager = FakeManager(session)
+    factory = SimulatedResourceManagerFactory(Simulated33521BState())
+    monkeypatch.setattr(SimulatedResourceManagerFactory, "__call__", lambda _self, _library: manager)
+
+    with pytest.raises(UnsupportedInstrumentError):
+        configure_sweep(
+            USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+            trigger_source="external",
+            resource_manager_factory=factory,
+        )
+
+    assert manager.open_calls == []
+    assert session.writes == []
+    assert manager.close_calls == 1
+
+
+def test_external_sweep_slope_readback_mismatch_leaves_output_off():
+    session = EchoAdvancedReadbackSession(responses_by_command={"TRIGger1:SLOPe?": "NEG"})
+    manager = FakeManager(session)
+    with pytest.raises(WaveformVerificationError, match="TRIGger1:SLOPe") as error:
+        configure_sine_sweep(
+            USB_RESOURCE, 2, 8, "linear", 1, 0.1,
+            trigger_source="external",
+            verify_readback=True,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+    assert error.value.output_state == "off"
+    assert session.writes[0] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in session.writes
+    assert session.close_calls == manager.close_calls == 1
 
 
 def test_advanced_mode_readback_queries_written_settings_in_same_session():

@@ -51,6 +51,10 @@ Dry-run does not execute VISA I/O. Simulator results are deterministic test
 behavior, not evidence that a physical model, backend, connection, or command
 family has been validated.
 
+Arbitrary commands support dry-run and simulation for 33512B Channels 1 and 2
+(160 MSa/s) and 33521B Channel 1 (250 MSa/s). The standard 33510B profile
+rejects Arbitrary.
+
 ## Product Live Connection Scope
 
 Direct Product Live identification and control use an explicit USB or
@@ -82,9 +86,18 @@ request validation and safety rules documented for:
 - static sine, square, ramp, triangle, pulse, DC, noise, and PRBS;
 - supported AM, FM, PM, FSK, BPSK, PWM, and Sum carrier combinations;
 - Counted Burst and Gated Burst on supported carriers;
-- sine, square, ramp, and triangle ordinary and List Sweeps;
+- sine, square, ramp, and triangle ordinary Sweeps with Immediate, Bus, or
+  Timer, and List Sweeps with Immediate or Bus;
 - selected-channel status, output configuration, and output control;
+- explicit front-panel Sync OFF control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
+
+Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
+Core rejects these operations in Product Live mode for all models.
+External triggering for ordinary Sweeps is available in dry-run, simulation,
+and Direct CLI contributor validation. Core rejects it in Product Live.
+Front-panel Sync configuration and Sync ON are available in simulation and
+Direct CLI contributor validation. Sync configuration also supports dry-run.
 
 This overview does not remove command-specific limits. An invalid carrier,
 option combination, channel, value, trigger source, or safety state still fails
@@ -96,8 +109,10 @@ exercised on hardware.
 
 On two-channel live instruments, Core requires frequency coupling, voltage
 coupling, Channel 1 tracking, and Channel 2 tracking to be reported off before
-an independent state-changing operation. Core does not disable them
-automatically.
+an independent state-changing operation. In Core's contributor validation mode,
+Arbitrary waveform and sequence playback configuration also require Arbitrary
+sample rate coupling to be reported off on a two-channel instrument. Core does
+not disable coupling or tracking automatically.
 
 Configuration leaves the selected output off. Output-on remains an explicit
 operation. The tool does not use `*RST` as part of normal operation.
@@ -108,8 +123,7 @@ The Direct CLI exposes the broader Core-backed waveform, modulation, burst,
 sweep, List Sweep, output, trigger, and diagnostic surface documented in the
 [CLI guide](../cli/README.md).
 
-The local Worker is a narrower adapter surface, not a second model support
-matrix. It uses Core's registered models for dry-run and simulator planning and
+The local Worker uses Core's registered models for dry-run and simulator planning and
 Core's Product policy for live admission. Therefore 33512B and 33521B are
 Product Live within the existing Worker command surface, while 33510B remains
 hardware-free only.

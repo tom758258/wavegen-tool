@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet("smoke", "full")][string]$Suite = "smoke",
+    [string[]]$Modes = @(),
     [string]$Target = "all",
     [string]$Python = ".\.venv\Scripts\python.exe",
     [switch]$DebugArtifacts,
@@ -74,6 +75,7 @@ function Get-ValidationSummary {
         "",
         "- Result: $($Report.status)",
         "- Suite: $($Report.suite)",
+        "- Selected modes: $($Report.selected_modes -join ', ')",
         "- Validation mode: $($Report.validation_mode)",
         "- Target selection: $($Report.target)",
         "- Hardware touched: false",
@@ -92,6 +94,8 @@ function Get-ValidationSummary {
 }
 
 try {
+    $modesSpecified = $PSBoundParameters.ContainsKey("Modes")
+    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified)
     $targets = @(Resolve-ValidationTargets -Target $Target)
     if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop')) {
         throw 'Full requires Windows PowerShell Desktop on Windows.'
@@ -200,20 +204,35 @@ foreach ($targetProfile in $targets) {
     }
 
     if ($Suite -eq 'full') {
-        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount))) {
+        try {
+            $applicableModes = @(Get-ApplicableValidationModes -Modes $selectedModes -Capabilities $payload.capabilities -RejectUnsupportedArbitrary:($modesSpecified -and $Target -ne 'all'))
+        } catch {
+            Add-ValidationCase -Cases $cases -Name "${modelId}/mode-admission" -Status FAIL -FailureReasons $_.Exception.Message
+            Write-Host ""
+            continue
+        }
+        $fixtures = if (@($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
+            New-ArbitraryValidationFixtures -Directory (Join-Path $targetDirectory 'fixtures')
+        } else { $null }
+        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures)) {
             if ($recipe.channel -notin $channelsTested) { [void]$channelsTested.Add($recipe.channel) }
             $stepIndex = 0
             foreach ($step in $recipe.steps) {
                 $stepIndex += 1
                 $command = $step.arguments[0]
-                $modes = if ($command.StartsWith('configure-')) { @('dry-run', 'simulate') } else { @('simulate') }
-                foreach ($mode in $modes) {
+                $usesChannel = Test-ValidationCommandUsesChannel $command
+                $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence')) {
+                    @('dry-run')
+                } elseif ($command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory')) {
+                    @('dry-run', 'simulate')
+                } else { @('simulate') }
+                foreach ($mode in $executionModes) {
                     $name = "${modelId}/$($recipe.name)/step${stepIndex}-$mode"
                     $reasons = @()
                     $invocation = $null
                     try {
                         $args = @($step.arguments) + @("--$mode", '--model', $modelId, '--json')
-                        if ($command -ne 'trigger') { $args += @('--channel', [string]$recipe.channel) }
+                        if ($usesChannel) { $args += @('--channel', [string]$recipe.channel) }
                         $invocation = Invoke-WavegenJson -Name $name -CliArguments $args -ArtifactDirectory (Join-Path $targetDirectory (New-SafeCaseName $name))
                         if ($invocation.Process.exit_code -ne 0) {
                             $detail = $invocation.Process['cli_error']
@@ -222,11 +241,25 @@ foreach ($targetProfile in $targets) {
                         if ($null -ne $invocation.ParseError) { throw $invocation.ParseError }
                         $payload = $invocation.Payload
                         if ($payload.success -ne $true -or $payload.action -cne $command -or $payload.mode -cne $mode) { throw 'Unexpected command result.' }
-                        if ($command -ne 'trigger' -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
+                        if ($usesChannel -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
                         if ($mode -eq 'dry-run') {
                             if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or @($payload.commands).Count -eq 0) { throw 'Invalid hardware-free plan.' }
                         } elseif ($payload.simulated -ne $true -or $payload.model -cne $capabilityModel) { throw 'Unexpected simulator identity or mode.' }
-                        if ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') { throw 'Configuration did not leave output off.' }
+                        if ($command -in @('configure-sync', 'sync-output')) {
+                            foreach ($key in $step.result.Keys) {
+                                if ($mode -eq 'dry-run' -and $key -eq 'readback_verified') { continue }
+                                if ($key -notin $payload.PSObject.Properties.Name -or $payload.$key -cne $step.result[$key]) {
+                                    throw "Unexpected Sync result for $key."
+                                }
+                            }
+                        } elseif ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') {
+                            throw 'Configuration did not leave output off.'
+                        }
+                        if ($recipe.family -eq 'sweep' -and $step.result['trigger_source'] -eq 'external') {
+                            if ($payload.trigger_source -cne 'external' -or $payload.trigger_slope -cne $step.result['trigger_slope']) {
+                                throw 'External Sweep trigger source or slope did not match the recipe.'
+                            }
+                        }
                         if ('--verify-readback' -in $step.arguments -and $mode -eq 'simulate' -and $payload.readback_verified -ne $true) {
                             throw 'Advanced Mode simulator readback was not verified.'
                         }
@@ -333,6 +366,7 @@ foreach ($targetProfile in $targets) {
         target_capability_model = $capabilityModel
         channel_count = $channelCount
         channels_tested = @($channelsTested)
+        applicable_modes = $(if ($Suite -eq 'full') { @($applicableModes) } else { @() })
     })
     Write-Host ""
 }
@@ -348,6 +382,8 @@ $summaryCounts = Get-SummaryCounts -Cases $cases
 $status = if ($summaryCounts.failed -eq 0 -and ($Suite -ne "full" -or $summaryCounts.not_applicable -eq 0)) { "PASS" } else { "FAIL" }
 $report = [pscustomobject][ordered]@{
     suite = $Suite
+    selected_modes = if ($Suite -eq 'full') { @($selectedModes) } else { @() }
+    complete_mode_selection = $Suite -eq 'full' -and $selectedModes.Count -eq $script:FullValidationModes.Count
     schema_version = 1
     kind = "cli-preflight"
     status = $status

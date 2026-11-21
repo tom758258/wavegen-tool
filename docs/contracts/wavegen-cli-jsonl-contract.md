@@ -52,11 +52,21 @@ Result families add fields appropriate to the command:
 - `readback-advanced` returns `advanced_mode`, a `settings` object with only active parameters, selected `channel`, and identity context. `CW` uses an empty settings object; standalone queries never claim `readback_verified`. The field `advanced_mode` is separate from `mode="simulate"` execution metadata.
 - `status` returns selected `channel`, identity context, output state,
   function, frequency or bit rate, amplitude, bandwidth, offset, and load.
+  For Arbitrary playback, it reports `sample_rate_hz` with `frequency_hz: null`.
 - `read-errors` returns bounded error entries, read counts, empty/limit flags,
   and identity/backend context.
 - waveform, sweep, List Sweep, output-configuration, and output-control
   results identify `action`, selected `channel`, normalized request values,
   output state, and relevant waveform-specific fields.
+- `configure-sync` and `sync-output` report the connector's `sync_state`
+  and ordered `commands`. Configuration also reports `source_channel`,
+  `sync_mode`, and `polarity`. Successful execution includes
+  `readback_verified: true`. A Sync configuration dry-run includes
+  `executed: false`, the planning model, and `canonical_model_id`.
+- Arbitrary results identify `action`, selected `channel`, and
+  `status` (`"planned"` or `"completed"`). Depending on the operation,
+  they report waveform name and sample count, playback and step metadata,
+  or a bounded catalog and free points.
 - dry-run plans contain `mode: "dry-run"`, the planning model and
   `canonical_model_id`, ordered `commands`, `executed: false`, selected
   `channel`, and the normalized request fields.
@@ -65,8 +75,10 @@ Result families add fields appropriate to the command:
 
 Waveform-specific additions include modulation, Sum, burst, duty-cycle,
 symmetry, pulse-edge, PRBS, sweep timing/spacing/trigger, and List Sweep fields
-only when that Direct CLI command exposes them. This contract does not freeze
-every internal result dataclass field.
+only when that Direct CLI command exposes them. Successful ordinary Sweep
+results and dry-run plans report `trigger_slope` as `"positive"` or
+`"negative"` for External and `null` for other sources.
+Internal result dataclasses may contain additional fields.
 
 For the existing Advanced Mode configuration commands, a successful executed
 operation with `--verify-readback` adds `readback_verified: true` to Direct CLI
@@ -86,6 +98,9 @@ The public Direct CLI machine surface includes:
   `configure-noise`, and `configure-prbs`;
 - sine, square, ramp, and triangle ordinary sweep and List Sweep commands;
 - `configure-output`, `output`, and `trigger`;
+- `configure-sync` and `sync-output`;
+- `upload-arbitrary`, `configure-arbitrary`, `configure-arbitrary-sequence`,
+  `list-arbitrary-memory`, and `clear-arbitrary-memory`;
 - `worker`, `send-command`, `worker-status`, `wait-ready`, and `worker-stop`.
 
 Direct command availability does not imply that the Worker accepts the same
@@ -99,7 +114,7 @@ Worker events are `ready`, `job_accepted`, `job_started`, `job_finished`,
 exact integer-token `schema_version: 3`, `service: "wavegen-tool"`, `run_id`,
 and a UTC timestamp.
 
-All 17 Worker domain commands are async jobs. Every normal, controllable
+All 30 Worker domain commands are async jobs. Every normal, controllable
 termination emits `job_finished` with `state`, boolean `ok`, and required
 `result` and `error`. The terminal timestamp is fixed and shared with the
 HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and

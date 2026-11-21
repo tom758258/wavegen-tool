@@ -45,6 +45,30 @@ from wavegen_tool_core import (
 from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 
 
+def test_simulator_sync_state_is_global_and_settings_are_per_source_channel():
+    state = Simulated33521BState(model_id="keysight-33512b", output_enabled=True)
+    session = SimulatedResource(state)
+    session.write("OUTPut1:SYNC:POLarity INVerted")
+    session.write("OUTPut:SYNC:SOURce CH2")
+    session.write("OUTPut2:SYNC:MODE CARRier")
+    session.write("OUTPut:SYNC ON")
+    assert session.query("OUTPut:SYNC?") == "1"
+    assert session.query("OUTPut:SYNC:SOURce?") == "CH2"
+    assert session.query("OUTPut1:SYNC:MODE?") == "NORM"
+    assert session.query("OUTPut1:SYNC:POLarity?") == "INV"
+    assert session.query("OUTPut2:SYNC:MODE?") == "CARR"
+    assert session.query("OUTPut2:SYNC:POLarity?") == "NORM"
+    session.write("OUTPut:SYNC OFF")
+    assert session.query("OUTPut:SYNC?") == "0"
+    assert session.query("OUTPut1?") == "1"
+    assert session.query("OUTPut2?") == "0"
+
+    single_channel = SimulatedResource(Simulated33521BState())
+    with pytest.raises(ValueError, match="channel count"):
+        single_channel.write("OUTPut:SYNC:SOURce CH2")
+    assert single_channel.query("OUTPut:SYNC:SOURce?") == "CH1"
+
+
 def _factory_for(
     state: Simulated33521BState,
 ) -> Callable[[str], SimulatedResourceManager]:
@@ -622,8 +646,9 @@ def test_simulator_fails_closed_for_unknown_operations_and_closed_sessions() -> 
     session = manager.open_resource(SIMULATED_33521B_RESOURCE)
     with pytest.raises(ValueError, match="Unsupported simulated SCPI write"):
         session.write("*RST")
+    assert session.query("*OPC?") == "1"
     with pytest.raises(ValueError, match="Unsupported simulated SCPI query"):
-        session.query("*OPC?")
+        session.query("*TST?")
     session.close()
     with pytest.raises(RuntimeError, match="session is closed"):
         session.write("OUTPut1 OFF")
@@ -715,6 +740,7 @@ def test_prbs_status_preserves_simulator_channel_isolation() -> None:
 def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     factory = SimulatedResourceManagerFactory(state)
+    state.ch2.burst_trigger_slope = "negative"
 
     sweep_result = configure_square_sweep(
         factory.resource_name,
@@ -724,7 +750,9 @@ def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
         2,
         0.2,
         duty_cycle_percent=25,
+        trigger_source="external",
         channel=2,
+        verify_readback=True,
         resource_manager_factory=factory,
     )
 
@@ -737,6 +765,14 @@ def test_two_channel_simulator_sweep_isolation_and_cw_recovery() -> None:
     assert state.ch2.frequency_mode == "SWEep"
     assert state.ch2.sweep_start_frequency_hz == 2000.0
     assert state.ch2.sweep_stop_frequency_hz == 20000.0
+    assert state.ch2.output_enabled is False
+    assert state.ch1.trigger_source == "immediate"
+    readback = query_advanced_mode(
+        factory.resource_name, channel=2, resource_manager_factory=factory
+    )
+    assert readback.advanced_mode == "SWEEP"
+    assert readback.settings["trigger_source"] == "external"
+    assert readback.settings["trigger_slope"] == "positive"
 
     configure_square(
         factory.resource_name,

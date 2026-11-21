@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from http.client import HTTPConnection
@@ -16,6 +16,21 @@ import uuid
 
 from wavegen_tool_core import (
     SYSTEM_BACKEND,
+    OutputConfig,
+    SyncConfig,
+    configure_output,
+    configure_sync,
+    configure_ramp_list_sweep,
+    configure_sine_list_sweep,
+    configure_square_list_sweep,
+    configure_triangle_list_sweep,
+    dry_run_output,
+    dry_run_sync,
+    dry_run_ramp_list_sweep,
+    dry_run_sine_list_sweep,
+    dry_run_square_list_sweep,
+    dry_run_triangle_list_sweep,
+    send_bus_trigger,
     Simulated33521BState,
     WavegenError,
     classify_transport,
@@ -49,8 +64,10 @@ from wavegen_tool_core import (
     query_status,
     read_error_queue,
     set_output,
+    set_sync_output,
     validate_backend_transport,
 )
+from wavegen_tool_core.arbitrary import run_arbitrary
 from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_PRODUCT
 from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 from wavegen_tool_core.transport import normalize_resource
@@ -61,7 +78,9 @@ from wavegen_tool_cli.worker_protocol import (
     worker_features,
 )
 from wavegen_tool_cli.worker_commands import (
+    ARBITRARY_COMMANDS,
     SUPPORTED_WORKER_COMMANDS,
+    configuration_options,
     ValidatedWorkerCommand,
     WorkerRequestValidationError,
     validate_worker_command_request,
@@ -167,6 +186,7 @@ class WorkerRuntime:
         self._last_job: JobRecord | None = None
         self._fatal_error: dict[str, object] | None = None
         self._stop_requested = False
+        self._stop_ack_pending = False
         self._accepted_jobs = 0
         self._succeeded_jobs = 0
         self._failed_jobs = 0
@@ -262,18 +282,25 @@ class WorkerRuntime:
             self._emit_summary()
         return done
 
-    def request_stop(self) -> None:
-        """Request a cooperative stop without running a domain command."""
+    def request_stop(self, acknowledge: Callable[[], None] | None = None) -> None:
+        """Request a cooperative stop and send any HTTP acknowledgment before shutdown."""
 
-        emit = False
         with self._condition:
-            if not self._stop_requested:
+            first_request = not self._stop_requested
+            if first_request:
                 self._stop_requested = True
                 self._service_status = "stopping"
-                emit = True
-                self._condition.notify_all()
-        if emit:
-            self._emit_event("stop_requested")
+                self._stop_ack_pending = True
+        try:
+            if first_request:
+                self._emit_event("stop_requested")
+            if acknowledge is not None:
+                acknowledge()
+        finally:
+            if first_request:
+                with self._condition:
+                    self._stop_ack_pending = False
+                    self._condition.notify_all()
 
     def admit(
         self, command: ValidatedWorkerCommand
@@ -380,7 +407,9 @@ class WorkerRuntime:
         try:
             while True:
                 with self._condition:
-                    while self._active_job is None and not self._stop_requested:
+                    while self._active_job is None and (
+                        not self._stop_requested or self._stop_ack_pending
+                    ):
                         self._condition.wait()
                     if self._active_job is None:
                         break
@@ -410,6 +439,12 @@ class WorkerRuntime:
                     self._finish_job(job, result=None, error=error)
                 else:
                     serialized = _json_safe(result)
+                    if (
+                        job.arguments.get("verify_readback") is True
+                        and job.context["mode"] != "dry_run"
+                        and isinstance(serialized, dict)
+                    ):
+                        serialized["readback_verified"] = True
                     self._finish_job(job, result=serialized, error=None)
                 self._emit_event("job_finished", **_job_payload(job))
         except Exception as exc:  # pragma: no cover - runner lifecycle failure
@@ -458,6 +493,28 @@ class WorkerRuntime:
         if isinstance(expected_model_id, str):
             core_kwargs["expected_model_id"] = expected_model_id
         backend = self.config.backend
+        if job.command in ARBITRARY_COMMANDS:
+            return run_arbitrary(
+                job.command, arguments, resource=resource, backend=backend, **core_kwargs
+            )
+        if job.command == "trigger":
+            return send_bus_trigger(resource, backend, **core_kwargs)
+        if job.command == "configure-sync":
+            return configure_sync(resource, SyncConfig(**arguments), backend, **core_kwargs)
+        if job.command == "sync-output":
+            return set_sync_output(resource, arguments["state"], backend, **core_kwargs)
+        if job.command == "configure-output":
+            config = OutputConfig(**{key: value for key, value in arguments.items() if key != "channel"})
+            return configure_output(resource, config, backend, channel=arguments["channel"], **core_kwargs)
+        list_operation = {
+            "configure-sine-list-sweep": configure_sine_list_sweep,
+            "configure-square-list-sweep": configure_square_list_sweep,
+            "configure-ramp-list-sweep": configure_ramp_list_sweep,
+            "configure-triangle-list-sweep": configure_triangle_list_sweep,
+        }.get(job.command)
+        if list_operation is not None:
+            return list_operation(resource, backend=backend, **arguments, **core_kwargs)
+        core_kwargs.update(configuration_options(job.command, arguments, readback=True))
         if job.command == "identify":
             return identify_instrument(resource, backend, **core_kwargs)
         if job.command == "status":
@@ -664,6 +721,23 @@ class WorkerRuntime:
         context: dict[str, object],
     ) -> object:
         model = context["planning_model_id"]
+        if command in ARBITRARY_COMMANDS:
+            return run_arbitrary(command, arguments, model=model)
+        if command == "configure-sync":
+            return dry_run_sync(model, SyncConfig(**arguments))
+        if command == "configure-output":
+            config = OutputConfig(**{key: value for key, value in arguments.items() if key != "channel"})
+            return dry_run_output(model, config, channel=arguments["channel"])
+        list_operation = {
+            "configure-sine-list-sweep": dry_run_sine_list_sweep,
+            "configure-square-list-sweep": dry_run_square_list_sweep,
+            "configure-ramp-list-sweep": dry_run_ramp_list_sweep,
+            "configure-triangle-list-sweep": dry_run_triangle_list_sweep,
+        }.get(command)
+        if list_operation is not None:
+            values = {key: value for key, value in arguments.items() if key != "verify_readback"}
+            return list_operation(model, **values)
+        options = configuration_options(command, arguments)
         if command == "configure-sine":
             return dry_run_sine(
                 model,
@@ -673,6 +747,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-sine-sweep":
             return dry_run_sine_sweep(
@@ -688,6 +763,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-square-sweep":
             return dry_run_square_sweep(
@@ -704,6 +780,7 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 duty_cycle_percent=arguments["duty_cycle_percent"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-ramp-sweep":
             return dry_run_ramp_sweep(
@@ -720,6 +797,7 @@ class WorkerRuntime:
                 arguments["phase_deg"],
                 symmetry_percent=arguments["symmetry_percent"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-triangle-sweep":
             return dry_run_triangle_sweep(
@@ -735,6 +813,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-square":
             return dry_run_square(
@@ -746,6 +825,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-ramp":
             return dry_run_ramp(
@@ -757,6 +837,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-triangle":
             return dry_run_triangle(
@@ -767,6 +848,7 @@ class WorkerRuntime:
                 arguments["load"],
                 arguments["phase_deg"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-pulse":
             return dry_run_pulse(
@@ -781,6 +863,7 @@ class WorkerRuntime:
                 arguments.get("leading_edge_s"),
                 arguments.get("trailing_edge_s"),
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-dc":
             return dry_run_dc(
@@ -788,6 +871,7 @@ class WorkerRuntime:
                 arguments["voltage_v"],
                 arguments["load"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-noise":
             return dry_run_noise(
@@ -797,6 +881,7 @@ class WorkerRuntime:
                 arguments["offset_v"],
                 arguments["load"],
                 channel=arguments["channel"],
+                **options,
             )
         if command == "configure-prbs":
             return dry_run_prbs(
@@ -808,6 +893,7 @@ class WorkerRuntime:
                 arguments["edge_time_s"],
                 arguments["load"],
                 channel=arguments["channel"],
+                **options,
             )
         raise RuntimeError(f"Unsupported admitted dry-run command: {command}.")
 
@@ -1051,16 +1137,24 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                 ),
             )
             return
-        self.server.runtime.request_stop()
-        self._send_json(
-            202,
-            {
-                "schema_version": WORKER_SCHEMA_VERSION,
-                "status": "accepted",
-                "run_id": self.server.runtime.run_id,
-                "error": None,
-            },
-        )
+
+        def acknowledge() -> None:
+            try:
+                self.connection.settimeout(1.0)
+                self._send_json(
+                    202,
+                    {
+                        "schema_version": WORKER_SCHEMA_VERSION,
+                        "status": "accepted",
+                        "run_id": self.server.runtime.run_id,
+                        "error": None,
+                    },
+                )
+            except OSError:
+                # A disconnected or unresponsive client cannot cancel an accepted stop.
+                pass
+
+        self.server.runtime.request_stop(acknowledge)
 
     def _read_json(self, *, allow_empty: bool = False) -> tuple[object, str | None]:
         try:

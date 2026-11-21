@@ -34,7 +34,7 @@ The Worker has one active job slot. Orchestrators must handle `busy` and
 
 Manifest uses schema 2, declares Worker `v3-only` with `schema_versions=[3]`,
 `execution.model="multi_job"`, `execution.context_binding="per_command"`, and
-`common.async_jobs` contract version 1. The 17 domain commands are explicitly
+`common.async_jobs` contract version 1. The 30 domain commands are explicitly
 `async_job` in the Worker contract; no Manifest commands table is duplicated.
 Runtime features are fixed and match this declaration. No cancellation or
 streaming is adopted.
@@ -107,10 +107,12 @@ Omitted `channel` defaults to 1 for channel-scoped Worker commands. Core owns
 model-specific channel validation. `identify` and `read-errors` do not accept a
 channel argument.
 
-The Worker command surface is intentionally narrower than the Direct CLI.
-List Sweep, modulation, burst, `configure-output`, `trigger`, resource listing,
-and arbitrary SCPI are not Worker commands. The independent read-only
-`readback-advanced` command is allowed; it does not enable Advanced Mode writes.
+See the [Worker contract](wavegen-worker-contract.md#supported-commands) for
+the complete Worker command list. `configure-sync` takes `source_channel`,
+`mode`, and `polarity`. Submit `sync-output` with `state: "on"` or
+`state: "off"` to control the instrument-wide Sync connector independently
+of the main outputs. Live Sync ON requires startup authorization and
+explicit confirmation.
 
 For a read-only Advanced Mode inspection the orchestrator can submit:
 
@@ -180,4 +182,4 @@ shutdown evidence must not be inferred as success or awaited indefinitely.
 `GET /status` is lifecycle-only and performs no instrument I/O. To read
 instrument state, submit the Worker `status` command. `POST /stop` does not
 reconnect to hardware or turn output off. Safe shutdown workflows explicitly
-submit output-off before stopping the Worker.
+turn off the connectors they enabled before stopping the Worker.

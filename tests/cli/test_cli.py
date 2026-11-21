@@ -13,6 +13,62 @@ TCPIP_RESOURCE = "TCPIP0::192.0.2.10::inst0::INSTR"
 VALID_IDN = "Keysight Technologies,33521B,MY00000000,1.00-0.00-0.00"
 
 
+@pytest.mark.parametrize("missing", ["--source-channel", "--mode", "--polarity"])
+def test_configure_sync_cli_requires_complete_settings(capsys, missing):
+    args = ["--source-channel", "1", "--mode", "normal", "--polarity", "normal"]
+    index = args.index(missing)
+    del args[index:index + 2]
+    with pytest.raises(SystemExit) as error:
+        main(["configure-sync", "--dry-run", "--json", *args])
+    assert error.value.code == 2
+    output = capsys.readouterr()
+    assert not output.out and missing in output.err
+
+
+@pytest.mark.parametrize("execution", ["dry-run", "simulate"])
+def test_configure_sync_cli_machine_result_uses_separate_sync_fields(capsys, monkeypatch, execution):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Hardware-free Sync must not create a VISA resource manager")
+
+    monkeypatch.setattr(visa, "create_resource_manager", forbidden)
+    assert main([
+        "configure-sync", f"--{execution}", "--model", "keysight-33512b", "--json",
+        "--source-channel", "2", "--mode", "carrier", "--polarity", "inverted",
+    ]) == ExitCode.SUCCESS
+    result = json.loads(capsys.readouterr().out)
+    assert result["mode"] == execution
+    assert result["source_channel"] == 2 and result["sync_mode"] == "carrier"
+    assert result["polarity"] == "inverted" and result["sync_state"] == "off"
+    assert "channel" not in result and "output_state" not in result
+    if execution == "dry-run":
+        assert result["executed"] is False
+        assert "readback_verified" not in result
+    else:
+        assert result["readback_verified"] is True
+
+
+def test_configure_sync_cli_errors_on_unsupported_source(capsys):
+    code = main([
+        "configure-sync", "--dry-run", "--json",
+        "--source-channel", "2", "--mode", "normal", "--polarity", "normal",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert code != ExitCode.SUCCESS
+    assert payload["success"] is False and payload["sync_state"] is None
+
+
+def test_sync_output_cli_requires_explicit_global_state(capsys):
+    for extra in ([], ["--state", "invalid"], ["--state", "off", "--channel", "1"]):
+        with pytest.raises(SystemExit) as error:
+            main(["sync-output", "--simulate", "--json", *extra])
+        assert error.value.code == 2
+        assert not capsys.readouterr().out
+    for state in ("on", "off"):
+        assert main(["sync-output", "--simulate", "--json", "--state", state]) == ExitCode.SUCCESS
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["sync_state"] == state and payload["readback_verified"] is True
+
+
 def test_configure_sine_counted_burst_dry_run_json(capsys) -> None:
     exit_code = main(
         [
@@ -3614,6 +3670,7 @@ def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None
     assert exit_code == ExitCode.SUCCESS
     assert payload["trigger_source"] == "timer"
     assert payload["trigger_timer_s"] == 1.0
+    assert payload["trigger_slope"] is None
     assert payload["commands"][-3:] == [
         "TRIGger1:TIMer 1",
         "TRIGger1:SOURce TIMer",
@@ -3621,11 +3678,30 @@ def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None
     ]
 
 
+@pytest.mark.parametrize("carrier", ["sine", "square", "ramp", "triangle"])
+def test_external_sweep_cli_dry_run_passes_slope(capsys, carrier):
+    exit_code = main([
+        f"configure-{carrier}-sweep", "--dry-run", "--json",
+        "--start-frequency-hz", "2", "--stop-frequency-hz", "8",
+        "--spacing", "linear", "--sweep-time-s", "1", "--amplitude-vpp", "0.1",
+        "--trigger-source", "external", "--trigger-slope", "negative",
+    ])
+
+    assert exit_code == ExitCode.SUCCESS
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["executed"] is False
+    assert payload["trigger_source"] == "external"
+    assert payload["trigger_slope"] == "negative"
+    assert "TRIGger1:SLOPe NEGative" in payload["commands"]
+
+
 @pytest.mark.parametrize(
     "extra",
     [
         ["--trigger-source", "timer"],
         ["--trigger-source", "bus", "--trigger-timer-s", "1"],
+        ["--trigger-slope", "positive"],
+        ["--trigger-source", "external", "--trigger-timer-s", "1"],
     ],
 )
 def test_sweep_cli_rejects_incomplete_trigger_options(capsys, extra) -> None:
@@ -3813,6 +3889,9 @@ def test_configure_sine_sweep_cli_channel_two_json(capsys):
             "1",
             "--amplitude-vpp",
             "0.1",
+            "--trigger-source",
+            "external",
+            "--verify-readback",
             "--json",
         ]
     )
@@ -3826,6 +3905,9 @@ def test_configure_sine_sweep_cli_channel_two_json(capsys):
     assert payload["start_frequency_hz"] == 1000.0
     assert payload["stop_frequency_hz"] == 10000.0
     assert payload["output_state"] == "off"
+    assert payload["trigger_source"] == "external"
+    assert payload["trigger_slope"] == "positive"
+    assert payload["readback_verified"] is True
 
 
 @pytest.mark.parametrize(
@@ -4620,3 +4702,74 @@ def test_cli_independent_readback_rejects_ch2_on_33521b(capsys):
     assert status == ExitCode.CLI_USAGE
     assert payload["success"] is False
     assert payload["advanced_mode"] is None
+
+
+def test_arbitrary_cli_local_files_and_confirmation(tmp_path, capsys):
+    csv_path = tmp_path / "wave.csv"
+    csv_path.write_bytes(("0\r\n" * 8).encode("utf-8-sig"))
+    assert main(["upload-arbitrary", "--name", "WAVE", "--file", str(csv_path), "--dry-run", "--json"]) == 0
+    uploaded = json.loads(capsys.readouterr().out)
+    assert uploaded["action"] == "upload-arbitrary" and uploaded["mode"] == "dry-run"
+    assert uploaded["sample_count"] == 8 and uploaded["executed"] is False
+    assert "path" not in uploaded
+
+    sequence_path = tmp_path / "sequence.json"
+    sequence_path.write_text(json.dumps({
+        "version": 1, "name": "SEQ", "sample_rate_hz": 1e6, "amplitude_vpp": 1,
+        "trigger_source": "external", "trigger_slope": "negative",
+        "steps": [{"waveform": "WAVE", "play_control": "onceWaitTrig"}],
+    }), encoding="utf-8")
+    assert main(["configure-arbitrary-sequence", "--file", str(sequence_path), "--dry-run", "--json"]) == 0
+    planned = json.loads(capsys.readouterr().out)
+    assert planned["trigger_source"] == "external"
+    assert planned["trigger_slope"] == "negative"
+    assert planned["step_count"] == 1 and planned["output_state"] == "off"
+
+    assert main(["clear-arbitrary-memory", "--simulate", "--json"]) == ExitCode.CLI_USAGE
+    rejected = json.loads(capsys.readouterr().out)
+    assert rejected["success"] is False
+    assert "explicit confirmation" in rejected["error"]
+    assert main(["clear-arbitrary-memory", "--simulate", "--confirm-clear", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["output_state"] == "off"
+
+
+@pytest.mark.parametrize("command,arguments", [
+    ("list-arbitrary-memory", []),
+    ("configure-arbitrary", ["--name", "WAVE_A", "--sample-rate-hz", "1000000", "--amplitude-vpp", "0.1"]),
+    ("clear-arbitrary-memory", ["--confirm-clear"]),
+])
+def test_arbitrary_cli_contributor_injection_is_explicit(monkeypatch, capsys, command, arguments):
+    """The existing validation gate reaches Core only when explicitly requested."""
+    calls = []
+    def fake_arbitrary(action, data, **kwargs):
+        calls.append((action, data, kwargs))
+        return {"status": "completed", "channel": data["channel"], "model": "33521B",
+                "canonical_model_id": "keysight-33521b", "executed": True,
+                "backend": "system", "transport": "usb"}
+    monkeypatch.setattr(cli_module, "run_arbitrary", fake_arbitrary)
+    base = [command, *arguments, "--resource", USB_RESOURCE, "--json"]
+    assert main(base) == ExitCode.SUCCESS
+    capsys.readouterr()
+    assert calls[-1][2].get("support_policy_mode") is None
+    assert main(base + ["--validation-allow-pending-live-support", "--model", "keysight-33521b"]) == ExitCode.SUCCESS
+    capsys.readouterr()
+    assert calls[-1][2]["support_policy_mode"] == "validation"
+    assert calls[-1][2]["expected_model_id"] == "keysight-33521b"
+    assert calls[-1][2]["resource"] == USB_RESOURCE
+
+
+def test_arbitrary_product_live_remains_blocked_before_visa(monkeypatch, capsys):
+    from wavegen_tool_core import arbitrary
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Physical VISA must not be opened")
+    monkeypatch.setattr(arbitrary, "_run_on_supported_instrument", forbidden)
+    for command, additional in (
+        ("list-arbitrary-memory", []),
+        ("clear-arbitrary-memory", ["--confirm-clear"]),
+    ):
+        result = main([command, *additional, "--resource", USB_RESOURCE, "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert result != ExitCode.SUCCESS
+        assert payload["success"] is False
+        assert payload["error"] is not None

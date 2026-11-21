@@ -22,7 +22,7 @@ def _ps_quote(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _run_powershell(script: str, *, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess[str]:
+def _run_powershell(script: str, *, check: bool = True, timeout: int = 180) -> subprocess.CompletedProcess[str]:
     if POWERSHELL is None:
         pytest.skip("Windows PowerShell is unavailable")
     result = subprocess.run(
@@ -497,6 +497,37 @@ def test_run_directory_layout_is_created_under_tmp_tests(artifact_root: Path) ->
     assert REPO_ROOT / ".tmp_tests" in run_root.parents
 
 
+def test_minimal_publication_removes_nested_private_arbitrary_fixtures(
+    artifact_root: Path,
+) -> None:
+    # Synthetic CSV/JSON inputs must not make successful minimal publication fail.
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH, PRIVACY_PATH)
+        + f"$run = New-ValidationRunDirectory -RepoRoot {_ps_quote(REPO_ROOT)} "
+        + f"-BaseRoot {_ps_quote(artifact_root)}; "
+        + "$fixtures = Join-Path $run.Private 'fixtures'; "
+        + "$null = New-Item -ItemType Directory -Force -Path $fixtures; "
+        + "Write-Utf8NoBomText -LiteralPath (Join-Path $fixtures 'wave.csv') -Text '0.25'; "
+        + "Write-Utf8NoBomText -LiteralPath (Join-Path $fixtures 'sequence.json') -Text '{}'; "
+        + "$report = [pscustomobject]@{ status = 'PASS'; suite = 'full'; cases = @() }; "
+        + f"$published = Publish-ValidationArtifacts -Report $report -Run $run -RepoRoot {_ps_quote(REPO_ROOT)} "
+        + "-SummaryText 'Synthetic no-hardware validation'; "
+        + "if (-not $published) { throw 'Nested fixtures blocked safe publication'; }; "
+        + "@{ root = $run.Root; status = $report.status } | ConvertTo-Json -Compress"
+    )
+    payload = json.loads(result.stdout)
+    run = Path(payload["root"])
+    assert payload["status"] == "PASS"
+    assert not (run / "private").exists()
+    assert {item.name for item in (run / "shareable").iterdir()} == {
+        "report.json", "summary.md",
+    }
+    report = json.loads((run / "shareable" / "report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "PASS"
+    assert report["private_raw_artifacts_retained"] is False
+    assert report["redaction_applied"] is True
+
+
 def test_publication_failure_removes_partial_evidence(artifact_root: Path) -> None:
     result = _run_powershell(
         _dot_source(HELPERS_PATH, PRIVACY_PATH)
@@ -515,3 +546,61 @@ def test_publication_failure_removes_partial_evidence(artifact_root: Path) -> No
     files = [path for path in artifact_root.rglob("*") if path.is_file()]
     assert [path.name for path in files] == ["error-summary.md"]
     assert "synthetic" not in files[0].read_text(encoding="utf-8")
+
+
+def test_full_mode_resolution_and_family_filtering() -> None:
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$selected = @(Resolve-SelectedValidationModes -Suite full -Modes @('output,burst', 'static', 'burst') -Specified $true); "
+        + "$recipes = @(Get-FullValidationInventory -Channels @(1,2) -Modes $selected); "
+        + "@{ modes = $selected; families = @($recipes | ForEach-Object { $_.family } | Select-Object -Unique); "
+        + "count = $recipes.Count } | ConvertTo-Json -Compress"
+    )
+    data = json.loads(result.stdout)
+    assert data["modes"] == ["static", "burst", "output"]
+    assert set(data["families"]) == {
+        "inspection", "static", "burst", "output-config", "output-control",
+        "sync-configuration", "sync-control",
+    }
+    assert data["count"] > 0
+
+
+def test_modes_reject_smoke_and_unsupported_capability() -> None:
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$smoke = $false; $missing = $false; "
+        + "try { @(Resolve-SelectedValidationModes -Suite smoke -Modes @('static') -Specified $true) | Out-Null } catch { $smoke = $true }; "
+        + "try { @(Get-ApplicableValidationModes -Modes @('arbitrary') -Capabilities @{ max_arbitrary_sample_rate_hz = $null } -RejectUnsupportedArbitrary $true) | Out-Null } catch { $missing = $true }; "
+        + "@{ smoke_rejected = $smoke; unsupported_rejected = $missing } | ConvertTo-Json -Compress"
+    )
+    assert json.loads(result.stdout) == {
+        "smoke_rejected": True, "unsupported_rejected": True,
+    }
+
+
+def test_triggered_sequence_fixtures_wait_before_playback(artifact_root: Path) -> None:
+    fixtures_dir = artifact_root / "fixtures"
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + f"$null = New-ArbitraryValidationFixtures -Directory {_ps_quote(fixtures_dir)}; "
+        + "Write-Output 'fixtures-ready'"
+    )
+    assert result.stdout.strip() == "fixtures-ready"
+
+    idle_samples = (fixtures_dir / "idle.csv").read_text(encoding="utf-8").splitlines()
+    signal_samples = (fixtures_dir / "wave.csv").read_text(encoding="utf-8").splitlines()
+    assert idle_samples == ["0"] * 16
+    assert len(signal_samples) == 16
+    assert any(float(sample) != 0 for sample in signal_samples)
+
+    bus = json.loads((fixtures_dir / "sequence-bus-functional.json").read_text(encoding="utf-8"))
+    external = json.loads((fixtures_dir / "sequence-external.json").read_text(encoding="utf-8"))
+    for source, document in (("bus", bus), ("external", external)):
+        assert document["trigger_source"] == source
+        steps = document["steps"]
+        assert [step["play_control"] for step in steps] == ["onceWaitTrig", "repeat"]
+        assert steps[0]["waveform"] != steps[1]["waveform"]
+        duration_s = len(signal_samples) * steps[1]["repeat_count"] / document["sample_rate_hz"]
+        assert 1 <= duration_s <= 5
+    assert external["trigger_slope"] == "positive"
+    assert bus["steps"][0]["waveform"] != external["steps"][0]["waveform"]

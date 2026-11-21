@@ -483,13 +483,108 @@ function Get-AdvancedReadbackExpectation {
             $value = Get-AdvancedOption $Arguments $pair[0]
             if ($null -ne $value) { $settings[$pair[1]] = [double]$value }
         }
+        if ($settings.trigger_source -eq 'external') {
+            $slope = Get-AdvancedOption $Arguments '--trigger-slope'
+            $settings.trigger_slope = if ($null -ne $slope) { $slope } else { 'positive' }
+        }
     }
     if ($null -eq $mode) { $mode = 'CW' }
     return [pscustomobject]@{ advanced_mode = $mode; settings = $settings }
 }
 
+
+$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence')
+
+function Resolve-SelectedValidationModes {
+    param([string]$Suite, [string[]]$Modes = @(), [bool]$Specified = $false)
+
+    if ($Specified -and $Suite -ne 'full') {
+        throw '-Modes requires -Suite full; Smoke does not support mode selection.'
+    }
+    if (-not $Specified) { return @($script:FullValidationModes) }
+    $requested = @($Modes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() })
+    if ($requested.Count -eq 0 -or @($requested | Where-Object { -not $_ -or $_ -notin $script:FullValidationModes }).Count -gt 0) {
+        throw "Modes must contain one or more of: $($script:FullValidationModes -join ', ')."
+    }
+    return @($script:FullValidationModes | Where-Object { $_ -in $requested })
+}
+
+function Get-ApplicableValidationModes {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Modes,
+        [Parameter(Mandatory = $true)]$Capabilities,
+        [bool]$RejectUnsupportedArbitrary = $false
+    )
+    $supportsArbitrary = $null -ne $Capabilities.max_arbitrary_sample_rate_hz
+    if (-not $supportsArbitrary -and $RejectUnsupportedArbitrary -and
+        @($Modes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
+        throw 'The selected model does not support Arbitrary or Sequence validation.'
+    }
+    return @($Modes | Where-Object { $supportsArbitrary -or $_ -notin @('arbitrary', 'sequence') })
+}
+
+function New-ArbitraryValidationFixtures {
+    param([Parameter(Mandatory = $true)][string]$Directory)
+
+    [void][IO.Directory]::CreateDirectory($Directory)
+    $token = [guid]::NewGuid().ToString('N').Substring(0, 7).ToUpperInvariant()
+    $names = @{}
+    foreach ($key in @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')) { $names[$key] = "WG${key}_$token" }
+    $csv = Join-Path $Directory 'wave.csv'
+    Write-Utf8NoBomText -LiteralPath $csv -Text ("0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n0`n0.25`n0.5`n0.25`n0`n-0.25`n-0.5`n-0.25`n")
+    $idleCsv = Join-Path $Directory 'idle.csv'
+    Write-Utf8NoBomText -LiteralPath $idleCsv -Text ("0`n" * 16)
+    $bus = Join-Path $Directory 'sequence-bus.json'
+    $external = Join-Path $Directory 'sequence-external.json'
+    $busFunctional = Join-Path $Directory 'sequence-bus-functional.json'
+    $common = @{ version = 1; sample_rate_hz = 1000000; amplitude_vpp = 0.1; offset_v = 0; load = '50' }
+    $busDocument = $common.Clone()
+    $busDocument.name = "WGSB_$token"
+    $busDocument.trigger_source = 'bus'
+    $busDocument.steps = @(
+        @{ waveform = $names.B; play_control = 'once' },
+        @{ waveform = $names.C; play_control = 'repeat'; repeat_count = 2 },
+        @{ waveform = $names.B; play_control = 'onceWaitTrig' },
+        @{ waveform = $names.C; play_control = 'repeatTilTrig' }
+    )
+    $busFunctionalDocument = $common.Clone()
+    $busFunctionalDocument.name = "WGSO_$token"
+    $busFunctionalDocument.sample_rate_hz = 1600
+    $busFunctionalDocument.trigger_source = 'bus'
+    $busFunctionalDocument.steps = @(
+        @{ waveform = $names.G; play_control = 'onceWaitTrig' },
+        @{ waveform = $names.F; play_control = 'repeat'; repeat_count = 200 }
+    )
+    Write-Utf8NoBomText -LiteralPath $busFunctional -Text ($busFunctionalDocument | ConvertTo-Json -Depth 6 -Compress)
+    $externalDocument = $common.Clone()
+    $externalDocument.name = "WGSE_$token"
+    $externalDocument.trigger_source = 'external'
+    $externalDocument.trigger_slope = 'positive'
+    $externalDocument.sample_rate_hz = 1600
+    $externalDocument.steps = @(
+        @{ waveform = $names.H; play_control = 'onceWaitTrig' },
+        @{ waveform = $names.D; play_control = 'repeat'; repeat_count = 200 }
+    )
+    Write-Utf8NoBomText -LiteralPath $bus -Text ($busDocument | ConvertTo-Json -Depth 6 -Compress)
+    Write-Utf8NoBomText -LiteralPath $external -Text ($externalDocument | ConvertTo-Json -Depth 6 -Compress)
+    return [pscustomobject]@{
+        csv = $csv; idleCsv = $idleCsv; bus = $bus; busFunctional = $busFunctional; external = $external
+        nameA = $names.A; nameB = $names.B; nameC = $names.C; nameD = $names.D; nameE = $names.E; nameF = $names.F
+        nameG = $names.G; nameH = $names.H
+    }
+}
+
+function Test-ValidationCommandUsesChannel {
+    param([string]$Command)
+    return $Command -notin @('trigger', 'configure-sync', 'sync-output')
+}
+
 function Get-FullValidationInventory {
-    param([Parameter(Mandatory = $true)][int[]]$Channels)
+    param(
+        [Parameter(Mandatory = $true)][int[]]$Channels,
+        [string[]]$Modes = $script:FullValidationModes,
+        $ArbitraryFixtures = $null
+    )
 
     # Recipes contain public CLI arguments only; Core owns admission and SCPI.
     $voltage = @('--amplitude-vpp', '0.1', '--offset-v', '0', '--load', '50')
@@ -540,7 +635,7 @@ function Get-FullValidationInventory {
         }
         Add-Recipe "static-$wave" 'static' @((New-Step $args $readback $result)) ($wave -eq 'sine')
     }
-    $modes = [ordered]@{
+    $modulations = [ordered]@{
         am = @('--am-frequency', '10', '--am-depth', '20')
         'am-dssc' = @('--am-frequency', '10', '--am-depth', '20', '--am-type', 'dssc')
         fm = @('--fm-frequency', '10', '--fm-deviation', '100')
@@ -550,13 +645,13 @@ function Get-FullValidationInventory {
         pwm = @('--pwm-frequency', '10', '--pwm-deviation-s', '0.00002')
         sum = @('--sum-frequency', '10', '--sum-amplitude-percent', '10')
     }
-    foreach ($mode in $modes.Keys) {
+    foreach ($mode in $modulations.Keys) {
         $carrier = if ($mode -eq 'pwm') { $pulseSharedEdge } else { $sine }
         $modeName = ($mode -split '-')[0]
         $result = @{ "${modeName}_enabled" = $true }
         if ($modeName -eq 'am') { $result.am_type = if ($mode -eq 'am-dssc') { 'dssc' } else { 'normal' } }
         $readback = @{ function = $(if ($mode -eq 'pwm') { 'PULS' } else { 'SIN' }); frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
-        Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modes[$mode]) $readback $result)) ($mode -eq 'am')
+        Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modulations[$mode]) $readback $result)) ($mode -eq 'am')
     }
 
     Add-Recipe 'configure-output' 'output-config' @(
@@ -634,6 +729,27 @@ function Get-FullValidationInventory {
         }
         Add-Recipe "sweep-$variant" 'sweep' $steps ($variant -eq 'sine-linear') -Observation $observation
     }
+    $externalSweep = @(
+        'configure-sine-sweep', '--start-frequency-hz', '2', '--stop-frequency-hz', '8',
+        '--spacing', 'linear', '--sweep-time-s', '1', '--hold-time-s', '0.2',
+        '--return-time-s', '0.2', '--trigger-source', 'external'
+    ) + $voltage
+    $sweepReadback = @{ function = 'SIN'; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+    foreach ($slope in @('positive', 'negative')) {
+        $args = $externalSweep
+        if ($slope -eq 'negative') { $args += @('--trigger-slope', $slope) }
+        $edge = if ($slope -eq 'positive') { 'rising' } else { 'falling' }
+        Add-Recipe "sweep-external-$slope" 'sweep' @(
+            (New-Step $args $sweepReadback @{ spacing = 'linear'; trigger_source = 'external'; trigger_slope = $slope }),
+            $outputOn
+        ) -Observation @{
+            input = 'external-trigger'
+            idle = if ($slope -eq 'positive') { 'low' } else { 'high' }
+            action = "Observe the start frequency for several seconds, then send one $edge edge. After the sweep returns, restore the idle level to check the opposite edge."
+            expected = 'The frequency stays at 2 Hz before the edge, sweeps once to 8 Hz, holds, returns to 2 Hz, and stays there on the opposite edge.'
+            seconds = 20
+        }
+    }
     $steps = @()
     foreach ($wave in @('sine', 'square', 'ramp', 'triangle')) {
         $steps += New-Step (@("configure-$wave-list-sweep", '--frequencies-hz', '1000,1500,2000', '--dwell-s', '0.01') + $voltage) @{ function = $functions[$wave]; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
@@ -653,6 +769,57 @@ function Get-FullValidationInventory {
         (New-Step @('output', '--state', 'on') @{ output_state = 'on' }),
         (New-Step @('output', '--state', 'off') @{ output_state = 'off' })
     ) $true
+
+    # Source-specific Sync configuration steps are filled in per channel below.
+    Add-Recipe 'sync-configuration' 'sync-configuration' @() $true
+    Add-Recipe 'sync-control' 'sync-control' @(
+        (New-Step @('sync-output', '--state', 'on') @{} @{ sync_state = 'on'; readback_verified = $true }),
+        (New-Step @('sync-output', '--state', 'off') @{} @{ sync_state = 'off'; readback_verified = $true })
+    )
+
+    if ($null -ne $ArbitraryFixtures) {
+        $fixture = $ArbitraryFixtures
+        $uploadA = New-Step @('upload-arbitrary', '--name', $fixture.nameA, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadB = New-Step @('upload-arbitrary', '--name', $fixture.nameB, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadC = New-Step @('upload-arbitrary', '--name', $fixture.nameC, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadD = New-Step @('upload-arbitrary', '--name', $fixture.nameD, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadE = New-Step @('upload-arbitrary', '--name', $fixture.nameE, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadF = New-Step @('upload-arbitrary', '--name', $fixture.nameF, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadG = New-Step @('upload-arbitrary', '--name', $fixture.nameG, '--file', $fixture.idleCsv) @{} @{ sample_count = 16; output_state = 'off' }
+        $uploadH = New-Step @('upload-arbitrary', '--name', $fixture.nameH, '--file', $fixture.idleCsv) @{} @{ sample_count = 16; output_state = 'off' }
+        Add-Recipe 'arbitrary-upload-configure' 'arbitrary' @(
+            $uploadA,
+            (New-Step @('list-arbitrary-memory')),
+            (New-Step @('configure-arbitrary', '--name', $fixture.nameA, '--sample-rate-hz', '1000000', '--amplitude-vpp', '0.1', '--offset-v', '0', '--load', '50') @{ function = 'ARB'; output_state = 'off' } @{ output_state = 'off' })
+        ) $true
+        Add-Recipe 'arbitrary-clear' 'arbitrary' @(
+            $uploadE,
+            (New-Step @('list-arbitrary-memory')),
+            (New-Step @('clear-arbitrary-memory', '--confirm-clear') @{ output_state = 'off' } @{ output_state = 'off' }),
+            (New-Step @('list-arbitrary-memory'))
+        )
+        Add-Recipe 'sequence-bus' 'sequence' @(
+            $uploadB, $uploadC,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.bus) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 4; trigger_source = 'bus'; output_state = 'off' })
+        )
+        Add-Recipe 'sequence-bus-functional' 'sequence' @(
+            $uploadG, $uploadF,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.busFunctional) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 2; trigger_source = 'bus'; output_state = 'off' }),
+            $outputOn,
+            (New-Step @('trigger') @{ output_state = 'on' })
+        ) -Observation @{ expected = 'Only idle is present before the Bus trigger; after triggering, capture the approximately 100 Hz waveform for about 2 seconds on the scope.'; seconds = 8 }
+        Add-Recipe 'sequence-external' 'sequence' @(
+            $uploadH, $uploadD,
+            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.external) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 2; trigger_source = 'external'; output_state = 'off' }),
+            $outputOn
+        ) -Observation @{
+            input = 'external-trigger'; idle = 'low'
+            action = 'Send one rising-edge external trigger; use a scope single-shot capture for the active waveform.'
+            expected = 'Only idle is present before the external edge; after triggering, capture the approximately 100 Hz waveform for about 2 seconds.'
+            seconds = 8
+        }
+    }
+
     # Reuse existing Full cases; only configure steps with an active Advanced Mode
     # opt into independent instrument/simulator readback.
     foreach ($recipe in $recipes) {
@@ -674,10 +841,27 @@ function Get-FullValidationInventory {
     }
     foreach ($channel in $Channels) {
         foreach ($recipe in $recipes) {
+            $mode = switch ($recipe.family) {
+                'output-config' { 'output' }
+                'output-control' { 'output' }
+                'sync-configuration' { 'output' }
+                'sync-control' { 'output' }
+                default { $recipe.family }
+            }
+            if ($mode -ne 'inspection' -and $mode -notin $Modes) { continue }
             if ($channel -ne 1 -and -not $recipe.parity) { continue }
+            $steps = $recipe.steps
+            if ($recipe.family -eq 'sync-configuration') {
+                $syncMode = if ($channel -eq 1) { 'normal' } else { 'carrier' }
+                $polarity = if ($channel -eq 1) { 'normal' } else { 'inverted' }
+                $steps = @(New-Step @('configure-sync', '--source-channel', [string]$channel, '--mode', $syncMode, '--polarity', $polarity) @{} @{
+                    source_channel = $channel; sync_mode = $syncMode; polarity = $polarity
+                    sync_state = 'off'; readback_verified = $true
+                })
+            }
             [pscustomobject]@{
                 name = "ch${channel}/$($recipe.name)"; family = $recipe.family
-                channel = $channel; required = $true; steps = $recipe.steps
+                channel = $channel; required = $true; steps = $steps
                 observation = $recipe.observation
             }
         }

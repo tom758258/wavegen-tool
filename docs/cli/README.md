@@ -109,7 +109,7 @@ an explicit resource argument.
 
 ### Dry-run
 
-Waveform, sweep, List Sweep, and output-configuration commands accept
+Waveform, sweep, List Sweep, output-configuration, and Arbitrary commands accept
 `--dry-run`. Dry-run uses an exact registered `--model`, runs Core validation,
 and returns the ordered SCPI plan with `executed` false. It does not create a
 VISA resource manager, open a resource, query identity, send SCPI, or change
@@ -585,10 +585,14 @@ Required sweep options are:
 - `--sweep-time-s`
 
 Optional common options include `--hold-time-s`, `--return-time-s`,
-`--trigger-source {immediate,bus,timer}`, `--trigger-timer-s`, one voltage form,
-`--phase-deg`, and `--load`. Hold and return default to zero; trigger defaults
-to Immediate. A Timer interval must be 0.000001 through 8000 seconds and at
-least the complete sweep, hold, and return duration.
+`--trigger-source {immediate,bus,timer,external}`, `--trigger-timer-s`,
+`--trigger-slope {positive,negative}`, one voltage form, `--phase-deg`, and
+`--load`. Hold and return default to zero. The trigger source defaults to
+Immediate. A Timer interval must be 0.000001 through 8000 seconds and at least
+the complete sweep, hold, and return duration. Only External accepts
+`--trigger-slope`, which defaults to `positive` and is always programmed.
+Omit `--trigger-timer-s` with External. External Sweep is available in dry-run,
+simulation, and contributor validation.
 
 Square sweeps add `--duty-cycle-percent`, validated at the higher endpoint.
 Ramp sweeps add `--symmetry-percent`. Sweeps are selected-channel operations,
@@ -634,6 +638,74 @@ Bus-triggered sweeps require a separate `trigger` command after live
 configuration and explicit output-on. Timer sweep timing must accommodate
 sweep, hold, and return time.
 
+## Arbitrary Waveforms and Sequences
+
+Arbitrary commands are available in dry-run and simulator modes for 33512B
+Channels 1 and 2 and 33521B Channel 1. See
+[Supported Models](../core/supported-models.md) for the Product Live scope.
+
+Create a UTF-8 CSV of at least eight samples with one numeric value per row
+and no header. Values must be finite and within `[-1, 1]`. Use a name that
+starts with an ASCII letter and contains at most 12 letters, digits, or
+underscores. A CSV may contain at most 16,000,000 samples. Upload with the
+selected output off, then configure playback using the loaded name.
+
+```console
+wavegen-tool upload-arbitrary --name WAVE_A --file wave-a.csv --dry-run
+wavegen-tool list-arbitrary-memory --simulate
+wavegen-tool configure-arbitrary --name WAVE_A --sample-rate-hz 1000000 --amplitude-vpp 1 --dry-run
+```
+
+Upload only stores the segment. Configuration selects it and leaves the
+output off. Arb playback uses Sa/s and the instrument's current filter
+settings. Core checks the instrument's free points and accounts for 128-point
+allocation. A duplicate name is rejected. To remove **all** volatile segments
+and sequences on the selected channel, use
+`wavegen-tool clear-arbitrary-memory --simulate --confirm-clear`. Clear turns
+off the selected output and reloads the default Arbitrary waveform.
+For a loaded file shown as a path in the catalog, use its base name without
+the extension in playback or Sequence steps. Matching is case-insensitive,
+and an ambiguous base name is rejected.
+
+Use `configure-arbitrary-sequence --file sequence.json` with a version 1
+document. For example, upload each named segment before applying this
+configuration.
+
+```json
+{
+  "version": 1,
+  "name": "TEST_SEQ",
+  "sample_rate_hz": 1000000,
+  "amplitude_vpp": 1,
+  "offset_v": 0,
+  "load": "50",
+  "trigger_source": "bus",
+  "steps": [
+    {"waveform": "WAVE_A", "play_control": "repeat", "repeat_count": 3},
+    {"waveform": "WAVE_B", "play_control": "onceWaitTrig"},
+    {"waveform": "WAVE_C", "play_control": "repeatTilTrig"}
+  ]
+}
+```
+
+A sequence accepts 1–512 steps. Each channel has space for 512 steps across
+its stored sequences. Use `once` for one playback, `repeat` with
+`repeat_count` from 1 to 1,000,000, `onceWaitTrig` to wait after playing, or
+`repeatTilTrig` to repeat until triggered. The marker is fixed to
+`lowAtStart`. For external triggering, set `trigger_source` to `"external"`
+and optionally set `trigger_slope` to `"negative"` or `"positive"`
+(default). With Bus, an explicit `wavegen-tool trigger` sends the
+instrument-wide trigger. Turn the output on only through the separate
+`output` command.
+
+Use `--dry-run` to validate local input and inspect the plan without VISA.
+Memory availability and loaded references are checked when executing against a
+device or simulator. For several simulated operations sharing a volatile
+catalog, use the Worker in simulate mode because each Direct CLI
+`--simulate` invocation starts a fresh simulator. In Worker requests, pass
+CSV as an absolute Worker-host path in `arguments.path` and submit the
+Sequence object in `arguments.document`.
+
 ## Frequency List Sweep
 
 The Direct CLI provides:
@@ -674,8 +746,7 @@ uv run wavegen-tool configure-sine-list-sweep `
 
 Square List Sweep adds duty cycle; Ramp List Sweep adds symmetry. Pulse, PRBS,
 arbitrary, External, Timer, and Manual-triggered lists, per-point dwell, list
-files, stored lists, and markers are outside the Direct CLI surface. List Sweep
-is not a Worker command.
+files, stored lists, and custom List Sweep markers are outside the Direct CLI surface.
 
 ## Output and Trigger
 
@@ -718,6 +789,31 @@ uv run wavegen-tool output `
 
 `--state {on,off}` is required. Output-on is never implicit; review the
 configured signal and physical load before explicitly selecting `on`.
+
+### `configure-sync` and `sync-output`
+
+The front-panel Sync connector has one instrument-wide ON/OFF state. Both
+commands leave the main CH1/CH2 output states alone.
+
+```powershell
+uv run wavegen-tool configure-sync --dry-run --model keysight-33512b --source-channel 2 --mode carrier --polarity inverted
+uv run wavegen-tool sync-output --simulate --state on --json
+```
+
+`configure-sync` requires `--source-channel 1|2`, `--mode normal|carrier`,
+and `--polarity normal|inverted`. Use CH1 on a single-channel model.
+Configuration verifies Sync OFF before applying the settings and again during
+readback. `sync-output --state on|off` sets and verifies Sync independently
+of its configuration. Neither command takes `--channel`.
+
+Both commands support `--simulate` and `--json`. Only configuration supports
+`--dry-run`. Each Direct CLI simulation starts with fresh state. Use a
+simulated Worker to retain Sync settings across commands. Instrument readback
+reports connector state and settings. Carrier timing depends on the active
+waveform and operating mode.
+
+Product Live supports explicit Sync OFF. For live Sync configuration or Sync ON,
+use the Direct CLI [contributor validation workflow](../CONTRIBUTING.md#real-live).
 
 ### `trigger`
 
@@ -836,34 +932,16 @@ Worker startup validates admission but does not open a live resource or
 identify an instrument. A `ready` lifecycle event means the loopback HTTP plane
 is serving; it does not mean that physical hardware is connected or identified.
 
-The authoritative Worker command set is:
+See the [Worker contract](../contracts/wavegen-worker-contract.md) for the 30
+domain commands and their request fields. Worker command names use kebab-case
+and request argument fields use snake_case. Selected-channel results retain
+Core's integer `channel`, defaulting to 1. A Bus `trigger` applies instrument-wide.
 
-- `identify`, `status`, `readback-advanced`, and `read-errors`;
-- `configure-sine`, `configure-square`, `configure-ramp`,
-  `configure-triangle`, `configure-pulse`, `configure-dc`, `configure-noise`,
-  and `configure-prbs`;
-- the four ordinary sine/square/ramp/triangle sweep commands;
-- `output`.
-
-The Worker does not expose Direct CLI resource listing, `trigger`,
-`configure-output`, List Sweep, arbitrary SCPI, modulation/burst commands, or
-any other unlisted command. Worker command names use kebab-case and request
-argument fields use snake_case.
-
-`status`, `readback-advanced`, all listed `configure-*` commands, and `output` accept optional
-integer `channel`, defaulting to 1. Core validates the model-specific channel
-count. The two-channel 33510B and 33512B hardware-free paths accept Channels 1
-and 2; 33512B Product Live also admits both channels. The one-channel 33521B
-rejects Channel 2. `identify` and `read-errors` do not accept `channel`.
-Selected-channel Worker results retain the canonical Core `channel` field.
-
-Live Worker write safety is narrower than Direct CLI invocation:
-
-- identify/status/read-errors/readback-advanced do not require `allow_output_writes`;
-- `configure-*` requires Worker startup with `--allow-output-writes`;
-- output-off is always allowed;
-- output-on requires both `--allow-output-writes` and per-request
-  `confirm_output=true`.
+Live waveform configuration, Sync configuration, and trigger require Worker
+startup with `--allow-output-writes`. Simulated Arbitrary clear requires `confirm_clear: true`
+in the request. Main output ON and Sync ON require both
+`--allow-output-writes` and `confirm_output: true`. Read-only commands and
+explicit main output OFF and Sync OFF are available without the startup flag.
 
 The Worker has one active job slot. A second request is rejected as `busy`, or
 as `stopping` after a cooperative stop request.
@@ -966,6 +1044,92 @@ physical output off: send an explicit `output` command with
 
 ## CLI Validation Scripts
 
+These contributor scripts are separate from normal Product Live and require
+operator authorization before physical VISA. They reuse one Full case inventory.
+
+| Script | Purpose | Physical VISA |
+| --- | --- | --- |
+| `scripts/preflight-cli.ps1` | Offline capability, CLI dry-run and simulator recipes | Never |
+| `scripts/live-cli-check.ps1 -PlanOnly` | Review selected cases, exact intended connection and risks | Never |
+| `scripts/live-cli-check.ps1` | Interactive bounded physical validation | Only after separate approval |
+
+### Full validation modes
+
+`-Modes` is valid only with `-Suite full`. A Full run without `-Modes`
+selects every applicable family in canonical order. Use a single mode,
+a comma-separated list or a PowerShell array; duplicates run once. An invalid
+or empty selection, or Smoke combined with Modes, fails closed. Common safety,
+identity and final error-queue cases remain mandatory regardless of selection.
+
+| Mode | Coverage |
+| --- | --- |
+| `static` | Sine, Square, Ramp, Triangle, Pulse, DC, Noise, PRBS |
+| `modulation` | AM/DSSC, FM, PM, FSK, BPSK, PWM, Sum |
+| `burst` | Counted/Gated Burst and representative Bus, Timer, External trigger |
+| `sweep` | Linear and logarithmic sweeps with Immediate, Bus, Timer, and both External trigger edges |
+| `list-sweep` | Native frequency List and Bus triggers, CW recovery |
+| `output` | Output setup, controlled ON/OFF |
+| `arbitrary` | Synthetic CSV upload, memory inspection, playback and confirmed volatile Clear |
+| `sequence` | Native Bus/External sequences; once, repeat, onceWaitTrig, repeatTilTrig |
+
+33512B admits CH1/CH2 Arbitrary; 33521B admits CH1; 33510B has no
+Arbitrary capability. All-target Preflight selects applicable recipes per
+Core capabilities; explicitly requesting unsupported Arbitrary/Sequence on
+one target is refused. A selected subset PASS only proves that subset.
+Arbitrary/Sequence physical execution uses the contributor-only Core path,
+not ordinary CLI or Worker Product Live. Real Full alone can reset between
+independent cases, explicitly enable output for authorized observed trials,
+and must independently confirm safe OFF. The selected-channel volatile Clear
+erases ALL segments and sequences: PlanOnly identifies it, and Real Live
+requires the operator to type `CLEAR` separately at that exact step.
+
+### Script parameters
+
+| Parameter | Preflight | Live/PlanOnly | Default / limits |
+| --- | --- | --- | --- |
+| `-Suite` | Optional | Optional | `smoke`; other value `full` |
+| `-Modes` | Full only | Full only | All applicable families when omitted; comma-separated or array |
+| `-Target` | Optional | Required | Preflight `all`; Live one exact registered model |
+| `-Connection` | Not used | Required | `usb` or `tcpip`, matching Resource; Full requires `usb` |
+| `-Resource` | Not used | Required | Explicit operator-chosen VISA resource, including PlanOnly |
+| `-Backend` | Not used | Optional | `system`; Full requires System VISA |
+| `-PlanOnly` | Not used | Optional switch | No VISA manager, hardware I/O, reset or output |
+| `-Python` | Optional | Optional | `.\.venv\Scripts\python.exe`; Full requires project Python |
+| `-OutputRoot` | Optional | Optional | `.tmp_tests\cli_preflight` / `.tmp_tests\cli_live` |
+| `-DebugArtifacts` | Optional | Optional | Off; additional private diagnostics, sanitized public evidence |
+
+`Full` additionally requires Windows PowerShell Desktop and a clean unchanged
+Git HEAD. Normal Smoke does not require a clean Git tree. No script scans or
+infers the Resource; redirected stdin cannot approve a Real Live run.
+Before Real Full, check the oscilloscope/termination, external trigger source
+when relevant, output/grounding limits and manual safe-off contingency.
+
+Examples from the repository root:
+
+```powershell
+# Existing representative Sine smoke; no hardware.
+.\scripts\preflight-cli.ps1
+
+# Every applicable family on every registered model, hardware-free.
+.\scripts\preflight-cli.ps1 -Target all -Suite full
+
+# Focused hardware-free Full preflight.
+.\scripts\preflight-cli.ps1 -Target keysight-33512b -Suite full -Modes arbitrary,sequence
+
+# Hardware-free Full plan with explicit intended resource (not opened).
+.\scripts\live-cli-check.ps1 -Target keysight-33512b -Connection usb `
+  -Resource "$env:WAVEGEN_TOOL_RESOURCE" -Backend system `
+  -Suite full -Modes arbitrary,sequence -PlanOnly
+
+# Full plan of all applicable modes: omit -Modes.
+.\scripts\live-cli-check.ps1 -Target keysight-33521b -Connection usb `
+  -Resource "$env:WAVEGEN_TOOL_RESOURCE" -Suite full -PlanOnly
+```
+
+Remove `-PlanOnly` only during a separately authorized, interactive physical
+session. Do not treat Preflight, PlanOnly, simulation, selected-mode Real Live,
+or contributor-only Arbitrary cases as automatic Product Live admission.
+
 These scripts are contributor tools, not normal requirements for every pull
 request. See [Contributing](../CONTRIBUTING.md) for evidence acceptance and
 privacy policy.
@@ -985,9 +1149,9 @@ Full requires Windows PowerShell, the project `.venv/Scripts/python.exe`,
 identity exactly matches `-Target`. Add `-Suite full` to each command below for
 Full admission. Preflight Full, PlanOnly Full, and Real Full must all pass, with
 all required cases PASS, successful cleanup, outputs confirmed safe OFF, a clean
-final error queue, and successfully generated shareable evidence. This qualifies
-as formal admission evidence for that exact model and revision in the reference
-environment; scripts never promote models. 33510B remains validation-pending.
+final error queue, and successfully generated shareable evidence. For currently admitted Product Live families this is eligible evidence for a
+separate model/revision review, not automatic promotion. Contributor-only
+Arbitrary/Sequence results do not open Product Live; 33510B remains validation-pending.
 See [the full inventory and acceptance rules](../CONTRIBUTING.md#real-live).
 
 ### Hardware-free Preflight
@@ -1021,6 +1185,7 @@ The live runner parameters are:
 | Parameter | Behavior |
 | --- | --- |
 | `-Suite` | `smoke` (default) or `full` |
+| `-Modes` | Optional for Full only; single/comma-separated modes, default all applicable |
 | `-Target` | Required exact model ID; `all` is rejected |
 | `-Connection` | Required `usb` or `tcpip`, matching the resource prefix |
 | `-Resource` | Required exact operator-supplied resource |
@@ -1081,10 +1246,12 @@ the same runner can be invoked without `-PlanOnly`:
 ```
 
 Unlike normal CLI/Worker control, explicitly initiated Real Live Full performs
-a bounded `*RST` before **each independent case**, after confirming all outputs
-are OFF. It waits for `*OPC?`, rechecks safe-off state, and checks the bounded
-error queue. An unsafe or failed reset blocks subsequent cases; it never
-constitutes a passed hardware test. Real Full can explicitly turn output on
-for permitted observation cases; a scope observation and safe-off cleanup are
-required. Smoke, Preflight, PlanOnly, ordinary CLI, and Worker do **not** reset
-the instrument automatically.
+a bounded `*RST` before **each independent case**, after confirming the main
+outputs and Sync are OFF. It waits for `*OPC?`, turns Sync OFF again, verifies
+safe-off state and checks the bounded error queue. **Reset may briefly enable
+the Sync BNC. Check its wiring and disconnect sensitive equipment before
+confirming Real Full.** An unsafe or failed reset blocks subsequent cases.
+Real Full can explicitly turn main output on for permitted observation cases,
+which require a scope observation and safe-off cleanup.
+The dedicated Sync control case checks Sync ON then OFF by instrument readback.
+Only Real Live Full performs this reset.

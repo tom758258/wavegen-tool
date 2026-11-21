@@ -163,7 +163,16 @@ The runner never scans, guesses, infers, or auto-selects a resource. Resource
 discovery is a separate user-invoked Direct CLI diagnostic and is not part of
 contributor validation.
 
-Both runners accept `-Suite smoke|full`, defaulting to `smoke`. Smoke is a
+Both runners accept `-Suite smoke|full`, defaulting to `smoke`.
+For Full only, `-Modes` selects any of `static`, `modulation`, `burst`,
+`sweep`, `list-sweep`, `output`, `arbitrary`, or `sequence`.
+Omitting it selects all applicable families; Smoke plus Modes fails closed.
+A subset PASS is not complete admission evidence. The same filtered recipes
+are used by Preflight, PlanOnly, Real Live and reporting. Core-admitted
+Arbitrary/Sequence validation remains contributor-only and needs separate
+physical authorization. Before an actual volatile Clear, the operator must
+type `CLEAR` after a new destructive-action warning.
+ Smoke is a
 representative CLI Live sanity check: exact identity, stale-error drain,
 capability-driven per-channel Sine configuration/readback, output OFF before
 and after each channel, and a clean final error queue. Smoke never uses Output
@@ -186,10 +195,21 @@ never reset the instrument. Real Live Full alone performs a bounded `*RST`
 before every independent case, after safe-off checks; it never resets between
 steps of the same case.
 
-Full uses the same cases for Preflight, PlanOnly, and Real Live. CH1 covers
+Before confirming Real Full, check the front-panel Sync BNC wiring and
+disconnect sensitive equipment. A reset may briefly enable Sync. The runner
+verifies Sync OFF before each reset and forces it OFF again after `*OPC?`.
+Case cleanup and final cleanup require confirmed Sync OFF as well as the
+existing main-output checks. A failed Sync OFF check fails the run. The
+shareable report records the wiring confirmation and per-case Sync OFF
+readback outcomes before reset, after reset, and during cleanup.
+
+Full uses the same selected cases for Preflight, PlanOnly, and Real Live. CH1 covers
 all eight static waveforms, internal AM (normal and DSSC), FM, PM, FSK, BPSK,
 PWM, and Sum. It also covers Counted and Gated Burst, Linear and Logarithmic
 Sweeps, List Sweeps, output settings, and explicit output ON/OFF.
+The `output` family also includes Sync configuration and a dedicated Sync
+ON/OFF readback case on CH1. Dual-channel targets add a CH2 Sync source case.
+These cases check connector state and configuration by readback.
 The static cases include representative duty cycle, symmetry, phase, high/low
 levels, independent Pulse edges, and PRBS pattern. PWM uses a shared Pulse
 edge. The List transition checks Sine, Square, Ramp, Triangle, and CW recovery.
@@ -213,7 +233,9 @@ observation. For External Counted Burst, send one requested edge and look
 for three pulses followed by idle. For each Gate polarity, observe pulses
 while the gate is active and their cessation when it becomes inactive.
 Bus and Timer Burst and Sweep, including Sweep Hold/Return, and Bus List
-progression also require operator observation. Each observation has a fixed
+progression also require operator observation. The two External Sweep cases
+check for a steady start frequency, one sweep with hold and return after the
+selected edge, and no sweep on the opposite edge. Each observation has a fixed
 window. The runner turns the output off and checks cleanup before asking for
 `Yes` or `No`. Disable and disconnect the external source when prompted.
 Only the dedicated output-control case and confirmed observation cases use
