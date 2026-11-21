@@ -250,9 +250,9 @@ function Assert-FullReadback {
     param($Payload, [hashtable]$Expected, [int]$MainChannel = 0)
     if ($MainChannel -gt 0 -and $Expected['output_state'] -ceq 'off' -and
         'output_state' -in $Payload.PSObject.Properties.Name -and [string]$Payload.output_state -ceq 'on') {
-        $error = [InvalidOperationException]::new("Output OFF was not confirmed for CH${MainChannel}. Main output readback is ON.")
-        $error.Data['MainOutputOnChannel'] = $MainChannel
-        throw $error
+        $readbackError = [InvalidOperationException]::new("Output OFF was not confirmed for CH${MainChannel}. Main output readback is ON.")
+        $readbackError.Data['MainOutputOnChannel'] = $MainChannel
+        throw $readbackError
     }
     foreach ($key in $Expected.Keys) {
         if ($key -notin $Payload.PSObject.Properties.Name -or $null -eq $Payload.$key) { throw "Missing readback: $key." }
