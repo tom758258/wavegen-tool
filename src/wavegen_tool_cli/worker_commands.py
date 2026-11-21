@@ -115,7 +115,9 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "configure-sync": frozenset(SyncConfig.__dataclass_fields__),
     "sync-output": frozenset({"state", "confirm_output"}),
     "upload-arbitrary": frozenset({"name", "path"}),
-    "configure-arbitrary": frozenset({"name", "sample_rate_hz", "amplitude_vpp", "offset_v", "load"}),
+    "configure-arbitrary": frozenset({
+        "name", "sample_rate_hz", "amplitude_vpp", "offset_v", "load", "load_builtin",
+    }),
     "configure-arbitrary-sequence": frozenset({"document"}),
     "list-arbitrary-memory": frozenset(),
     "clear-arbitrary-memory": frozenset({"confirm_clear"}),
@@ -693,6 +695,8 @@ def _validate_arbitrary_fields(command: str, arguments: Mapping[str, object]) ->
                 "invalid_arguments", "path must be a Worker-host-local absolute path."
             )
     elif command == "configure-arbitrary":
+        if "load_builtin" in arguments and type(arguments["load_builtin"]) is not bool:
+            raise WorkerRequestValidationError("invalid_arguments", "load_builtin must be a boolean.")
         for field in ("sample_rate_hz", "amplitude_vpp", "offset_v"):
             if field in arguments and type(arguments[field]) not in (int, float):
                 raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a number.")

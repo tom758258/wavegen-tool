@@ -762,6 +762,10 @@ def _add_arbitrary_parsers(subparsers: Any) -> None:
             kind = "one-column CSV" if command == "upload-arbitrary" else "sequence JSON"
             parser.add_argument("--file", required=True, help=f"Local {kind} file.")
         if command == "configure-arbitrary":
+            parser.add_argument(
+                "--load-builtin", action="store_true",
+                help="Load a supported built-in waveform by name if it is absent from volatile memory.",
+            )
             parser.add_argument("--sample-rate-hz", required=True)
             parser.add_argument("--amplitude-vpp", required=True)
             parser.add_argument("--offset-v", default=0)
@@ -3622,6 +3626,8 @@ def _run_arbitrary(args: argparse.Namespace) -> int:
                 arguments[field] = getattr(args, field)
         if args.command == "upload-arbitrary":
             arguments["path"] = args.file
+        elif args.command == "configure-arbitrary" and args.load_builtin:
+            arguments["load_builtin"] = True
         elif args.command == "configure-arbitrary-sequence":
             arguments["document"] = read_arbitrary_sequence_file(args.file)
         if args.dry_run:

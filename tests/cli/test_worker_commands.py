@@ -351,6 +351,9 @@ def test_context_validation_rejects_invalid_contexts(context, worker_mode):
         ("configure_triangle_sweep", {}, "unsupported_command"),
         ("status", {"extra": True}, "invalid_arguments"),
         ("configure-sine", {"frequency_hz": 1000}, "invalid_arguments"),
+        ("configure-arbitrary", {
+            "name": "SINC", "sample_rate_hz": 1e6, "amplitude_vpp": 1, "load_builtin": "true",
+        }, "invalid_arguments"),
         (
             "configure-sine-sweep",
             {

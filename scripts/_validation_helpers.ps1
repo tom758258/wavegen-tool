@@ -798,6 +798,13 @@ function Get-FullValidationInventory {
             (New-Step @('clear-arbitrary-memory', '--confirm-clear') @{ output_state = 'off' } @{ output_state = 'off' }),
             (New-Step @('list-arbitrary-memory'))
         )
+        $builtinArgs = @('configure-arbitrary', '--name', 'SINC', '--load-builtin', '--sample-rate-hz', '1000000') + $voltage
+        $builtinReadback = @{ function = 'ARB'; sample_rate_hz = 1000000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50'; output_state = 'off' }
+        Add-Recipe 'arbitrary-builtin-select' 'arbitrary' @(
+            (New-Step $builtinArgs $builtinReadback @{ name = 'SINC'; output_state = 'off'; builtin_loaded = $true }),
+            (New-Step @('list-arbitrary-memory') @{} @{ names = @('INT:\BUILTIN\SINC.ARB') }),
+            (New-Step $builtinArgs $builtinReadback @{ name = 'SINC'; output_state = 'off'; builtin_loaded = $false })
+        )
         Add-Recipe 'sequence-bus' 'sequence' @(
             $uploadB, $uploadC,
             (New-Step @('configure-arbitrary-sequence', '--file', $fixture.bus) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 4; trigger_source = 'bus'; output_state = 'off' })

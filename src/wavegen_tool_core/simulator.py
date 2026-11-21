@@ -7,6 +7,7 @@ from dataclasses import dataclass, field as dataclass_field
 import re
 import math
 
+from wavegen_tool_core._keysight_builtin import BUILTIN_ARBITRARY_PATHS
 from wavegen_tool_core.capabilities import capabilities_for_model_id
 from wavegen_tool_core.identity import (
     CANONICAL_MODEL_ID,
@@ -18,8 +19,9 @@ from wavegen_tool_core.identity import (
 SIMULATED_33521B_RESOURCE = "USB0::SIM::33521B::INSTR"
 _ARBITRARY_CAPACITY = 1_000_000
 _ARBITRARY_SEQUENCE_CAPACITY = 512
-_DEFAULT_ARBITRARY_NAME = r"INT:\BUILTIN\EXP_RISE.ARB"
+_DEFAULT_ARBITRARY_NAME = BUILTIN_ARBITRARY_PATHS["EXP_RISE"]
 _DEFAULT_ARBITRARY_POINTS = 40
+_BUILTIN_ARBITRARY_POINTS = 128  # Synthetic allocation for catalog operations.
 SIMULATED_33521B_IDN = "KEYSIGHT TECHNOLOGIES,33521B,SIM000001,1.0"
 
 
@@ -637,6 +639,16 @@ class SimulatedResource:
         prefix_ch = f"{ch_num}"
 
         source = f"SOURce{prefix_ch}"
+        if command.startswith(f"MMEMory:LOAD:DATA{prefix_ch} "):
+            path = command.split(" ", 1)[1].strip('"')
+            if path not in BUILTIN_ARBITRARY_PATHS.values():
+                raise ValueError("Unknown simulated built-in Arbitrary file.")
+            self._check_arbitrary_duplicate(ch_state, path)
+            if ch_state.arbitrary_free_points < _BUILTIN_ARBITRARY_POINTS:
+                self.state.error_queue.append('-225,"Out of memory"')
+                return
+            ch_state.arbitrary_points[path] = _BUILTIN_ARBITRARY_POINTS
+            return
         if command == f"{source}:DATA:VOLatile:CLEar":
             ch_state.clear_arbitrary_memory()
             return
@@ -1058,6 +1070,7 @@ class SimulatedResource:
             return str(capabilities.max_arbitrary_sample_rate_hz)
 
         responses = {
+            f"{source}:FUNCtion:ARBitrary?": f'"{ch_state.selected_arbitrary or ""}"',
             f"{source}:FUNCtion:ARBitrary:SRATe?": _format_number(ch_state.arbitrary_sample_rate_hz),
             f"OUTPut{prefix_ch}?": "1" if ch_state.output_enabled else "0",
             f"OUTPut{prefix_ch}:SYNC:MODE?": ch_state.sync_mode,

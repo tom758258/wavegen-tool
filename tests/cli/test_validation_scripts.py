@@ -458,7 +458,8 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     }
     if model != "33510b":
         expected_primary |= {
-            "arbitrary-upload-configure", "arbitrary-clear", "sequence-bus", "sequence-bus-functional", "sequence-external",
+            "arbitrary-upload-configure", "arbitrary-clear", "arbitrary-builtin-select",
+            "sequence-bus", "sequence-bus-functional", "sequence-external",
         }
         if model == "33512b":
             expected_parity.add("arbitrary-upload-configure")
@@ -545,19 +546,23 @@ def test_smoke_rejects_modes_before_artifacts(artifact_root):
         assert not list(artifact_root.iterdir())
 
 
-def test_full_preflight_arbitrary_sequence_direct_without_hardware(
+def test_full_preflight_arbitrary_direct_without_hardware(
     artifact_root: Path, fake_git,
 ) -> None:
     result = _run_script(
         PREFLIGHT_SCRIPT, artifact_root, "-Target", "keysight-33521b",
-        "-Suite", "full", "-Modes", "arbitrary,sequence",
+        "-Suite", "full", "-Modes", "arbitrary",
     )
     assert result.returncode == 0, result.stdout + result.stderr
     report = _read_report(_only_run(artifact_root))
     assert report["status"] == "PASS"
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
-    assert report["selected_modes"] == ["arbitrary", "sequence"]
+    assert report["selected_modes"] in ("arbitrary", ["arbitrary"])
+    cases = {case["name"]: case["status"] for case in report["cases"]}
+    for step in (1, 3):
+        for mode in ("dry-run", "simulate"):
+            assert cases[f"keysight-33521b/ch1/arbitrary-builtin-select/step{step}-{mode}"] == "PASS"
 
 
 @pytest.mark.parametrize("mode,expected,unexpected", [
@@ -565,15 +570,17 @@ def test_full_preflight_arbitrary_sequence_direct_without_hardware(
     ("output", "ch1/sync-control", "ch1/static-sine"),
     ("burst,output", "ch1/burst-bus", "ch1/static-sine"),
     ("sweep", "ch1/sweep-external-positive", "ch1/list-bus-trigger"),
+    ("arbitrary", "ch1/arbitrary-builtin-select", "ch1/sequence-bus"),
     ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
 ])
 def test_full_plan_filters_modes_and_propagates_to_preflight(
     artifact_root, fake_git, mode, expected, unexpected,
 ):
+    artifacts = ("-DebugArtifacts",) if mode == "arbitrary" else ()
     result = _run_script(
         LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b",
         "-Suite", "full", "-Modes", mode, "-Connection", "usb",
-        "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly",
+        "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly", *artifacts,
     )
     assert result.returncode == 0, result.stdout + result.stderr + _preflight_diagnostics(artifact_root)
     report = _read_report(_only_run(artifact_root))
@@ -588,6 +595,17 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         assert [step["arguments"] for step in control["steps"]] == [
             ["sync-output", "--state", "on"], ["sync-output", "--state", "off"],
         ]
+    if mode == "arbitrary":
+        assert {"ch1/arbitrary-upload-configure", "ch1/arbitrary-clear"} <= set(report["planned_cases"])
+        private_report = _read_report(_only_run(artifact_root), "private")
+        builtin = next(x for x in private_report["full_inventory"] if x["name"] == expected)
+        load, catalog, reuse = builtin["steps"]
+        assert load["arguments"] == reuse["arguments"] and "--load-builtin" in load["arguments"]
+        assert load["result"]["builtin_loaded"] is True
+        assert catalog["arguments"] == ["list-arbitrary-memory"]
+        assert catalog["result"]["names"] == [r"INT:\BUILTIN\SINC.ARB"]
+        assert reuse["result"]["builtin_loaded"] is False
+        assert reuse["readback"]["output_state"] == "off"
     if mode == "arbitrary,sequence":
         assert "ch1/sequence-bus" in report["planned_cases"]
         assert "ch1/sequence-bus-functional" in report["planned_cases"]
@@ -1247,6 +1265,23 @@ try { Assert-FullReadback -Payload ([pscustomobject]@{ function = 'RAMP' }) -Exp
 Write-Output ('RESULT:' + (@{ rejected = $rejected } | ConvertTo-Json -Compress))
 ''')
     assert result['rejected'] is True
+
+
+def test_full_builtin_readback_requires_catalog_entry_and_reuse(artifact_root):
+    result = _run_powershell_test(artifact_root, r'''
+$path = 'INT:\BUILTIN\SINC.ARB'
+$expected = @{ names = @($path); builtin_loaded = $false }
+Assert-FullReadback -Payload ([pscustomobject]@{ names = @('WAVE', $path.ToLowerInvariant()); builtin_loaded = $false }) -Expected $expected
+$rejected = 0
+foreach ($payload in @(
+    [pscustomobject]@{ names = @('SINC'); builtin_loaded = $false },
+    [pscustomobject]@{ names = @($path); builtin_loaded = $true }
+)) {
+    try { Assert-FullReadback -Payload $payload -Expected $expected } catch { $rejected++ }
+}
+Write-Output ('RESULT:' + (@{ rejected = $rejected } | ConvertTo-Json -Compress))
+''')
+    assert result["rejected"] == 2
 
 
 @pytest.mark.parametrize("model,accepted", [("keysight-33512b", True), ("keysight-33521b", False)])

@@ -4758,6 +4758,21 @@ def test_arbitrary_cli_contributor_injection_is_explicit(monkeypatch, capsys, co
     assert calls[-1][2]["resource"] == USB_RESOURCE
 
 
+@pytest.mark.parametrize("mode", ["--dry-run", "--simulate"])
+def test_configure_builtin_arbitrary_cli(mode, capsys):
+    assert main([
+        "configure-arbitrary", "--name", "SINC", "--load-builtin", "--sample-rate-hz", "1000000",
+        "--amplitude-vpp", "1", mode, "--json",
+    ]) == ExitCode.SUCCESS
+    result = json.loads(capsys.readouterr().out)
+    assert result["name"] == "SINC" and result["output_state"] == "off"
+    if mode == "--dry-run":
+        assert result["executed"] is False and "builtin_loaded" not in result
+        assert r'MMEMory:LOAD:DATA1 "INT:\BUILTIN\SINC.ARB"' in result["commands"]
+    else:
+        assert result["executed"] is True and result["builtin_loaded"] is True
+
+
 def test_arbitrary_product_live_remains_blocked_before_visa(monkeypatch, capsys):
     from wavegen_tool_core import arbitrary
 
@@ -4767,6 +4782,7 @@ def test_arbitrary_product_live_remains_blocked_before_visa(monkeypatch, capsys)
     for command, additional in (
         ("list-arbitrary-memory", []),
         ("clear-arbitrary-memory", ["--confirm-clear"]),
+        ("configure-arbitrary", ["--name", "SINC", "--load-builtin", "--sample-rate-hz", "1000000", "--amplitude-vpp", "1"]),
     ):
         result = main([command, *additional, "--resource", USB_RESOURCE, "--json"])
         payload = json.loads(capsys.readouterr().out)
