@@ -1303,33 +1303,61 @@ def test_worker_independent_readback_preserves_simulated_sweep():
     runtime = WorkerRuntime(_worker_config())
     runtime.start()
     try:
+        settings = {
+            "start_frequency_hz": 1000, "stop_frequency_hz": 2000,
+            "spacing": "linear", "sweep_time_s": 1, "amplitude_vpp": 0.1,
+            "trigger_source": "external", "trigger_slope": " Negative ",
+            "verify_readback": True,
+        }
         sequence = [
-            ("configure-sine-sweep", {
-                "start_frequency_hz": 1000, "stop_frequency_hz": 2000,
-                "spacing": "linear", "sweep_time_s": 1, "amplitude_vpp": 0.1,
-                "verify_readback": True,
-            }),
-            ("readback-advanced", {}),
+            ("configure-sine-sweep", settings, "dry_run"),
+            ("configure-sine-sweep", settings, "simulate"),
+            ("readback-advanced", {}, "simulate"),
         ]
-        for index, (command, arguments) in enumerate(sequence):
+        for index, (command, arguments, mode) in enumerate(sequence):
             code, accepted = _request(
                 runtime, "POST", "/command",
-                _payload(command, arguments, job_id=f"readback-{index}"),
+                _payload(command, arguments, mode=mode, job_id=f"readback-{index}"),
             )
             assert code == 202
-            finished = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")
+            result = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")["result"]
             if command == "readback-advanced":
-                result = finished["result"]
                 assert result["advanced_mode"] == "SWEEP"
                 assert result["settings"]["start_frequency_hz"] == 1000
                 assert result["settings"]["stop_frequency_hz"] == 2000
+                assert result["settings"]["trigger_slope"] == "negative"
                 assert "readback_verified" not in result
+            elif mode == "dry_run":
+                assert result["executed"] is False
+                assert result["trigger_slope"] == "negative"
             else:
-                assert finished["result"]["readback_verified"] is True
+                assert result["trigger_slope"] == "negative"
+                assert result["readback_verified"] is True
         assert runtime.simulator_state.ch1.output_enabled is False
     finally:
         runtime.request_stop()
         assert runtime.wait(timeout=2.0)
+
+
+def test_worker_live_cannot_execute_external_sweep_with_write_permission(monkeypatch):
+    import wavegen_tool_core.visa as visa
+
+    def unexpected_visa_io(_library):
+        pytest.fail("External Sweep must be rejected before VISA I/O")
+
+    monkeypatch.setattr(visa, "create_resource_manager", unexpected_visa_io)
+    runtime = WorkerRuntime(_worker_config("live"))
+    job = _admitted_job(
+        runtime, "configure-square-sweep",
+        {"start_frequency_hz": 2, "stop_frequency_hz": 8, "spacing": "linear",
+         "sweep_time_s": 1, "amplitude_vpp": 0.1, "trigger_source": "external"},
+        mode="live",
+        expected_model_id=MODEL_ID,
+    )
+
+    with pytest.raises(WavegenError, match="outside Product Live feature scope") as error:
+        runtime._execute_command(job)
+    assert error.value.code == "unsupported_instrument"
 
 
 def test_worker_arbitrary_http_workflow_validates_files_in_accepted_jobs(tmp_path):

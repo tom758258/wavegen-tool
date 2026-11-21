@@ -3670,6 +3670,7 @@ def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None
     assert exit_code == ExitCode.SUCCESS
     assert payload["trigger_source"] == "timer"
     assert payload["trigger_timer_s"] == 1.0
+    assert payload["trigger_slope"] is None
     assert payload["commands"][-3:] == [
         "TRIGger1:TIMer 1",
         "TRIGger1:SOURce TIMer",
@@ -3677,11 +3678,30 @@ def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None
     ]
 
 
+@pytest.mark.parametrize("carrier", ["sine", "square", "ramp", "triangle"])
+def test_external_sweep_cli_dry_run_passes_slope(capsys, carrier):
+    exit_code = main([
+        f"configure-{carrier}-sweep", "--dry-run", "--json",
+        "--start-frequency-hz", "2", "--stop-frequency-hz", "8",
+        "--spacing", "linear", "--sweep-time-s", "1", "--amplitude-vpp", "0.1",
+        "--trigger-source", "external", "--trigger-slope", "negative",
+    ])
+
+    assert exit_code == ExitCode.SUCCESS
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["executed"] is False
+    assert payload["trigger_source"] == "external"
+    assert payload["trigger_slope"] == "negative"
+    assert "TRIGger1:SLOPe NEGative" in payload["commands"]
+
+
 @pytest.mark.parametrize(
     "extra",
     [
         ["--trigger-source", "timer"],
         ["--trigger-source", "bus", "--trigger-timer-s", "1"],
+        ["--trigger-slope", "positive"],
+        ["--trigger-source", "external", "--trigger-timer-s", "1"],
     ],
 )
 def test_sweep_cli_rejects_incomplete_trigger_options(capsys, extra) -> None:
@@ -3869,6 +3889,9 @@ def test_configure_sine_sweep_cli_channel_two_json(capsys):
             "1",
             "--amplitude-vpp",
             "0.1",
+            "--trigger-source",
+            "external",
+            "--verify-readback",
             "--json",
         ]
     )
@@ -3882,6 +3905,9 @@ def test_configure_sine_sweep_cli_channel_two_json(capsys):
     assert payload["start_frequency_hz"] == 1000.0
     assert payload["stop_frequency_hz"] == 10000.0
     assert payload["output_state"] == "off"
+    assert payload["trigger_source"] == "external"
+    assert payload["trigger_slope"] == "positive"
+    assert payload["readback_verified"] is True
 
 
 @pytest.mark.parametrize(

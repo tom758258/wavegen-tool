@@ -585,10 +585,14 @@ Required sweep options are:
 - `--sweep-time-s`
 
 Optional common options include `--hold-time-s`, `--return-time-s`,
-`--trigger-source {immediate,bus,timer}`, `--trigger-timer-s`, one voltage form,
-`--phase-deg`, and `--load`. Hold and return default to zero; trigger defaults
-to Immediate. A Timer interval must be 0.000001 through 8000 seconds and at
-least the complete sweep, hold, and return duration.
+`--trigger-source {immediate,bus,timer,external}`, `--trigger-timer-s`,
+`--trigger-slope {positive,negative}`, one voltage form, `--phase-deg`, and
+`--load`. Hold and return default to zero. The trigger source defaults to
+Immediate. A Timer interval must be 0.000001 through 8000 seconds and at least
+the complete sweep, hold, and return duration. Only External accepts
+`--trigger-slope`, which defaults to `positive` and is always programmed.
+Omit `--trigger-timer-s` with External. External Sweep is available in dry-run,
+simulation, and contributor validation.
 
 Square sweeps add `--duty-cycle-percent`, validated at the higher endpoint.
 Ramp sweeps add `--symmetry-percent`. Sweeps are selected-channel operations,
@@ -1062,7 +1066,7 @@ identity and final error-queue cases remain mandatory regardless of selection.
 | `static` | Sine, Square, Ramp, Triangle, Pulse, DC, Noise, PRBS |
 | `modulation` | AM/DSSC, FM, PM, FSK, BPSK, PWM, Sum |
 | `burst` | Counted/Gated Burst and representative Bus, Timer, External trigger |
-| `sweep` | Linear, logarithmic, Bus, Timer Sweep |
+| `sweep` | Linear and logarithmic sweeps with Immediate, Bus, Timer, and both External trigger edges |
 | `list-sweep` | Native frequency List and Bus triggers, CW recovery |
 | `output` | Output setup, controlled ON/OFF |
 | `arbitrary` | Synthetic CSV upload, memory inspection, playback and confirmed volatile Clear |

@@ -75,8 +75,10 @@ Result families add fields appropriate to the command:
 
 Waveform-specific additions include modulation, Sum, burst, duty-cycle,
 symmetry, pulse-edge, PRBS, sweep timing/spacing/trigger, and List Sweep fields
-only when that Direct CLI command exposes them. This contract does not freeze
-every internal result dataclass field.
+only when that Direct CLI command exposes them. Successful ordinary Sweep
+results and dry-run plans report `trigger_slope` as `"positive"` or
+`"negative"` for External and `null` for other sources.
+Internal result dataclasses may contain additional fields.
 
 For the existing Advanced Mode configuration commands, a successful executed
 operation with `--verify-readback` adds `readback_verified: true` to Direct CLI

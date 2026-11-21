@@ -30,6 +30,32 @@ def _sine_arguments() -> dict[str, object]:
 
 
 @pytest.mark.parametrize(
+    ("command", "arguments"),
+    [
+        ("configure-sine-sweep", {"trigger_source": "external", "trigger_slope": True}),
+        ("configure-sine-sweep", {"trigger_source": "external", "trigger_timer_s": 1}),
+        ("configure-sine-sweep", {"trigger_source": " ExTeRnAl ", "trigger_timer_s": None}),
+        ("configure-sine-list-sweep", {"frequencies_hz": [2, 8], "trigger_slope": "positive"}),
+    ],
+)
+def test_worker_rejects_invalid_external_sweep_arguments(command, arguments):
+    sweep = {
+        "start_frequency_hz": 2, "stop_frequency_hz": 8, "spacing": "linear", "sweep_time_s": 1,
+    } if command == "configure-sine-sweep" else {}
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload(
+                command,
+                {"amplitude_vpp": 0.1, **sweep, **arguments},
+                context={"mode": "dry_run", "planning_model_id": "keysight-33521b"},
+            ),
+            worker_mode="simulate",
+            allow_output_writes=True,
+        )
+    assert error.value.code == "invalid_arguments"
+
+
+@pytest.mark.parametrize(
     ("command", "arguments", "expected_arguments"),
     [
         ("identify", {}, {}),

@@ -513,7 +513,7 @@ def _burst_config_from_args(
 def _add_sweep_trigger_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--trigger-source",
-        choices=("immediate", "bus", "timer"),
+        choices=("immediate", "bus", "timer", "external"),
         default="immediate",
         help="Sweep trigger source (default: immediate).",
     )
@@ -521,6 +521,11 @@ def _add_sweep_trigger_arguments(parser: argparse.ArgumentParser) -> None:
         "--trigger-timer-s",
         default=None,
         help="Sweep Timer trigger interval in seconds.",
+    )
+    parser.add_argument(
+        "--trigger-slope",
+        choices=("positive", "negative"),
+        help="External Sweep trigger edge (default: positive).",
     )
 
 
@@ -2509,6 +2514,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2534,6 +2540,7 @@ def _run_sine_sweep_dry_run(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2596,6 +2603,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             duty_cycle_percent=args.duty_cycle_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2622,6 +2630,7 @@ def _run_square_sweep_dry_run(args: argparse.Namespace) -> int:
             duty_cycle_percent=args.duty_cycle_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2684,6 +2693,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             symmetry_percent=args.symmetry_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2710,6 +2720,7 @@ def _run_ramp_sweep_dry_run(args: argparse.Namespace) -> int:
             symmetry_percent=args.symmetry_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -2771,6 +2782,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
             **_validation_live_injection(args),
@@ -2796,6 +2808,7 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
     except WavegenError as exc:
@@ -4299,6 +4312,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             return_time_s=result.return_time_s,
             trigger_source=result.trigger_source,
             trigger_timer_s=result.trigger_timer_s,
+            trigger_slope=result.trigger_slope,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
             phase_deg=result.phase_deg,
@@ -4437,6 +4451,7 @@ def _sine_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4482,6 +4497,7 @@ def _square_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4528,6 +4544,7 @@ def _ramp_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -4574,6 +4591,7 @@ def _triangle_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
         "phase_deg": result.phase_deg,
@@ -5429,6 +5447,8 @@ def _human_control_success(action: str, result: Any) -> str:
         )
         if result.trigger_timer_s is not None:
             lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
+        elif result.trigger_slope is not None:
+            lines.append(f"Trigger slope: {result.trigger_slope}")
     if action in {
         "configure-square-sweep",
         "configure-ramp-sweep",
@@ -5450,6 +5470,8 @@ def _human_control_success(action: str, result: Any) -> str:
         )
         if result.trigger_timer_s is not None:
             lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
+        elif result.trigger_slope is not None:
+            lines.append(f"Trigger slope: {result.trigger_slope}")
         if action == "configure-square-sweep":
             lines.append(
                 f"Duty cycle (percent): {result.duty_cycle_percent}"

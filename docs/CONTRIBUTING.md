@@ -233,7 +233,9 @@ observation. For External Counted Burst, send one requested edge and look
 for three pulses followed by idle. For each Gate polarity, observe pulses
 while the gate is active and their cessation when it becomes inactive.
 Bus and Timer Burst and Sweep, including Sweep Hold/Return, and Bus List
-progression also require operator observation. Each observation has a fixed
+progression also require operator observation. The two External Sweep cases
+check for a steady start frequency, one sweep with hold and return after the
+selected edge, and no sweep on the opposite edge. Each observation has a fixed
 window. The runner turns the output off and checks cleanup before asking for
 `Yes` or `No`. Disable and disconnect the external source when prompted.
 Only the dedicated output-control case and confirmed observation cases use

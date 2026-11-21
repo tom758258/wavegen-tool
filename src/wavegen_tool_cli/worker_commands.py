@@ -369,6 +369,7 @@ for _command in _SWEEP_COMMANDS:
             "hold_time_s", "return_time_s", "trigger_timer_s",
         }) | {"frequencies_hz", "dwell_s"}
     )
+    _ARGUMENT_FIELDS[_command] |= {"trigger_slope"}
     _REQUIRED_ARGUMENT_FIELDS[_list_command] = frozenset({"frequencies_hz"})
     _DEFAULT_ARGUMENTS[_list_command] = {
         field: value for field, value in _DEFAULT_ARGUMENTS[_command].items()
@@ -600,8 +601,20 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
             raise WorkerRequestValidationError(
                 "invalid_arguments", "verify_readback requires an Advanced Mode option."
             )
-    if "trigger_source" in arguments and not isinstance(arguments["trigger_source"], str):
-        raise WorkerRequestValidationError("invalid_arguments", "trigger_source must be a string.")
+    for field in ("trigger_source", "trigger_slope"):
+        if field in arguments and not isinstance(arguments[field], str):
+            raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a string.")
+    trigger_source = arguments.get("trigger_source")
+    if (
+        command in _SWEEP_COMMANDS
+        and "trigger_timer_s" in arguments
+        and arguments["trigger_timer_s"] is None
+        and isinstance(trigger_source, str)
+        and trigger_source.strip().casefold() == "external"
+    ):
+        raise WorkerRequestValidationError(
+            "invalid_arguments", "Omit trigger_timer_s for external trigger source."
+        )
     for field in ("voltage_limits_enabled", "autorange_enabled"):
         if field in arguments and type(arguments[field]) is not bool:
             raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a boolean.")
@@ -720,7 +733,7 @@ def configuration_options(
             raise WorkerRequestValidationError(
                 "invalid_arguments", f"Invalid {field} object for {command}."
             ) from exc
-    for field in ("trigger_source", "trigger_timer_s", "dwell_s"):
+    for field in ("trigger_source", "trigger_timer_s", "trigger_slope", "dwell_s"):
         if field in arguments:
             options[field] = arguments[field]
     if readback and "verify_readback" in arguments:
