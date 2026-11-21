@@ -500,7 +500,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     sweep_names = {
         "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus",
         "sweep-sine-timer", "sweep-square-linear", "sweep-ramp-linear",
-        "sweep-triangle-linear",
+        "sweep-triangle-linear", "sweep-external-positive", "sweep-external-negative",
     }
     for case in primary:
         if case["name"].split("/", 1)[1] in sweep_names:
@@ -515,7 +515,8 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     assert observed == {
         "ch1/burst-bus", "ch1/burst-timer", "ch1/burst-external", "ch1/burst-external-negative",
         "ch1/burst-gated", "ch1/burst-gated-inverted", "ch1/sweep-sine-bus",
-        "ch1/sweep-sine-timer", "ch1/list-bus-trigger",
+        "ch1/sweep-sine-timer", "ch1/sweep-external-positive",
+        "ch1/sweep-external-negative", "ch1/list-bus-trigger",
     } | ({"ch1/sequence-bus-functional", "ch1/sequence-external"} if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
