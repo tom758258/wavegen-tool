@@ -22,8 +22,10 @@ from wavegen_tool_core.visa import (
     PMConfig,
     PWMConfig,
     SumConfig,
+    SyncConfig,
     dry_run_dc,
     dry_run_output,
+    dry_run_sync,
     dry_run_ramp_list_sweep,
     dry_run_sine_list_sweep,
     dry_run_square_list_sweep,
@@ -92,13 +94,13 @@ _STATIC_ADVANCED_FIELDS = {
 }
 _CONFIGURE_COMMANDS = (
     _SWEEP_COMMANDS | _LIST_SWEEP_COMMANDS | frozenset(_STATIC_ADVANCED_FIELDS)
-    | {"configure-dc", "configure-noise", "configure-output"}
+    | {"configure-dc", "configure-noise", "configure-output", "configure-sync"}
 )
 SUPPORTED_WORKER_COMMANDS = _CONFIGURE_COMMANDS | ARBITRARY_COMMANDS | {
-    "identify", "status", "read-errors", "readback-advanced", "output", "trigger",
+    "identify", "status", "read-errors", "readback-advanced", "output", "sync-output", "trigger",
 }
 _DRY_RUN_COMMANDS = _CONFIGURE_COMMANDS | ARBITRARY_COMMANDS
-_CHANNEL_COMMANDS = _DRY_RUN_COMMANDS | {"status", "readback-advanced", "output"}
+_CHANNEL_COMMANDS = (_DRY_RUN_COMMANDS - {"configure-sync"}) | {"status", "readback-advanced", "output"}
 _LIVE_WRITE_COMMANDS = _DRY_RUN_COMMANDS - {"list-arbitrary-memory"} | {"trigger"}
 
 _MODULATION_CONFIGS = {
@@ -110,6 +112,8 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "identify": frozenset(),
     "trigger": frozenset(),
     "configure-output": frozenset(OutputConfig.__dataclass_fields__),
+    "configure-sync": frozenset(SyncConfig.__dataclass_fields__),
+    "sync-output": frozenset({"state", "confirm_output"}),
     "upload-arbitrary": frozenset({"name", "path"}),
     "configure-arbitrary": frozenset({"name", "sample_rate_hz", "amplitude_vpp", "offset_v", "load"}),
     "configure-arbitrary-sequence": frozenset({"document"}),
@@ -272,6 +276,8 @@ _ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
 }
 _REQUIRED_ARGUMENT_FIELDS: dict[str, frozenset[str]] = {
     "read-errors": frozenset(),
+    "configure-sync": _ARGUMENT_FIELDS["configure-sync"],
+    "sync-output": frozenset({"state"}),
     "upload-arbitrary": frozenset({"name", "path"}),
     "configure-arbitrary": frozenset({"name", "sample_rate_hz", "amplitude_vpp"}),
     "configure-arbitrary-sequence": frozenset({"document"}),
@@ -460,7 +466,7 @@ def validate_worker_command_request(
                 command,
                 arguments,
                 validation_model_id,
-                channel=arguments["channel"],
+                channel=arguments.get("channel", 1),
             )
 
     return ValidatedWorkerCommand(
@@ -603,6 +609,11 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
         raise WorkerRequestValidationError("invalid_arguments", "frequencies_hz must be an array.")
     if command in ARBITRARY_COMMANDS:
         _validate_arbitrary_fields(command, arguments)
+    if command == "configure-sync":
+        try:
+            SyncConfig(**arguments)
+        except WaveformParameterError as exc:
+            raise WorkerRequestValidationError("invalid_arguments", str(exc)) from exc
 
     if command == "read-errors":
         max_reads = arguments["max_reads"]
@@ -610,14 +621,18 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
             raise WorkerRequestValidationError(
                 "invalid_arguments", "read-errors max_reads must be an integer from 1 to 100."
             )
-    elif command == "output":
-        if type(arguments["enabled"]) is not bool:
+    elif command in {"output", "sync-output"}:
+        if command == "output" and type(arguments["enabled"]) is not bool:
             raise WorkerRequestValidationError(
                 "invalid_arguments", "output enabled must be a boolean."
             )
+        if command == "sync-output" and arguments["state"] not in ("on", "off"):
+            raise WorkerRequestValidationError(
+                "invalid_arguments", "sync-output state must be on or off."
+            )
         if "confirm_output" in arguments and type(arguments["confirm_output"]) is not bool:
             raise WorkerRequestValidationError(
-                "invalid_arguments", "output confirm_output must be a boolean."
+                "invalid_arguments", f"{command} confirm_output must be a boolean."
             )
 
 
@@ -637,17 +652,21 @@ def _validate_live_write_safety(
             f"{command} requires allow_output_writes=True in live context.",
         )
 
-    if command != "output" or arguments["enabled"] is False:
+    enabling_output = (
+        (command == "output" and arguments["enabled"])
+        or (command == "sync-output" and arguments["state"] == "on")
+    )
+    if not enabling_output:
         return
     if not allow_output_writes:
         raise WorkerRequestValidationError(
             "live_write_not_allowed",
-            "live output enable requires allow_output_writes=True.",
+            f"live {command} enable requires allow_output_writes=True.",
         )
     if arguments.get("confirm_output") is not True:
         raise WorkerRequestValidationError(
             "output_confirmation_required",
-            "live output enable requires confirm_output=True.",
+            f"live {command} enable requires confirm_output=True.",
         )
 
 
@@ -793,7 +812,9 @@ def _validate_waveform_arguments(
     channel: int,
 ) -> None:
     try:
-        if command == "configure-output":
+        if command == "configure-sync":
+            dry_run_sync(model_id, SyncConfig(**arguments))
+        elif command == "configure-output":
             config = OutputConfig(**{key: value for key, value in arguments.items() if key != "channel"})
             dry_run_output(model_id, config, channel=channel)
         elif command == "configure-sine":

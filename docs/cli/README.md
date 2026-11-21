@@ -786,6 +786,31 @@ uv run wavegen-tool output `
 `--state {on,off}` is required. Output-on is never implicit; review the
 configured signal and physical load before explicitly selecting `on`.
 
+### `configure-sync` and `sync-output`
+
+The front-panel Sync connector has one instrument-wide ON/OFF state. Both
+commands leave the main CH1/CH2 output states alone.
+
+```powershell
+uv run wavegen-tool configure-sync --dry-run --model keysight-33512b --source-channel 2 --mode carrier --polarity inverted
+uv run wavegen-tool sync-output --simulate --state on --json
+```
+
+`configure-sync` requires `--source-channel 1|2`, `--mode normal|carrier`,
+and `--polarity normal|inverted`. Use CH1 on a single-channel model.
+Configuration verifies Sync OFF before applying the settings and again during
+readback. `sync-output --state on|off` sets and verifies Sync independently
+of its configuration. Neither command takes `--channel`.
+
+Both commands support `--simulate` and `--json`. Only configuration supports
+`--dry-run`. Each Direct CLI simulation starts with fresh state. Use a
+simulated Worker to retain Sync settings across commands. Instrument readback
+reports connector state and settings. Carrier timing depends on the active
+waveform and operating mode.
+
+Product Live supports explicit Sync OFF. For live Sync configuration or Sync ON,
+use the Direct CLI [contributor validation workflow](../CONTRIBUTING.md#real-live).
+
 ### `trigger`
 
 Send one instrument-wide IEEE-488.2 `*TRG` without waiting:
@@ -903,16 +928,16 @@ Worker startup validates admission but does not open a live resource or
 identify an instrument. A `ready` lifecycle event means the loopback HTTP plane
 is serving; it does not mean that physical hardware is connected or identified.
 
-See the [Worker contract](../contracts/wavegen-worker-contract.md) for the 28
+See the [Worker contract](../contracts/wavegen-worker-contract.md) for the 30
 domain commands and their request fields. Worker command names use kebab-case
 and request argument fields use snake_case. Selected-channel results retain
 Core's integer `channel`, defaulting to 1. A Bus `trigger` applies instrument-wide.
 
-Live waveform configuration and trigger require Worker startup with
-`--allow-output-writes`. Simulated Arbitrary clear requires `confirm_clear: true`
-in the request. Output-on requires both
+Live waveform configuration, Sync configuration, and trigger require Worker
+startup with `--allow-output-writes`. Simulated Arbitrary clear requires `confirm_clear: true`
+in the request. Main output ON and Sync ON require both
 `--allow-output-writes` and `confirm_output: true`. Read-only commands and
-explicit output-off are available without the startup flag.
+explicit main output OFF and Sync OFF are available without the startup flag.
 
 The Worker has one active job slot. A second request is rejected as `busy`, or
 as `stopping` after a cooperative stop request.
@@ -1217,10 +1242,12 @@ the same runner can be invoked without `-PlanOnly`:
 ```
 
 Unlike normal CLI/Worker control, explicitly initiated Real Live Full performs
-a bounded `*RST` before **each independent case**, after confirming all outputs
-are OFF. It waits for `*OPC?`, rechecks safe-off state, and checks the bounded
-error queue. An unsafe or failed reset blocks subsequent cases; it never
-constitutes a passed hardware test. Real Full can explicitly turn output on
-for permitted observation cases; a scope observation and safe-off cleanup are
-required. Smoke, Preflight, PlanOnly, ordinary CLI, and Worker do **not** reset
-the instrument automatically.
+a bounded `*RST` before **each independent case**, after confirming the main
+outputs and Sync are OFF. It waits for `*OPC?`, turns Sync OFF again, verifies
+safe-off state and checks the bounded error queue. **Reset may briefly enable
+the Sync BNC. Check its wiring and disconnect sensitive equipment before
+confirming Real Full.** An unsafe or failed reset blocks subsequent cases.
+Real Full can explicitly turn main output on for permitted observation cases,
+which require a scope observation and safe-off cleanup.
+The dedicated Sync control case checks Sync ON then OFF by instrument readback.
+Only Real Live Full performs this reset.

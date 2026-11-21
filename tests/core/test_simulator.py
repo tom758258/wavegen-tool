@@ -45,6 +45,30 @@ from wavegen_tool_core import (
 from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 
 
+def test_simulator_sync_state_is_global_and_settings_are_per_source_channel():
+    state = Simulated33521BState(model_id="keysight-33512b", output_enabled=True)
+    session = SimulatedResource(state)
+    session.write("OUTPut1:SYNC:POLarity INVerted")
+    session.write("OUTPut:SYNC:SOURce CH2")
+    session.write("OUTPut2:SYNC:MODE CARRier")
+    session.write("OUTPut:SYNC ON")
+    assert session.query("OUTPut:SYNC?") == "1"
+    assert session.query("OUTPut:SYNC:SOURce?") == "CH2"
+    assert session.query("OUTPut1:SYNC:MODE?") == "NORM"
+    assert session.query("OUTPut1:SYNC:POLarity?") == "INV"
+    assert session.query("OUTPut2:SYNC:MODE?") == "CARR"
+    assert session.query("OUTPut2:SYNC:POLarity?") == "NORM"
+    session.write("OUTPut:SYNC OFF")
+    assert session.query("OUTPut:SYNC?") == "0"
+    assert session.query("OUTPut1?") == "1"
+    assert session.query("OUTPut2?") == "0"
+
+    single_channel = SimulatedResource(Simulated33521BState())
+    with pytest.raises(ValueError, match="channel count"):
+        single_channel.write("OUTPut:SYNC:SOURce CH2")
+    assert single_channel.query("OUTPut:SYNC:SOURce?") == "CH1"
+
+
 def _factory_for(
     state: Simulated33521BState,
 ) -> Callable[[str], SimulatedResourceManager]:

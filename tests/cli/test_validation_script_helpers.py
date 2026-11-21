@@ -559,7 +559,8 @@ def test_full_mode_resolution_and_family_filtering() -> None:
     data = json.loads(result.stdout)
     assert data["modes"] == ["static", "burst", "output"]
     assert set(data["families"]) == {
-        "inspection", "static", "burst", "output-config", "output-control"
+        "inspection", "static", "burst", "output-config", "output-control",
+        "sync-configuration", "sync-control",
     }
     assert data["count"] > 0
 

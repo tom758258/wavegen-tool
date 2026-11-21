@@ -30,6 +30,8 @@ class SimulatedChannelState:
     output_enabled: bool = False
     output_load: str = "50"
     output_polarity: str = "normal"
+    sync_mode: str = "NORM"
+    sync_polarity: str = "NORM"
     voltage_limit_low: float = -5.0
     voltage_limit_high: float = 5.0
     voltage_limit_enabled: bool = False
@@ -163,6 +165,8 @@ class Simulated33521BState:
         error_queue: list[str] | None = None,
         model_id: str = CANONICAL_MODEL_ID,
     ) -> None:
+        self.sync_enabled = False
+        self.sync_source_channel = 1
         self.channels = {
             1: SimulatedChannelState(
                 output_enabled=output_enabled,
@@ -589,6 +593,14 @@ class SimulatedResource:
         return ch, self.state.channels[ch]
 
     def _apply_write(self, command: str) -> None:
+        if command in {"OUTPut:SYNC ON", "OUTPut:SYNC OFF"}:
+            self.state.sync_enabled = command.endswith(" ON")
+            return
+        if command in {"OUTPut:SYNC:SOURce CH1", "OUTPut:SYNC:SOURce CH2"}:
+            source_channel = int(command[-1])
+            self._target_channel_and_state(f"OUTPut{source_channel}")
+            self.state.sync_source_channel = source_channel
+            return
         if command == "*TRG":
             for channel in self.state.channels.values():
                 if (
@@ -724,6 +736,10 @@ class SimulatedResource:
         exact_updates = {
             f"OUTPut{prefix_ch} OFF": ("output_enabled", False),
             f"OUTPut{prefix_ch} ON": ("output_enabled", True),
+            f"OUTPut{prefix_ch}:SYNC:MODE NORMal": ("sync_mode", "NORM"),
+            f"OUTPut{prefix_ch}:SYNC:MODE CARRier": ("sync_mode", "CARR"),
+            f"OUTPut{prefix_ch}:SYNC:POLarity NORMal": ("sync_polarity", "NORM"),
+            f"OUTPut{prefix_ch}:SYNC:POLarity INVerted": ("sync_polarity", "INV"),
             f"OUTPut{prefix_ch}:LOAD 50": ("output_load", "50"),
             f"OUTPut{prefix_ch}:LOAD INF": ("output_load", "high-z"),
             f"OUTPut{prefix_ch}:POLarity NORMal": ("output_polarity", "normal"),
@@ -982,6 +998,10 @@ class SimulatedResource:
         raise ValueError("Unsupported simulated SCPI write.")
 
     def _query_response(self, command: str) -> str:
+        if command == "OUTPut:SYNC?":
+            return "1" if self.state.sync_enabled else "0"
+        if command == "OUTPut:SYNC:SOURce?":
+            return f"CH{self.state.sync_source_channel}"
         if command == "*IDN?":
             return self.state.idn_response
 
@@ -1040,6 +1060,8 @@ class SimulatedResource:
         responses = {
             f"{source}:FUNCtion:ARBitrary:SRATe?": _format_number(ch_state.arbitrary_sample_rate_hz),
             f"OUTPut{prefix_ch}?": "1" if ch_state.output_enabled else "0",
+            f"OUTPut{prefix_ch}:SYNC:MODE?": ch_state.sync_mode,
+            f"OUTPut{prefix_ch}:SYNC:POLarity?": ch_state.sync_polarity,
             f"SOURce{prefix_ch}:FUNCtion?": ch_state.active_function,
             f"SOURce{prefix_ch}:FREQuency?": _format_number(ch_state.frequency_hz),
             f"SOURce{prefix_ch}:FREQuency:MODE?": ch_state.frequency_mode,

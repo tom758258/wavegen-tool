@@ -58,6 +58,11 @@ Result families add fields appropriate to the command:
 - waveform, sweep, List Sweep, output-configuration, and output-control
   results identify `action`, selected `channel`, normalized request values,
   output state, and relevant waveform-specific fields.
+- `configure-sync` and `sync-output` report the connector's `sync_state`
+  and ordered `commands`. Configuration also reports `source_channel`,
+  `sync_mode`, and `polarity`. Successful execution includes
+  `readback_verified: true`. A Sync configuration dry-run includes
+  `executed: false`, the planning model, and `canonical_model_id`.
 - Arbitrary results identify `action`, selected `channel`, and
   `status` (`"planned"` or `"completed"`). Depending on the operation,
   they report waveform name and sample count, playback and step metadata,
@@ -91,6 +96,7 @@ The public Direct CLI machine surface includes:
   `configure-noise`, and `configure-prbs`;
 - sine, square, ramp, and triangle ordinary sweep and List Sweep commands;
 - `configure-output`, `output`, and `trigger`;
+- `configure-sync` and `sync-output`;
 - `upload-arbitrary`, `configure-arbitrary`, `configure-arbitrary-sequence`,
   `list-arbitrary-memory`, and `clear-arbitrary-memory`;
 - `worker`, `send-command`, `worker-status`, `wait-ready`, and `worker-stop`.
@@ -106,7 +112,7 @@ Worker events are `ready`, `job_accepted`, `job_started`, `job_finished`,
 exact integer-token `schema_version: 3`, `service: "wavegen-tool"`, `run_id`,
 and a UTC timestamp.
 
-All 28 Worker domain commands are async jobs. Every normal, controllable
+All 30 Worker domain commands are async jobs. Every normal, controllable
 termination emits `job_finished` with `state`, boolean `ok`, and required
 `result` and `error`. The terminal timestamp is fixed and shared with the
 HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and
