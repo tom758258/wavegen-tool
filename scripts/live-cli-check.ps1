@@ -426,6 +426,7 @@ function Invoke-FullLiveCases {
             $externalInput = if ($observation) { $observation['input'] }
             $reasons = @()
             $cleanupReasons = @()
+            $mainOnAttempted = $false
             try {
                 Set-FullSafeOff -Name "$($recipe.name)/before" -Channel $channel
                 foreach ($other in @($Channels | Where-Object { $_ -ne $channel })) {
@@ -485,6 +486,7 @@ function Invoke-FullLiveCases {
                         Write-Host 'Sending Bus trigger.'
                     }
                     $commandChannel = if (Test-ValidationCommandUsesChannel $command) { $channel } else { 0 }
+                    if ($turningOn) { $mainOnAttempted = $true }
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
                     Assert-FullReadback -Payload $result -Expected $step.result
                     if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
@@ -518,7 +520,7 @@ function Invoke-FullLiveCases {
                 $reasons += $_.Exception.Message
                 if ($_.Exception.Data['TerminationUnconfirmed']) { $unconfirmedChannels += $channel }
             } finally {
-                $cleanupOrder = if ($recipe.family -eq 'sync-control') { @('sync', 'main') } else { @('main', 'sync') }
+                $cleanupOrder = if ($mainOnAttempted) { @('main', 'sync') } else { @('sync', 'main') }
                 $mainOffConfirmed = $false
                 foreach ($output in $cleanupOrder) {
                     if ($output -eq 'sync') {
