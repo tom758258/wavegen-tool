@@ -220,6 +220,7 @@ foreach ($targetProfile in $targets) {
             foreach ($step in $recipe.steps) {
                 $stepIndex += 1
                 $command = $step.arguments[0]
+                $usesChannel = Test-ValidationCommandUsesChannel $command
                 $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence')) {
                     @('dry-run')
                 } elseif ($command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory')) {
@@ -231,7 +232,7 @@ foreach ($targetProfile in $targets) {
                     $invocation = $null
                     try {
                         $args = @($step.arguments) + @("--$mode", '--model', $modelId, '--json')
-                        if ($command -ne 'trigger') { $args += @('--channel', [string]$recipe.channel) }
+                        if ($usesChannel) { $args += @('--channel', [string]$recipe.channel) }
                         $invocation = Invoke-WavegenJson -Name $name -CliArguments $args -ArtifactDirectory (Join-Path $targetDirectory (New-SafeCaseName $name))
                         if ($invocation.Process.exit_code -ne 0) {
                             $detail = $invocation.Process['cli_error']
@@ -240,11 +241,20 @@ foreach ($targetProfile in $targets) {
                         if ($null -ne $invocation.ParseError) { throw $invocation.ParseError }
                         $payload = $invocation.Payload
                         if ($payload.success -ne $true -or $payload.action -cne $command -or $payload.mode -cne $mode) { throw 'Unexpected command result.' }
-                        if ($command -ne 'trigger' -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
+                        if ($usesChannel -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
                         if ($mode -eq 'dry-run') {
                             if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or @($payload.commands).Count -eq 0) { throw 'Invalid hardware-free plan.' }
                         } elseif ($payload.simulated -ne $true -or $payload.model -cne $capabilityModel) { throw 'Unexpected simulator identity or mode.' }
-                        if ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') { throw 'Configuration did not leave output off.' }
+                        if ($command -in @('configure-sync', 'sync-output')) {
+                            foreach ($key in $step.result.Keys) {
+                                if ($mode -eq 'dry-run' -and $key -eq 'readback_verified') { continue }
+                                if ($key -notin $payload.PSObject.Properties.Name -or $payload.$key -cne $step.result[$key]) {
+                                    throw "Unexpected Sync result for $key."
+                                }
+                            }
+                        } elseif ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') {
+                            throw 'Configuration did not leave output off.'
+                        }
                         if ('--verify-readback' -in $step.arguments -and $mode -eq 'simulate' -and $payload.readback_verified -ne $true) {
                             throw 'Advanced Mode simulator readback was not verified.'
                         }

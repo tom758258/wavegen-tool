@@ -570,6 +570,11 @@ function New-ArbitraryValidationFixtures {
     }
 }
 
+function Test-ValidationCommandUsesChannel {
+    param([string]$Command)
+    return $Command -notin @('trigger', 'configure-sync', 'sync-output')
+}
+
 function Get-FullValidationInventory {
     param(
         [Parameter(Mandatory = $true)][int[]]$Channels,
@@ -740,6 +745,13 @@ function Get-FullValidationInventory {
         (New-Step @('output', '--state', 'off') @{ output_state = 'off' })
     ) $true
 
+    # Source-specific Sync configuration steps are filled in per channel below.
+    Add-Recipe 'sync-configuration' 'sync-configuration' @() $true
+    Add-Recipe 'sync-control' 'sync-control' @(
+        (New-Step @('sync-output', '--state', 'on') @{} @{ sync_state = 'on'; readback_verified = $true }),
+        (New-Step @('sync-output', '--state', 'off') @{} @{ sync_state = 'off'; readback_verified = $true })
+    )
+
     if ($null -ne $ArbitraryFixtures) {
         $fixture = $ArbitraryFixtures
         $uploadA = New-Step @('upload-arbitrary', '--name', $fixture.nameA, '--file', $fixture.csv) @{} @{ sample_count = 16; output_state = 'off' }
@@ -807,13 +819,24 @@ function Get-FullValidationInventory {
             $mode = switch ($recipe.family) {
                 'output-config' { 'output' }
                 'output-control' { 'output' }
+                'sync-configuration' { 'output' }
+                'sync-control' { 'output' }
                 default { $recipe.family }
             }
             if ($mode -ne 'inspection' -and $mode -notin $Modes) { continue }
             if ($channel -ne 1 -and -not $recipe.parity) { continue }
+            $steps = $recipe.steps
+            if ($recipe.family -eq 'sync-configuration') {
+                $syncMode = if ($channel -eq 1) { 'normal' } else { 'carrier' }
+                $polarity = if ($channel -eq 1) { 'normal' } else { 'inverted' }
+                $steps = @(New-Step @('configure-sync', '--source-channel', [string]$channel, '--mode', $syncMode, '--polarity', $polarity) @{} @{
+                    source_channel = $channel; sync_mode = $syncMode; polarity = $polarity
+                    sync_state = 'off'; readback_verified = $true
+                })
+            }
             [pscustomobject]@{
                 name = "ch${channel}/$($recipe.name)"; family = $recipe.family
-                channel = $channel; required = $true; steps = $recipe.steps
+                channel = $channel; required = $true; steps = $steps
                 observation = $recipe.observation
             }
         }

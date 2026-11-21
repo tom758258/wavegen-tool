@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
 import sys
@@ -25,6 +26,8 @@ from wavegen_tool_core import (
     PMConfig,
     PWMConfig,
     SumConfig,
+    SyncConfig,
+    SyncDryRunResult,
     ErrorQueueQueryError,
     IdnQueryError,
     MalformedIdnError,
@@ -45,6 +48,7 @@ from wavegen_tool_core import (
     configure_dc,
     configure_noise,
     configure_output,
+    configure_sync,
     configure_prbs,
     configure_pulse,
     configure_ramp,
@@ -62,6 +66,7 @@ from wavegen_tool_core import (
     dry_run_dc,
     dry_run_noise,
     dry_run_output,
+    dry_run_sync,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
@@ -85,6 +90,7 @@ from wavegen_tool_core import (
     resolve_voltage_inputs,
     send_bus_trigger,
     set_output,
+    set_sync_output,
 )
 from wavegen_tool_core.identity import (
     CANONICAL_MODEL_ID,
@@ -1782,6 +1788,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit exactly one JSON object.",
     )
 
+    sync_config_parser = subparsers.add_parser(
+        "configure-sync", help="Configure the front-panel Sync connector with Sync off.",
+        allow_abbrev=False,
+    )
+    sync_output_parser = subparsers.add_parser(
+        "sync-output", help="Explicitly set the front-panel Sync connector on or off.",
+        allow_abbrev=False,
+    )
+    for sync_parser in (sync_config_parser, sync_output_parser):
+        _add_simulate_argument(sync_parser)
+        _add_validation_support_policy_argument(sync_parser)
+        sync_parser.add_argument(
+            "--resource",
+            help="USB or TCPIP/LAN VISA resource; defaults to WAVEGEN_TOOL_RESOURCE for live use.",
+        )
+        sync_parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
+        sync_parser.add_argument(
+            "--model", choices=_REGISTERED_MODEL_IDS,
+            help="Model for hardware-free use (default: keysight-33521b).",
+        )
+        sync_parser.add_argument("--json", action="store_true", dest="json_output")
+    sync_config_parser.add_argument("--dry-run", action="store_true", help="Preview SCPI without VISA I/O.")
+    sync_config_parser.add_argument("--source-channel", type=int, choices=(1, 2), required=True)
+    sync_config_parser.add_argument("--mode", choices=("normal", "carrier"), required=True)
+    sync_config_parser.add_argument("--polarity", choices=("normal", "inverted"), required=True)
+    sync_output_parser.add_argument("--state", choices=("on", "off"), required=True)
+
     trigger_parser = subparsers.add_parser(
         "trigger",
         help="Send one instrument-wide IEEE-488.2 bus trigger without waiting.",
@@ -2048,6 +2081,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-noise",
         "configure-prbs",
         "configure-output",
+        "configure-sync",
     } | ARBITRARY_COMMANDS
     validation_only_live_commands = {
         "identify",
@@ -2055,9 +2089,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "readback-advanced",
         "read-errors",
         "output",
+        "sync-output",
         "trigger",
     }
-    standalone_simulator_model_commands = {"status", "readback-advanced", "output", "trigger"}
+    standalone_simulator_model_commands = {
+        "status", "readback-advanced", "output", "sync-output", "trigger",
+    }
     if (
         args.command in waveform_commands
         and args.dry_run
@@ -2101,11 +2138,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(
                 "--model requires --validation-allow-pending-live-support"
             )
+    if args.command == "configure-sync" and args.validation_allow_pending_live_support:
+        if args.dry_run or args.simulate or args.model is None:
+            parser.error("Sync validation policy requires an explicit --model in live mode")
     if (
         args.command in waveform_commands
         and not args.dry_run
         and not args.simulate
-        and args.model != CANONICAL_MODEL_ID
+        and args.model not in (None, CANONICAL_MODEL_ID)
         and not getattr(args, "validation_allow_pending_live_support", False)
     ):
         parser.error(
@@ -2129,7 +2169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
     if (
-        args.command in {"identify", "status", "readback-advanced", "output", "read-errors", "trigger"}
+        args.command in validation_only_live_commands
         and not args.simulate
         and args.resource is None
     ):
@@ -2172,6 +2212,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_configure_prbs(args)
     if args.command == "configure-output":
         return _run_configure_output(args)
+    if args.command in {"configure-sync", "sync-output"}:
+        return _run_sync(args)
     if args.command == "output":
         return _run_output(args)
     if args.command == "trigger":
@@ -3583,6 +3625,24 @@ def _run_arbitrary(args: argparse.Namespace) -> int:
     return _run_control(args, operation)
 
 
+def _run_sync(args: argparse.Namespace) -> int:
+    def operation() -> Any:
+        model = args.model or CANONICAL_MODEL_ID
+        if args.command == "configure-sync":
+            config = SyncConfig(args.source_channel, args.mode, args.polarity)
+            if args.dry_run:
+                return dry_run_sync(model, config)
+        resource, factory = (
+            _simulated_target(model) if args.simulate else (args.resource, None)
+        )
+        options = _validation_live_injection(args) | _factory_injection(args.simulate, factory)
+        if args.command == "configure-sync":
+            return configure_sync(resource, config, args.backend, **options)
+        return set_sync_output(resource, args.state, args.backend, **options)
+
+    return _run_control(args, operation)
+
+
 def _run_configure_output(args: argparse.Namespace) -> int:
     if args.dry_run:
         return _run_output_dry_run(args)
@@ -4167,6 +4227,8 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         if not result["executed"]:
             payload["mode"] = "dry-run"
         return payload
+    if isinstance(result, SyncDryRunResult):
+        return dict(asdict(result), success=True, action=action, mode="dry-run", error=None)
     payload = {
         "success": True,
         "action": action,
@@ -4176,6 +4238,19 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
         "model": result.identity.model,
         "error": None,
     }
+    if action in {"configure-sync", "sync-output"}:
+        payload.update(
+            sync_state=result.sync_state,
+            commands=list(result.commands),
+            readback_verified=result.readback_verified,
+        )
+        if action == "configure-sync":
+            payload.update(
+                source_channel=result.source_channel,
+                sync_mode=result.sync_mode,
+                polarity=result.polarity,
+            )
+        return payload
     if action != "trigger":
         payload["output_state"] = result.output_state
     if action in {
@@ -4931,6 +5006,9 @@ def _control_error_payload(
         "output_state": error.output_state,
         "error": _error_text(error),
     }
+    if action in {"configure-sync", "sync-output"}:
+        payload.pop("output_state")
+        payload["sync_state"] = None
     if action in {
         "configure-sine",
         "configure-sine-sweep",
@@ -4959,7 +5037,7 @@ def _control_internal_error_payload(action: str) -> dict[str, object]:
         "transport": None,
         "manufacturer": None,
         "model": None,
-        "output_state": None,
+        ("sync_state" if action in {"configure-sync", "sync-output"} else "output_state"): None,
         "error": "internal_error: unexpected internal failure",
     }
 
@@ -5235,6 +5313,15 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
 
 
 def _human_control_success(action: str, result: Any) -> str:
+    if action in {"configure-sync", "sync-output"}:
+        planned = isinstance(result, SyncDryRunResult)
+        lines = [f"Sync {'plan' if planned else 'readback'} for {result.model if planned else result.identity.model}."]
+        if action == "configure-sync":
+            lines.append(
+                f"Source CH{result.source_channel}, mode {result.sync_mode}, polarity {result.polarity}."
+            )
+        lines.append(f"Sync state: {result.sync_state}")
+        return "\n".join([*lines, *result.commands])
     if action in ARBITRARY_COMMANDS:
         lines = [f"{action} {result['status']} on channel {result['channel']}."]
         for field, label in (

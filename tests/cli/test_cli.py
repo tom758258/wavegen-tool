@@ -13,6 +13,62 @@ TCPIP_RESOURCE = "TCPIP0::192.0.2.10::inst0::INSTR"
 VALID_IDN = "Keysight Technologies,33521B,MY00000000,1.00-0.00-0.00"
 
 
+@pytest.mark.parametrize("missing", ["--source-channel", "--mode", "--polarity"])
+def test_configure_sync_cli_requires_complete_settings(capsys, missing):
+    args = ["--source-channel", "1", "--mode", "normal", "--polarity", "normal"]
+    index = args.index(missing)
+    del args[index:index + 2]
+    with pytest.raises(SystemExit) as error:
+        main(["configure-sync", "--dry-run", "--json", *args])
+    assert error.value.code == 2
+    output = capsys.readouterr()
+    assert not output.out and missing in output.err
+
+
+@pytest.mark.parametrize("execution", ["dry-run", "simulate"])
+def test_configure_sync_cli_machine_result_uses_separate_sync_fields(capsys, monkeypatch, execution):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("Hardware-free Sync must not create a VISA resource manager")
+
+    monkeypatch.setattr(visa, "create_resource_manager", forbidden)
+    assert main([
+        "configure-sync", f"--{execution}", "--model", "keysight-33512b", "--json",
+        "--source-channel", "2", "--mode", "carrier", "--polarity", "inverted",
+    ]) == ExitCode.SUCCESS
+    result = json.loads(capsys.readouterr().out)
+    assert result["mode"] == execution
+    assert result["source_channel"] == 2 and result["sync_mode"] == "carrier"
+    assert result["polarity"] == "inverted" and result["sync_state"] == "off"
+    assert "channel" not in result and "output_state" not in result
+    if execution == "dry-run":
+        assert result["executed"] is False
+        assert "readback_verified" not in result
+    else:
+        assert result["readback_verified"] is True
+
+
+def test_configure_sync_cli_errors_on_unsupported_source(capsys):
+    code = main([
+        "configure-sync", "--dry-run", "--json",
+        "--source-channel", "2", "--mode", "normal", "--polarity", "normal",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert code != ExitCode.SUCCESS
+    assert payload["success"] is False and payload["sync_state"] is None
+
+
+def test_sync_output_cli_requires_explicit_global_state(capsys):
+    for extra in ([], ["--state", "invalid"], ["--state", "off", "--channel", "1"]):
+        with pytest.raises(SystemExit) as error:
+            main(["sync-output", "--simulate", "--json", *extra])
+        assert error.value.code == 2
+        assert not capsys.readouterr().out
+    for state in ("on", "off"):
+        assert main(["sync-output", "--simulate", "--json", "--state", state]) == ExitCode.SUCCESS
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["sync_state"] == state and payload["readback_verified"] is True
+
+
 def test_configure_sine_counted_burst_dry_run_json(capsys) -> None:
     exit_code = main(
         [

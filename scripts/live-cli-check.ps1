@@ -88,7 +88,11 @@ function Get-PlannedLiveCases {
     param([Parameter(Mandatory = $true)][int[]]$Channels)
 
     if ($Suite -eq 'full') {
-        return @('identity', 'baseline-error-drain') + @($Channels | ForEach-Object { "ch$_/initial-safe-off" }) + @($fullInventory.name) + @($Channels | ForEach-Object { "ch$_/final-safe-off" }) + @('final-error-queue')
+        return @('identity', 'baseline-error-drain', 'sync/initial-safe-off') +
+            @($Channels | ForEach-Object { "ch$_/initial-safe-off" }) + @($fullInventory.name) +
+            @('sync/final-safe-off') +
+            @($Channels | ForEach-Object { "ch$_/final-safe-off" }) +
+            @('final-error-queue')
     }
     $planned = [System.Collections.ArrayList]::new()
     [void]$planned.Add("identity")
@@ -316,6 +320,12 @@ function Set-FullSafeOff {
     }
 }
 
+function Set-FullSyncSafeOff {
+    param([string]$Name)
+    $payload = Invoke-FullCommand -Name $Name -Arguments @('sync-output', '--state', 'off')
+    Assert-FullReadback -Payload $payload -Expected @{ sync_state = 'off'; readback_verified = $true }
+}
+
 function Read-LiveConfirmation {
     param([string]$Prompt)
 
@@ -333,7 +343,9 @@ function Get-FullCaseEvidence {
         channel = $Recipe.channel
         family = $Recipe.family
         required = $Recipe.required
-        verification_method = if ($Recipe.observation) { 'operator-observed-output' } else { 'cli-result-and-instrument-status' }
+        verification_method = if ($Recipe.observation) { 'operator-observed-output' }
+            elseif ($Recipe.family -in @('sync-configuration', 'sync-control')) { 'sync-readback-and-main-output-status' }
+            else { 'cli-result-and-instrument-status' }
         evidence_level = $null
         cleanup_status = 'not-run'
         manual_observation = if ($Recipe.observation) {
@@ -351,6 +363,11 @@ function Invoke-FullLiveCases {
     $unconfirmedChannels = @()
 
     try {
+        $name = 'sync/initial-safe-off'
+        $reasons = @()
+        try { Set-FullSyncSafeOff -Name $name }
+        catch { $reasons += "Sync OFF was not confirmed. $($_.Exception.Message)"; $CanRun = $false }
+        Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         foreach ($channel in $Channels) {
             $name = "ch${channel}/initial-safe-off"
             $reasons = @()
@@ -417,11 +434,14 @@ function Invoke-FullLiveCases {
                     if ($turningOn -and -not $observation -and $recipe.family -cne 'output-control') {
                         throw 'Output ON is restricted to output-control and confirmed observation cases.'
                     }
+                    if ($command -eq 'sync-output' -and $step.arguments[2] -eq 'on' -and $recipe.family -cne 'sync-control') {
+                        throw 'Sync ON is restricted to its dedicated control case.'
+                    }
                     if ($command -eq 'trigger' -and $observation) {
                         Start-Sleep -Seconds 2
                         Write-Host 'Sending Bus trigger.'
                     }
-                    $commandChannel = if ($command -eq 'trigger') { 0 } else { $channel }
+                    $commandChannel = if (Test-ValidationCommandUsesChannel $command) { $channel } else { 0 }
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
                     Assert-FullReadback -Payload $result -Expected $step.result
                     if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
@@ -455,6 +475,8 @@ function Invoke-FullLiveCases {
                 $reasons += $_.Exception.Message
                 if ($_.Exception.Data['TerminationUnconfirmed']) { $unconfirmedChannels += $channel }
             } finally {
+                try { Set-FullSyncSafeOff -Name "$($recipe.name)/cleanup-sync" }
+                catch { $cleanupReasons += "Sync OFF was not confirmed. $($_.Exception.Message)" }
                 try {
                     Set-FullSafeOff -Name "$($recipe.name)/cleanup" -Channel $channel
                     Assert-FullErrorQueue -Name "$($recipe.name)/cleanup-errors"
@@ -480,13 +502,21 @@ function Invoke-FullLiveCases {
                 }
             }
             if (-not $reasons.Count) {
-                $evidence.evidence_level = if ($observation -or $recipe.family -eq 'output-control') { 'live-functional' } else { 'live-config' }
+                $evidence.evidence_level = if ($observation -or $recipe.family -in @('output-control', 'sync-control')) { 'live-functional' } else { 'live-config' }
             }
             Add-LiveCase -Cases $cases -Name $recipe.name -Evidence $evidence `
                 -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
             if ($reasons.Count) { $CanRun = $false }
         }
     } finally {
+        $name = 'sync/final-safe-off'
+        $reasons = @()
+        try { Set-FullSyncSafeOff -Name $name }
+        catch { $reasons += "Sync OFF was not confirmed. $($_.Exception.Message)" }
+        if ($unconfirmedChannels.Count) {
+            $reasons += 'Sync OFF remains unconfirmed after incomplete subprocess termination.'
+        }
+        Add-LiveCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
         foreach ($channel in $Channels) {
             $name = "ch${channel}/final-safe-off"
             $reasons = @()
@@ -759,6 +789,10 @@ Write-Host "  - Best-effort OFF cleanup is attempted after failures."
 Write-Host "  - No resource scanning or guessing is performed."
 if ($Suite -eq 'full' -and -not $PlanOnly) {
     Write-Host "  - Real Full resets the instrument before every independent case; all outputs are checked OFF."
+    Write-Host '  - WARNING: *RST may briefly enable the front-panel Sync BNC. Check its wiring and disconnect any sensitive equipment before continuing.'
+    if ('output' -in $applicableModes) {
+        Write-Host '  - The Sync control case explicitly enables Sync before turning it OFF.'
+    }
 } else {
     Write-Host "  - No reset, preset or recall is performed."
 }
@@ -791,7 +825,10 @@ if ($PlanOnly) {
 Write-Host ""
 $confirmed = $false
 try {
-    $confirmed = Read-LiveConfirmation 'Press Enter to begin Live validation, or Ctrl+C to cancel'
+    $prompt = if ($Suite -eq 'full') {
+        'Press Enter to confirm the Sync BNC wiring is safe for reset and Sync ON, or Ctrl+C to cancel'
+    } else { 'Press Enter to begin Live validation, or Ctrl+C to cancel' }
+    $confirmed = Read-LiveConfirmation $prompt
 } catch {
     Write-Host 'Live confirmation was unavailable.'
 } finally {
@@ -870,6 +907,9 @@ if ($identityReasons.Count -eq 0) {
     Add-LiveCase -Cases $cases -Name "baseline-error-drain" -Status "N/A" -FailureReasons "Identity did not pass."
     Add-RemainingChannelCases -Cases $cases -Channels $channels -Reason "Identity did not pass."
     if ($Suite -eq 'full') {
+        foreach ($stage in @('initial-safe-off', 'final-safe-off')) {
+            Add-LiveCase -Cases $cases -Name "sync/$stage" -Status 'N/A' -FailureReasons 'Identity did not pass; writes are not admitted.'
+        }
         foreach ($channel in $channels) {
             foreach ($stage in @('initial-safe-off', 'final-safe-off')) {
                 Add-LiveCase -Cases $cases -Name "ch${channel}/$stage" -Status 'N/A' -FailureReasons 'Identity did not pass; writes are not admitted.'

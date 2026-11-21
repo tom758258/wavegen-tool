@@ -1421,6 +1421,34 @@ def test_worker_parity_forwards_advanced_operations(command, arguments, state_fi
     assert runtime.simulator_state.ch1.output_enabled is False
 
 
+def test_worker_sync_dispatch_uses_shared_core_for_plan_and_simulator():
+    runtime = WorkerRuntime(_worker_config())
+    arguments = {"source_channel": 1, "mode": "normal", "polarity": "inverted"}
+    runtime.start()
+    try:
+        def submit(command, args, mode="simulate"):
+            code, response = _request(
+                runtime, "POST", "/command", _payload(command, args, mode=mode),
+            )
+            assert code == 202
+            return _wait_for_job(runtime, response["worker_job_id"], "succeeded")["result"]
+
+        plan = submit("configure-sync", arguments, mode="dry_run")
+        assert plan["executed"] is False
+        assert runtime.simulator_state is None
+        configured = submit("configure-sync", arguments)
+        assert configured["sync_state"] == "off"
+        assert configured["commands"] == plan["commands"]
+        for state in ("on", "off"):
+            result = submit("sync-output", {"state": state})
+            assert result["sync_state"] == state and result["readback_verified"]
+            assert runtime.simulator_state.sync_enabled is (state == "on")
+            assert runtime.simulator_state.ch1.output_enabled is False
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
 def test_worker_parity_dry_run_plans_list_trigger():
     runtime = WorkerRuntime(_worker_config())
     job = _admitted_job(

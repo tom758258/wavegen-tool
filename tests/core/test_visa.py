@@ -40,6 +40,7 @@ from wavegen_tool_core.visa import (
     PMConfig,
     PWMConfig,
     SumConfig,
+    SyncConfig,
     IDN_QUERY,
     LIVE_VERIFY_TIMEOUT_MS,
     ResourceListEntry,
@@ -51,6 +52,7 @@ from wavegen_tool_core.visa import (
     configure_ramp_sweep,
     configure_sine,
     configure_output,
+    configure_sync,
     configure_sine_list_sweep,
     configure_sine_sweep,
     configure_square,
@@ -61,6 +63,7 @@ from wavegen_tool_core.visa import (
     dry_run_dc,
     dry_run_noise,
     dry_run_output,
+    dry_run_sync,
     dry_run_prbs,
     dry_run_pulse,
     dry_run_ramp,
@@ -84,6 +87,7 @@ from wavegen_tool_core.visa import (
     resolve_voltage_inputs,
     send_bus_trigger,
     set_output,
+    set_sync_output,
 )
 
 
@@ -5723,9 +5727,154 @@ def test_configure_output_independent_channel_guard_fails_before_write():
         )
     assert session.writes == []
 
+@pytest.mark.parametrize("source,mode,polarity", [
+    (True, "normal", "normal"),
+    ("1", "normal", "normal"),
+    (1, "marker", "normal"),
+    (1, "normal", None),
+])
+def test_sync_config_rejects_invalid_fields(source, mode, polarity):
+    with pytest.raises(WaveformParameterError):
+        SyncConfig(source, mode, polarity)
+
+
+@pytest.mark.parametrize("model,channel", [
+    ("keysight-33521b", 1), ("keysight-33512b", 2), ("keysight-33510b", 2),
+])
+def test_sync_dry_run_keeps_global_and_source_channel_commands_separate(model, channel):
+    plan = dry_run_sync(model, SyncConfig(channel, "carrier", "inverted"))
+    assert plan.commands == (
+        "OUTPut:SYNC OFF",
+        f"OUTPut:SYNC:SOURce CH{channel}",
+        f"OUTPut{channel}:SYNC:MODE CARRier",
+        f"OUTPut{channel}:SYNC:POLarity INVerted",
+        "OUTPut:SYNC OFF",
+    )
+    assert plan.canonical_model_id == model
+    assert plan.executed is False
+    assert plan.sync_state == "off"
+
+
+def test_configure_sync_verifies_off_before_settings_and_reads_every_setting():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={
+            "OUTPut:SYNC?": "0",
+            "OUTPut:SYNC:SOURce?": "CH2",
+            "OUTPut2:SYNC:MODE?": "CARR",
+            "OUTPut2:SYNC:POLarity?": "INV",
+        },
+    )
+    result = configure_sync(
+        USB_RESOURCE, SyncConfig(2, "carrier", "inverted"),
+        resource_manager_factory=RecordingFactory(FakeManager(session)),
+    )
+    assert result.sync_state == "off"
+    assert result.readback_verified
+    assert result.source_channel == 2
+    assert tuple(session.writes) == result.commands
+    sync_events = [
+        event for event in session.events if event[0] in {"query", "write"} and ":SYNC" in event[1]
+    ]
+    assert sync_events == [
+        ("write", "OUTPut:SYNC OFF"),
+        ("query", "OUTPut:SYNC?"),
+        ("write", "OUTPut:SYNC:SOURce CH2"),
+        ("write", "OUTPut2:SYNC:MODE CARRier"),
+        ("write", "OUTPut2:SYNC:POLarity INVerted"),
+        ("write", "OUTPut:SYNC OFF"),
+        ("query", "OUTPut:SYNC?"),
+        ("query", "OUTPut:SYNC:SOURce?"),
+        ("query", "OUTPut2:SYNC:MODE?"),
+        ("query", "OUTPut2:SYNC:POLarity?"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "model,channel,guard,expected_model,error",
+    [
+        ("33521B", 2, "0", None, WaveformParameterError),
+        ("33512B", 1, "1", None, WaveformVerificationError),
+        ("33512B", 1, "unknown", None, WaveformVerificationError),
+        ("33512B", 1, "0", "keysight-33521b", UnsupportedInstrumentError),
+        ("33510B", 1, "0", None, UnsupportedInstrumentError),
+    ],
+)
+def test_configure_sync_fails_before_write_on_unsupported_scope(
+    model, channel, guard, expected_model, error,
+):
+    session = FakeSession(
+        response=f"Keysight Technologies,{model},MY00000000,1.00",
+        responses_by_command={"SOURce1:FREQuency:COUPle:STATe?": guard},
+    )
+    with pytest.raises(error):
+        configure_sync(
+            USB_RESOURCE, SyncConfig(channel, "normal", "normal"), expected_model_id=expected_model,
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == []
+
+
+@pytest.mark.parametrize("failure", ["write", "query", "mismatch", "initial-off"])
+def test_configure_sync_preserves_failure_and_attempts_safe_off(failure):
+    class FaultySyncSession(FakeSession):
+        def write(self, command):
+            super().write(command)
+            if command == "OUTPut1:SYNC:MODE NORMal" and failure == "write":
+                raise TimeoutError
+
+        def query(self, command):
+            if command == "OUTPut:SYNC?" and failure == "initial-off":
+                return "1"
+            if command == "OUTPut:SYNC:SOURce?" and failure == "mismatch":
+                return "CH2"
+            if command == "OUTPut:SYNC:SOURce?" and failure == "query":
+                raise TimeoutError
+            return super().query(command)
+
+    session = FaultySyncSession(responses_by_command={"OUTPut:SYNC?": "0"})
+    with pytest.raises(VisaWriteError if failure == "write" else WaveformVerificationError) as error:
+        configure_sync(
+            USB_RESOURCE, SyncConfig(1, "normal", "normal"),
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes.count("OUTPut:SYNC OFF") == (
+        2 if failure in {"write", "initial-off"} else 3
+    )
+    assert session.writes[-1] == "OUTPut:SYNC OFF"
+    if failure == "initial-off":
+        assert session.writes == ["OUTPut:SYNC OFF", "OUTPut:SYNC OFF"]
+        assert "Sync OFF was not confirmed" in error.value.cleanup_errors[0]
+    else:
+        assert not error.value.cleanup_errors
+
+
+def test_sync_output_on_uses_guard_but_safe_off_remains_available():
+    session = FakeSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={"SOURce1:TRACk?": "ON", "OUTPut:SYNC?": "0"},
+    )
+    factory = RecordingFactory(FakeManager(session))
+    with pytest.raises(WaveformVerificationError):
+        set_sync_output(USB_RESOURCE, "on", resource_manager_factory=factory)
+    assert session.writes == []
+    result = set_sync_output(USB_RESOURCE, "off", resource_manager_factory=factory)
+    assert result.sync_state == "off" and result.readback_verified
+    assert session.writes == ["OUTPut:SYNC OFF"]
+
+
+def test_sync_output_failed_enable_attempts_off():
+    session = FakeSession(responses_by_command={"OUTPut:SYNC?": "0"})
+    with pytest.raises(WaveformVerificationError, match="expected on"):
+        set_sync_output(
+            USB_RESOURCE, "on", resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == ["OUTPut:SYNC ON", "OUTPut:SYNC OFF"]
+
+
 def test_full_validation_reset_checks_outputs_around_bounded_opc() -> None:
     session = FakeSession(
-        responses_by_command={"OUTPut1?": "0", "*OPC?": "1"},
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1", "OUTPut:SYNC?": "0"},
     )
     manager = FakeManager(session)
     visa_module.reset_for_live_full_validation(
@@ -5734,10 +5883,14 @@ def test_full_validation_reset_checks_outputs_around_bounded_opc() -> None:
         resource_manager_factory=RecordingFactory(manager),
     )
 
-    assert session.queries == [
-        IDN_QUERY, "OUTPut1?", "*OPC?", "OUTPut1?",
+    operations = [event for event in session.events if event[0] in {"query", "write"}]
+    assert operations == [
+        ("query", IDN_QUERY), ("query", "OUTPut1?"),
+        ("write", "OUTPut:SYNC OFF"), ("query", "OUTPut:SYNC?"),
+        ("write", "*RST"), ("query", "*OPC?"),
+        ("write", "OUTPut:SYNC OFF"), ("query", "OUTPut:SYNC?"),
+        ("query", "OUTPut1?"),
     ]
-    assert session.writes == ["*RST"]
     assert session.close_calls == manager.close_calls == 1
 
 
@@ -5745,7 +5898,9 @@ def test_full_validation_reset_checks_outputs_around_bounded_opc() -> None:
     ("responses", "writes"),
     [
         ({"OUTPut1?": "1", "*OPC?": "1"}, []),
-        ({"OUTPut1?": "0", "*OPC?": "0"}, ["*RST"]),
+        ({"OUTPut1?": "0", "OUTPut:SYNC?": "1"}, ["OUTPut:SYNC OFF", "OUTPut:SYNC OFF"]),
+        ({"OUTPut1?": "0", "OUTPut:SYNC?": "0", "*OPC?": "0"},
+         ["OUTPut:SYNC OFF", "*RST", "OUTPut:SYNC OFF"]),
     ],
 )
 def test_full_validation_reset_fails_closed_on_output_or_opc(responses, writes) -> None:
@@ -5767,7 +5922,7 @@ def test_full_validation_reset_fails_when_output_turns_on_after_reset() -> None:
             return super().query(command)
 
     session = PostResetOutputOn(
-        responses_by_command={"OUTPut1?": "0", "*OPC?": "1"},
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1", "OUTPut:SYNC?": "0"},
     )
     with pytest.raises(WaveformVerificationError):
         visa_module.reset_for_live_full_validation(
@@ -5775,7 +5930,27 @@ def test_full_validation_reset_fails_when_output_turns_on_after_reset() -> None:
             expected_model_id="keysight-33521b",
             resource_manager_factory=RecordingFactory(FakeManager(session)),
         )
-    assert session.writes == ["*RST"]
+    assert session.writes == ["OUTPut:SYNC OFF", "*RST", "OUTPut:SYNC OFF"]
+
+
+def test_full_validation_reset_fails_when_sync_will_not_turn_off_after_reset():
+    class SyncOnAfterReset(FakeSession):
+        def query(self, command):
+            if command == "OUTPut:SYNC?" and "*RST" in self.writes:
+                self.responses_by_command[command] = "1"
+            return super().query(command)
+
+    session = SyncOnAfterReset(
+        responses_by_command={"OUTPut1?": "0", "*OPC?": "1", "OUTPut:SYNC?": "0"},
+    )
+    with pytest.raises(WaveformVerificationError, match="expected off") as error:
+        visa_module.reset_for_live_full_validation(
+            USB_RESOURCE,
+            expected_model_id="keysight-33521b",
+            resource_manager_factory=RecordingFactory(FakeManager(session)),
+        )
+    assert session.writes == ["OUTPut:SYNC OFF", "*RST", "OUTPut:SYNC OFF", "OUTPut:SYNC OFF"]
+    assert "Sync OFF was not confirmed" in error.value.cleanup_errors[0]
 
 
 def test_full_validation_reset_rejects_mismatched_identity_before_write() -> None:

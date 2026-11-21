@@ -195,10 +195,19 @@ never reset the instrument. Real Live Full alone performs a bounded `*RST`
 before every independent case, after safe-off checks; it never resets between
 steps of the same case.
 
+Before confirming Real Full, check the front-panel Sync BNC wiring and
+disconnect sensitive equipment. A reset may briefly enable Sync. The runner
+verifies Sync OFF before each reset and forces it OFF again after `*OPC?`.
+Case cleanup and final cleanup require confirmed Sync OFF as well as the
+existing main-output checks. A failed Sync OFF check fails the run.
+
 Full uses the same selected cases for Preflight, PlanOnly, and Real Live. CH1 covers
 all eight static waveforms, internal AM (normal and DSSC), FM, PM, FSK, BPSK,
 PWM, and Sum. It also covers Counted and Gated Burst, Linear and Logarithmic
 Sweeps, List Sweeps, output settings, and explicit output ON/OFF.
+The `output` family also includes Sync configuration and a dedicated Sync
+ON/OFF readback case on CH1. Dual-channel targets add a CH2 Sync source case.
+These cases check connector state and configuration by readback.
 The static cases include representative duty cycle, symmetry, phase, high/low
 levels, independent Pulse edges, and PRBS pattern. PWM uses a shared Pulse
 edge. The List transition checks Sine, Square, Ramp, Triangle, and CW recovery.

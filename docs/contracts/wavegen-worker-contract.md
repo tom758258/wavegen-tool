@@ -64,7 +64,7 @@ does not expand Product Live support. Unknown context fields are rejected.
 
 ## Supported Commands
 
-All 28 domain commands accepted by `POST /command` are `async_job` commands
+All 30 domain commands accepted by `POST /command` are `async_job` commands
 under `common.async_jobs` contract version 1. Manifest declares
 `execution.model="multi_job"` and `execution.context_binding="per_command"`,
 with this feature and no duplicate commands table. Cancellation and streaming
@@ -95,6 +95,8 @@ Supported commands are:
 - `configure-triangle-list-sweep`
 - `configure-output`
 - `output`
+- `configure-sync`
+- `sync-output`
 - `trigger`
 - `upload-arbitrary`
 - `configure-arbitrary`
@@ -103,8 +105,8 @@ Supported commands are:
 - `clear-arbitrary-memory`
 
 Dry-run accepts every `configure-*` command and the Arbitrary upload, list,
-and clear commands. Submit `trigger` in live or simulate mode. It sends an
-instrument-wide Bus trigger and accepts an empty arguments object.
+and clear commands. Submit `sync-output` and `trigger` in live or simulate mode.
+Trigger sends an instrument-wide Bus trigger and accepts an empty arguments object.
 
 The read-only `readback-advanced` command accepts an optional channel
 (default 1), requires no `allow_output_writes` authorization, and returns
@@ -119,9 +121,10 @@ are rejected.
 
 `identify` does not allow argument fields.
 
-`status`, `readback-advanced`, `output`, all `configure-*` commands, and the
-Arbitrary upload, list, and clear commands accept optional `channel`, defaulting to integer `1`. Worker admission requires a non-boolean
-positive integer. Core owns the supported channel domain and model-specific
+`status`, `readback-advanced`, `output`, all `configure-*` commands except
+`configure-sync`, and the Arbitrary upload, list, and clear commands accept
+optional `channel`, defaulting to integer `1`. Worker admission requires a
+non-boolean positive integer. Core owns the supported channel domain and model-specific
 channel count: 33510B and 33512B admit Channels 1 and 2, while 33521B rejects
 Channel 2. The Worker does not maintain a model/channel allowlist.
 
@@ -200,6 +203,15 @@ Dry-run validates and plans the configuration only.
 `voltage_limit_low`, `voltage_limit_high`, `voltage_limits_enabled`,
 and `autorange_enabled`. The last two are booleans.
 
+`configure-sync` requires integer `source_channel` (1 or 2, subject to model
+support), `mode` (`"normal"` or `"carrier"`), and `polarity` (`"normal"` or
+`"inverted"`). It verifies Sync OFF before changing settings and leaves it OFF.
+`sync-output` requires `state` (`"on"` or `"off"`) and accepts optional boolean
+`confirm_output`. Both commands address the global front-panel Sync connector
+and reject `channel`. Results expose `sync_state` and `commands`. Configuration
+also reports `source_channel`, `sync_mode`, and `polarity`. An executed success
+includes `readback_verified: true`. Dry-run reports `executed: false`.
+
 | Arbitrary command | Arguments in addition to the optional `channel` |
 | --- | --- |
 | `upload-arbitrary` | `name`, `path` as an absolute Worker-host-local CSV path |
@@ -235,12 +247,13 @@ The following admission safety gate applies only when `context.mode` is `live`:
 - `output` with `enabled=false` is always allowed.
 - `output` with `enabled=true` requires both `allow_output_writes=True` and
   `confirm_output=true`.
+- `sync-output` with `state="off"` is admitted without `allow_output_writes`.
+  `state="on"` requires both `allow_output_writes=True` and `confirm_output=true`.
 
 Simulation and dry-run admission does not require live write authorization.
-Output off is an explicit safe-domain command. `POST /stop` is a lifecycle
-stop; it does not reconnect or silently execute output off. A normal live
-shutdown workflow should explicitly execute output off before stopping the
-Worker.
+Output off is an explicit safe-domain command. `POST /stop` only controls
+the Worker lifecycle. A normal live shutdown workflow explicitly turns off
+each connector it enabled before stopping the Worker.
 
 ## Lifecycle Boundaries
 

@@ -448,10 +448,12 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus", "sweep-sine-timer",
         "sweep-square-linear", "sweep-ramp-linear", "sweep-triangle-linear",
         "list-transition-cw-recovery", "list-bus-trigger", "configure-output", "output-control",
+        "sync-configuration", "sync-control",
     }
     expected_parity = {
         "status", "static-sine", "modulation-am", "burst-immediate",
         "sweep-sine-linear", "list-transition-cw-recovery", "configure-output", "output-control",
+        "sync-configuration",
     }
     if model != "33510b":
         expected_primary |= {
@@ -465,7 +467,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     assert {case["name"] for case in secondary} == (
         {f"ch2/{name}" for name in expected_parity} if 2 in channels else set()
     )
-    assert len(report["planned_cases"]) == len(inventory) + 3 + 2 * len(channels)
+    assert len(report["planned_cases"]) == len(inventory) + 5 + 2 * len(channels)
     pulse = next(case for case in primary if case["name"] == "ch1/static-pulse")["steps"][0]["arguments"]
     assert pulse[pulse.index("--leading-edge-s") + 1] == "0.00000004"
     assert pulse[pulse.index("--trailing-edge-s") + 1] == "0.00000006"
@@ -558,6 +560,7 @@ def test_full_preflight_arbitrary_sequence_direct_without_hardware(
 
 @pytest.mark.parametrize("mode,expected,unexpected", [
     ("static", "ch1/static-sine", "ch1/burst-bus"),
+    ("output", "ch1/sync-control", "ch1/static-sine"),
     ("burst,output", "ch1/burst-bus", "ch1/static-sine"),
     ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
 ])
@@ -575,6 +578,13 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     assert unexpected not in report["planned_cases"]
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
+    if mode == "output":
+        assert {"sync/initial-safe-off", "sync/final-safe-off", "ch1/sync-configuration",
+                "ch1/configure-output", "ch1/output-control"} <= set(report["planned_cases"])
+        control = next(x for x in report["full_inventory"] if x["name"] == "ch1/sync-control")
+        assert [step["arguments"] for step in control["steps"]] == [
+            ["sync-output", "--state", "on"], ["sync-output", "--state", "off"],
+        ]
     if mode == "arbitrary,sequence":
         assert "ch1/sequence-bus" in report["planned_cases"]
         assert "ch1/sequence-bus-functional" in report["planned_cases"]
@@ -587,6 +597,17 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     assert readiness["status"] == "PASS"
     assert readiness["hardware_touched"] is False
     assert readiness["selected_modes"] == report["selected_modes"]
+    if mode == "output":
+        sync_stages = {
+            case["name"].split("/", 1)[1]: case["status"]
+            for case in readiness["cases"] if "/ch1/sync-" in case["name"]
+        }
+        assert sync_stages == {
+            "ch1/sync-configuration/step1-dry-run": "PASS",
+            "ch1/sync-configuration/step1-simulate": "PASS",
+            "ch1/sync-control/step1-simulate": "PASS",
+            "ch1/sync-control/step2-simulate": "PASS",
+        }
 
 
 def test_invalid_full_modes_fail_without_artifacts(artifact_root, fake_git):
@@ -781,6 +802,14 @@ $fullInventory = @($script:casesUnderTest)
 function Invoke-WavegenJson {
     param($Name, $CliArguments, $ArtifactDirectory)
     $command = $CliArguments[0]
+    if ($command -eq 'sync-output') {
+        if ('--channel' -in $CliArguments -or $CliArguments[2] -ne 'off') { throw 'Unexpected Sync control' }
+        $payload = [pscustomobject]@{
+            success = $true; action = $command; model = '33512B'
+            sync_state = 'off'; readback_verified = $true
+        }
+        return [pscustomobject]@{ Process = @{ exit_code = 0 }; ParseError = $null; Payload = $payload }
+    }
     if ($command -ne 'read-errors' -and '--channel' -in $CliArguments) {
         $index = [array]::IndexOf($CliArguments, '--channel')
         if ($CliArguments[$index + 1] -ne '2') { throw 'Wrong channel used!' }
@@ -876,6 +905,10 @@ function Read-Host {
 function Invoke-FullCommand {
     param($Name, $Arguments, [int]$Channel)
     $command = $Arguments[0]
+    if ($command -eq 'sync-output') {
+        if ($Channel -ne 0 -or $Arguments[2] -ne 'off') { throw 'Unexpected Sync control' }
+        return [pscustomobject]@{ sync_state = 'off'; readback_verified = $true }
+    }
     if ($command -eq 'trigger') { throw 'External case must use a physical trigger' }
     if ($command -eq 'readback-advanced') {
         return [pscustomobject]@{
@@ -927,6 +960,64 @@ Write-Output ('RESULT:' + (@{
         answer.lower() if answer in {"Yes", "No"} else "not-completed"
     )
     assert case["evidence_level"] == ("live-functional" if answer == "Yes" else None)
+
+
+@pytest.mark.parametrize("failure", ["none", "after-on", "case-off", "final-off"])
+def test_full_sync_case_attempts_off_and_fails_if_off_is_unconfirmed(artifact_root, failure):
+    result = _run_powershell_test(artifact_root, r'''
+$failure = 'FAILURE'
+$cases = [System.Collections.ArrayList]::new()
+$channelsTested = [System.Collections.ArrayList]::new()
+$script:syncState = 'on'
+$script:resetCalls = 0
+$script:syncOffAttempts = @()
+$script:mainOffAttempts = @()
+$fullInventory = @(Get-FullValidationInventory -Channels @(1) -Modes output | Where-Object family -eq 'sync-control')
+function Invoke-FullValidationReset {
+    param($Name)
+    $script:resetCalls++
+}
+function Invoke-FullCommand {
+    param($Name, $Arguments, [int]$Channel)
+    switch ($Arguments[0]) {
+        'sync-output' {
+            if ($Channel -ne 0) { throw 'Sync is global.' }
+            if ($Arguments[2] -eq 'off') { $script:syncOffAttempts += $Name }
+            if (($failure -eq 'case-off' -and $Name -like '*/cleanup-sync') -or
+                ($failure -eq 'final-off' -and $Name -eq 'sync/final-safe-off')) {
+                return [pscustomobject]@{ sync_state = 'on'; readback_verified = $true }
+            }
+            $script:syncState = $Arguments[2]
+            if ($failure -eq 'after-on' -and $script:syncState -eq 'on') { throw 'Lost connection after ON.' }
+            return [pscustomobject]@{ sync_state = $script:syncState; readback_verified = $true }
+        }
+        'output' {
+            if ($Arguments[2] -ne 'off') { throw 'Main output must remain off.' }
+            $script:mainOffAttempts += $Name
+            return [pscustomobject]@{ output_state = 'off' }
+        }
+        'status' { return [pscustomobject]@{ output_state = 'off' } }
+        'read-errors' { return [pscustomobject]@{ has_errors = $false; empty_confirmed = $true; limit_reached = $false } }
+        default { throw "Unexpected command: $($Arguments[0])" }
+    }
+}
+Invoke-FullLiveCases -Channels @(1) -CanRun $true
+$pass = Test-FullValidationPass -Cases @($cases) -RequiredNames @('ch1/sync-control', 'sync/final-safe-off')
+Write-Output ('RESULT:' + (@{
+    pass = $pass; syncState = $script:syncState; resetCalls = $script:resetCalls
+    syncOffAttempts = $script:syncOffAttempts; mainOffAttempts = $script:mainOffAttempts
+    case = ($cases | Where-Object name -eq 'ch1/sync-control')
+    final = ($cases | Where-Object name -eq 'sync/final-safe-off')
+} | ConvertTo-Json -Depth 8 -Compress))
+'''.replace("FAILURE", failure))
+    assert result["pass"] is (failure == "none")
+    assert result["syncState"] == "off"
+    assert result["resetCalls"] == 1
+    assert "ch1/sync-control/cleanup-sync" in result["syncOffAttempts"]
+    assert "ch1/sync-control/cleanup-command" in result["mainOffAttempts"]
+    assert "sync/final-safe-off" in result["syncOffAttempts"]
+    assert result["case"]["cleanup_status"] == ("FAIL" if failure == "case-off" else "PASS")
+    assert result["final"]["status"] == ("FAIL" if failure == "final-off" else "PASS")
 
 
 def test_trigger_validation_guard_keeps_pending_model_out_of_product(monkeypatch, capsys):

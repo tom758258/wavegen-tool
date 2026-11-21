@@ -744,6 +744,8 @@ def test_worker_publishes_expected_domain_commands():
         "configure-ramp-list-sweep",
         "configure-triangle-list-sweep",
         "configure-output",
+        "configure-sync",
+        "sync-output",
         "trigger",
         "upload-arbitrary",
         "configure-arbitrary",
@@ -773,6 +775,7 @@ def test_worker_advanced_readback_is_readonly_and_has_no_dry_run():
 @pytest.mark.parametrize(("command", "arguments"), [
     ("trigger", {}),
     ("configure-output", {"polarity": "inverted"}),
+    ("configure-sync", {"source_channel": 1, "mode": "normal", "polarity": "normal"}),
     ("configure-sine-list-sweep", {"frequencies_hz": [2, 5], "amplitude_vpp": 1}),
     ("upload-arbitrary", {"name": "WAVE", "path": None}),
     ("configure-arbitrary", {"name": "WAVE", "sample_rate_hz": 1000, "amplitude_vpp": 1}),
@@ -787,6 +790,49 @@ def test_new_worker_write_commands_require_live_authorization(command, arguments
             _payload(command, arguments), worker_mode="live", allow_output_writes=False,
         )
     assert error.value.code == "live_write_not_allowed"
+
+
+@pytest.mark.parametrize("arguments,allowed,error_code", [
+    ({"state": "on", "confirm_output": True}, False, "live_write_not_allowed"),
+    ({"state": "on"}, True, "output_confirmation_required"),
+    ({"state": "on", "confirm_output": 1}, True, "invalid_arguments"),
+    ({"state": "on", "confirm_output": True}, True, None),
+    ({"state": "off"}, False, None),
+    ({"state": "off", "channel": 1}, False, "invalid_arguments"),
+    ({"state": True}, True, "invalid_arguments"),
+    ({}, True, "invalid_arguments"),
+])
+def test_worker_sync_output_admission(arguments, allowed, error_code):
+    request = _payload("sync-output", arguments)
+    if error_code:
+        with pytest.raises(WorkerRequestValidationError) as error:
+            validate_worker_command_request(request, worker_mode="live", allow_output_writes=allowed)
+        assert error.value.code == error_code
+    else:
+        admitted = validate_worker_command_request(
+            request, worker_mode="live", allow_output_writes=allowed,
+        )
+        assert admitted.arguments == arguments
+
+
+def test_worker_sync_configuration_admission_has_required_global_fields():
+    arguments = {"source_channel": 2, "mode": "carrier", "polarity": "inverted"}
+    context = {"mode": "dry_run", "planning_model_id": "keysight-33512b"}
+    request = _payload("configure-sync", arguments, context=context)
+    admitted = validate_worker_command_request(
+        request, worker_mode="simulate", allow_output_writes=False,
+    )
+    assert admitted.arguments == arguments
+    for invalid in (
+        {key: value for key, value in arguments.items() if key != "polarity"},
+        dict(arguments, channel=1),
+    ):
+        with pytest.raises(WorkerRequestValidationError) as error:
+            validate_worker_command_request(
+                _payload("configure-sync", invalid, context=context), worker_mode="simulate",
+                allow_output_writes=False,
+            )
+        assert error.value.code == "invalid_arguments"
 
 
 @pytest.mark.parametrize(("command", "arguments"), [

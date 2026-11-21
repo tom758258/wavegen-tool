@@ -17,12 +17,15 @@ import uuid
 from wavegen_tool_core import (
     SYSTEM_BACKEND,
     OutputConfig,
+    SyncConfig,
     configure_output,
+    configure_sync,
     configure_ramp_list_sweep,
     configure_sine_list_sweep,
     configure_square_list_sweep,
     configure_triangle_list_sweep,
     dry_run_output,
+    dry_run_sync,
     dry_run_ramp_list_sweep,
     dry_run_sine_list_sweep,
     dry_run_square_list_sweep,
@@ -61,6 +64,7 @@ from wavegen_tool_core import (
     query_status,
     read_error_queue,
     set_output,
+    set_sync_output,
     validate_backend_transport,
 )
 from wavegen_tool_core.arbitrary import run_arbitrary
@@ -495,6 +499,10 @@ class WorkerRuntime:
             )
         if job.command == "trigger":
             return send_bus_trigger(resource, backend, **core_kwargs)
+        if job.command == "configure-sync":
+            return configure_sync(resource, SyncConfig(**arguments), backend, **core_kwargs)
+        if job.command == "sync-output":
+            return set_sync_output(resource, arguments["state"], backend, **core_kwargs)
         if job.command == "configure-output":
             config = OutputConfig(**{key: value for key, value in arguments.items() if key != "channel"})
             return configure_output(resource, config, backend, channel=arguments["channel"], **core_kwargs)
@@ -715,6 +723,8 @@ class WorkerRuntime:
         model = context["planning_model_id"]
         if command in ARBITRARY_COMMANDS:
             return run_arbitrary(command, arguments, model=model)
+        if command == "configure-sync":
+            return dry_run_sync(model, SyncConfig(**arguments))
         if command == "configure-output":
             config = OutputConfig(**{key: value for key, value in arguments.items() if key != "channel"})
             return dry_run_output(model, config, channel=arguments["channel"])

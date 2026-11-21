@@ -88,6 +88,7 @@ request validation and safety rules documented for:
 - Counted Burst and Gated Burst on supported carriers;
 - sine, square, ramp, and triangle ordinary and List Sweeps;
 - selected-channel status, output configuration, and output control;
+- front-panel Sync configuration and independent Sync ON/OFF control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
 
 Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
