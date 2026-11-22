@@ -516,7 +516,7 @@ Counted Burst options are:
 Immediate uses count and period. Bus uses count and omits period/timer. Timer
 uses count and `--burst-trigger-timer-s`. External uses count, may choose the
 trigger slope, and omits internal period/timer. Count is waveform cycles, or
-bits for PRBS. When Counted Burst is enabled, phase remains 0 degrees.
+bits for PRBS.
 
 Count is 1 through 100,000,000. An Immediate period is 0.000001 through 8000
 seconds. Immediate/Timer periods must allow the complete burst plus the Core
@@ -531,6 +531,12 @@ Gated Burst uses:
 It is mutually exclusive with every Counted Burst option. Both burst modes
 leave output off and affect only the selected channel.
 
+Both modes accept `--burst-start-phase-deg`. The range is −360.0° through
++360.0° in 0.1° increments, and the default is 0.0°. The ordinary waveform
+`--phase-deg`, where available, must remain 0° when Burst is enabled.
+Product Live supports a Burst start phase of 0°. Nonzero values are available
+in dry-run, simulation, and Direct CLI contributor validation.
+
 The following are **alternative** Sine previews, not options to combine.
 Immediate Counted Burst supplies a period:
 
@@ -538,7 +544,7 @@ Immediate Counted Burst supplies a period:
 uv run wavegen-tool configure-sine `
   --dry-run --model keysight-33521b `
   --frequency-hz 1000 --amplitude-vpp 0.1 `
-  --burst-count 3 --burst-period-s 0.1
+  --burst-count 3 --burst-period-s 0.1 --burst-start-phase-deg 90
 ```
 
 Bus, Timer, and External Counted Burst use their own trigger parameters:
@@ -569,7 +575,7 @@ signal for live gated operation:
 uv run wavegen-tool configure-sine `
   --dry-run --model keysight-33521b `
   --frequency-hz 1000 --amplitude-vpp 0.1 `
-  --gated-burst --gate-polarity normal
+  --gated-burst --gate-polarity normal --burst-start-phase-deg 45.1
 ```
 
 Bus-triggered Burst requires a later explicit instrument-wide `trigger`
@@ -1093,6 +1099,14 @@ identity and final error-queue cases remain mandatory regardless of selection.
 | `output` | Output setup, controlled ON/OFF |
 | `arbitrary` | Synthetic CSV upload, memory inspection, playback, confirmed volatile Clear, and built-in SINC selection and reuse |
 | `sequence` | Native Bus/External sequences; once, repeat, onceWaitTrig, repeatTilTrig |
+
+Add `-IncludeBurstStartPhase` to `-Suite full -Modes burst` on either script
+to include the contributor-only Counted 90° and Gated 45.1° readback cases.
+The added cases keep output off and verify the programmed phase through
+readback. Measuring physical waveform behavior requires a separately
+authorized observation. Preflight also checks that an invalid phase is
+rejected. Use the same options for Preflight and PlanOnly before an authorized
+Real Live run.
 
 33512B admits CH1/CH2 Arbitrary; 33521B admits CH1; 33510B has no
 Arbitrary capability. All-target Preflight selects applicable recipes per

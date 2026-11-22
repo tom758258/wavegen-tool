@@ -1021,7 +1021,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         }
 
     def _handle_command(self) -> None:
-        payload, parse_error = self._read_json()
+        payload, parse_error = self._read_json(preserve_burst_phase=True)
         if parse_error is not None:
             self._send_json(
                 400,
@@ -1156,7 +1156,9 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
 
         self.server.runtime.request_stop(acknowledge)
 
-    def _read_json(self, *, allow_empty: bool = False) -> tuple[object, str | None]:
+    def _read_json(
+        self, *, allow_empty: bool = False, preserve_burst_phase: bool = False
+    ) -> tuple[object, str | None]:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -1167,7 +1169,16 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         if not raw.strip():
             return None, "Request body must be a JSON value."
         try:
-            return json.loads(raw.decode("utf-8")), None
+            body = raw.decode("utf-8")
+            payload = json.loads(body)
+            if preserve_burst_phase and isinstance(payload, dict):
+                arguments = payload.get("arguments")
+                burst = arguments.get("burst") if isinstance(arguments, dict) else None
+                if isinstance(burst, dict) and isinstance(burst.get("start_phase_deg"), float):
+                    # Recover the original decimal for Core without changing other JSON types.
+                    exact = json.loads(body, parse_float=str)
+                    burst["start_phase_deg"] = exact["arguments"]["burst"]["start_phase_deg"]
+            return payload, None
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None, "Request body must contain valid UTF-8 JSON."
 

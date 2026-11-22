@@ -5,7 +5,8 @@ param(
     [string]$Target = "all",
     [string]$Python = ".\.venv\Scripts\python.exe",
     [switch]$DebugArtifacts,
-    [string]$OutputRoot = ".tmp_tests\cli_preflight"
+    [string]$OutputRoot = ".tmp_tests\cli_preflight",
+    [switch]$IncludeBurstStartPhase
 )
 
 Set-StrictMode -Version Latest
@@ -95,7 +96,7 @@ function Get-ValidationSummary {
 
 try {
     $modesSpecified = $PSBoundParameters.ContainsKey("Modes")
-    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified)
+    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified -IncludeBurstStartPhase:$IncludeBurstStartPhase)
     $targets = @(Resolve-ValidationTargets -Target $Target)
     if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop')) {
         throw 'Full requires Windows PowerShell Desktop on Windows.'
@@ -214,7 +215,23 @@ foreach ($targetProfile in $targets) {
         $fixtures = if (@($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
             New-ArbitraryValidationFixtures -Directory (Join-Path $targetDirectory 'fixtures')
         } else { $null }
-        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures)) {
+        if ($IncludeBurstStartPhase) {
+            $name = "${modelId}/ch1/burst-invalid-start-phase-dry-run"
+            $reasons = @()
+            $invocation = $null
+            try {
+                $invocation = Invoke-WavegenJson -Name $name -CliArguments @(
+                    'configure-sine', '--frequency-hz', '1000', '--amplitude-vpp', '0.1',
+                    '--gated-burst', '--burst-start-phase-deg', '45.15', '--dry-run', '--model', $modelId, '--json'
+                ) -ArtifactDirectory (Join-Path $targetDirectory (New-SafeCaseName $name))
+                if ($invocation.Process.exit_code -ne 2 -or $null -ne $invocation.ParseError -or
+                    $invocation.Payload.success -ne $false -or $invocation.Payload.error -cnotlike 'waveform_parameter_error: Burst start phase*') {
+                    throw 'Invalid Burst start phase was not rejected as a parameter error.'
+                }
+            } catch { $reasons += $_.Exception.Message }
+            Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $(if ($null -ne $invocation) { $invocation.Process } else { $null })
+        }
+        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures -IncludeBurstStartPhase:$IncludeBurstStartPhase)) {
             if ($recipe.channel -notin $channelsTested) { [void]$channelsTested.Add($recipe.channel) }
             $stepIndex = 0
             foreach ($step in $recipe.steps) {
@@ -257,6 +274,12 @@ foreach ($targetProfile in $targets) {
                             }
                         } elseif ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') {
                             throw 'Configuration did not leave output off.'
+                        }
+                        if ($step.result.ContainsKey('burst_start_phase_deg') -and (
+                            'burst_start_phase_deg' -notin $payload.PSObject.Properties.Name -or
+                            $payload.burst_start_phase_deg -ne $step.result['burst_start_phase_deg']
+                        )) {
+                            throw 'Burst start phase did not match the recipe.'
                         }
                         if ($recipe.family -eq 'sweep' -and $step.result['trigger_source'] -eq 'external') {
                             if ($payload.trigger_source -cne 'external' -or $payload.trigger_slope -cne $step.result['trigger_slope']) {

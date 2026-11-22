@@ -44,7 +44,7 @@ def run_send_command(args: Any) -> int:
 
     endpoint = "/command"
     url = _url(args.port, endpoint)
-    arguments, error = _parse_object(args.arguments_json, "arguments")
+    _, error = _parse_object(args.arguments_json, "arguments")
     if error:
         return _emit(args, _local_error(args, endpoint, url, error), "")
     context, error = _parse_object(args.context_json, "context")
@@ -54,12 +54,14 @@ def run_send_command(args: Any) -> int:
     request: dict[str, object] = {
         "schema_version": WORKER_SCHEMA_VERSION,
         "command": args.worker_command,
-        "arguments": arguments,
         "context": context,
     }
     if args.job_id is not None:
         request["job_id"] = args.job_id
-    outcome = _request_json("POST", args.port, endpoint, request, args.timeout_ms)
+    envelope = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
+    # Forward the validated arguments object with its original numeric tokens.
+    body = envelope[:-1] + ',"arguments":' + args.arguments_json + "}"
+    outcome = _request_json("POST", args.port, endpoint, body, args.timeout_ms)
 
     if outcome.error:
         result = _error_result(
@@ -275,7 +277,7 @@ def run_worker_stop(args: Any) -> int:
 
     endpoint = "/stop"
     url = _url(args.port, endpoint)
-    outcome = _request_json("POST", args.port, endpoint, {}, args.timeout_ms)
+    outcome = _request_json("POST", args.port, endpoint, "{}", args.timeout_ms)
     if outcome.error:
         result = _error_result(
             "worker-stop",
@@ -317,7 +319,7 @@ def _request_json(
     method: str,
     port: int,
     endpoint: str,
-    request: dict[str, object] | None,
+    request_body: str | None,
     timeout_ms: int,
 ) -> _HTTPOutcome:
     started = time.monotonic()
@@ -327,8 +329,8 @@ def _request_json(
         connection = HTTPConnection(_HOST, port, timeout=timeout_ms / 1000.0)
         headers = {"Accept": "application/json"}
         body = None
-        if request is not None:
-            body = json.dumps(request, separators=(",", ":"), ensure_ascii=False).encode()
+        if request_body is not None:
+            body = request_body.encode("utf-8")
             headers["Content-Type"] = "application/json; charset=utf-8"
         request_sent = True
         connection.request(method, endpoint, body=body, headers=headers)

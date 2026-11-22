@@ -488,6 +488,9 @@ function Get-AdvancedReadbackExpectation {
             $settings.trigger_slope = if ($null -ne $slope) { $slope } else { 'positive' }
         }
     }
+    if ($mode -eq 'BURST') {
+        $settings.phase_deg = [double](Get-AdvancedOption $Arguments '--burst-start-phase-deg')
+    }
     if ($null -eq $mode) { $mode = 'CW' }
     return [pscustomobject]@{ advanced_mode = $mode; settings = $settings }
 }
@@ -496,17 +499,26 @@ function Get-AdvancedReadbackExpectation {
 $script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence')
 
 function Resolve-SelectedValidationModes {
-    param([string]$Suite, [string[]]$Modes = @(), [bool]$Specified = $false)
+    param(
+        [string]$Suite, [string[]]$Modes = @(), [bool]$Specified = $false,
+        [switch]$IncludeBurstStartPhase
+    )
 
     if ($Specified -and $Suite -ne 'full') {
         throw '-Modes requires -Suite full; Smoke does not support mode selection.'
     }
-    if (-not $Specified) { return @($script:FullValidationModes) }
-    $requested = @($Modes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() })
-    if ($requested.Count -eq 0 -or @($requested | Where-Object { -not $_ -or $_ -notin $script:FullValidationModes }).Count -gt 0) {
-        throw "Modes must contain one or more of: $($script:FullValidationModes -join ', ')."
+    $selected = @($script:FullValidationModes)
+    if ($Specified) {
+        $requested = @($Modes | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() })
+        if ($requested.Count -eq 0 -or @($requested | Where-Object { -not $_ -or $_ -notin $script:FullValidationModes }).Count -gt 0) {
+            throw "Modes must contain one or more of: $($script:FullValidationModes -join ', ')."
+        }
+        $selected = @($script:FullValidationModes | Where-Object { $_ -in $requested })
     }
-    return @($script:FullValidationModes | Where-Object { $_ -in $requested })
+    if ($IncludeBurstStartPhase -and ($Suite -ne 'full' -or $selected.Count -ne 1 -or $selected[0] -ne 'burst')) {
+        throw '-IncludeBurstStartPhase requires -Suite full -Modes burst.'
+    }
+    return $selected
 }
 
 function Get-ApplicableValidationModes {
@@ -583,7 +595,8 @@ function Get-FullValidationInventory {
     param(
         [Parameter(Mandatory = $true)][int[]]$Channels,
         [string[]]$Modes = $script:FullValidationModes,
-        $ArbitraryFixtures = $null
+        $ArbitraryFixtures = $null,
+        [switch]$IncludeBurstStartPhase
     )
 
     # Recipes contain public CLI arguments only; Core owns admission and SCPI.
@@ -670,6 +683,7 @@ function Get-FullValidationInventory {
         if ($source -eq 'timer') { $args += @('--burst-trigger-timer-s', '5') }
         if ($source -eq 'external') { $args += @('--burst-trigger-slope', 'positive') }
         $result = @{ burst_mode = 'counted'; burst_count = 3; burst_trigger_source = $source }
+        if ($source -eq 'immediate') { $result.burst_start_phase_deg = 0 }
         if ($source -eq 'external') { $result.burst_trigger_slope = 'positive' }
         $steps = @((New-Step $args $readback $result))
         $observation = switch ($source) {
@@ -705,6 +719,18 @@ function Get-FullValidationInventory {
             expected = 'Pulses continue while the gate is active and stop after the current cycle when it becomes inactive.'
             seconds = 20
         }
+    }
+    if ($IncludeBurstStartPhase) {
+        Add-Recipe 'burst-counted-start-phase' 'burst' @(
+            (New-Step ($sine + @('--burst-count', '3', '--burst-period-s', '0.1', '--burst-start-phase-deg', '90')) $sineReadback @{
+                burst_mode = 'counted'; burst_start_phase_deg = 90
+            })
+        )
+        Add-Recipe 'burst-gated-start-phase' 'burst' @(
+            (New-Step ($sine + @('--gated-burst', '--gate-polarity', 'normal', '--burst-start-phase-deg', '45.1')) $sineReadback @{
+                burst_mode = 'gated'; burst_start_phase_deg = 45.1
+            })
+        )
     }
     foreach ($variant in @('sine-linear', 'sine-logarithmic', 'sine-bus', 'sine-timer', 'square-linear', 'ramp-linear', 'triangle-linear')) {
         $wave, $option = $variant.Split('-')

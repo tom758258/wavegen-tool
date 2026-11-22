@@ -197,8 +197,14 @@ Core validates which combinations the carrier supports.
 | `bpsk` | `phase_shift_deg`, `rate_hz` |
 | `pwm` | `modulation_frequency_hz`, `deviation_s`, optional `shape` |
 | `sum` | `modulation_frequency_hz`, `amplitude_percent`, optional `shape` |
-| `burst` (Counted) | `mode: "counted"`, `count`, optional `period_s`, `trigger_source`, `trigger_timer_s`, `trigger_slope` |
-| `burst` (Gated) | `mode: "gated"`, optional `polarity` |
+| `burst` (Counted) | `mode: "counted"`, `count`, optional `period_s`, `trigger_source`, `trigger_timer_s`, `trigger_slope`, `start_phase_deg` |
+| `burst` (Gated) | `mode: "gated"`, optional `polarity`, `start_phase_deg` |
+
+`start_phase_deg` defaults to 0.0 and accepts −360.0 through +360.0 degrees
+in 0.1-degree increments. Core rejects nonzero values during Product Live
+execution before configuration writes. The successful configuration result
+includes the normalized `burst.start_phase_deg`. Ordinary waveform
+`phase_deg` remains 0 when Burst is enabled.
 
 The nested `shape` is `"sine"` by default and also accepts `"square"`,
 `"up-ramp"`, `"triangle"`, and `"down-ramp"` in dry-run and simulation.

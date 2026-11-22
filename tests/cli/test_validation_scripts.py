@@ -569,6 +569,7 @@ def test_full_preflight_arbitrary_direct_without_hardware(
     ("static", "ch1/static-sine", "ch1/burst-bus"),
     ("output", "ch1/sync-control", "ch1/static-sine"),
     ("burst,output", "ch1/burst-bus", "ch1/static-sine"),
+    ("burst", "ch1/burst-counted-start-phase", "ch1/static-sine"),
     ("sweep", "ch1/sweep-external-positive", "ch1/list-bus-trigger"),
     ("arbitrary", "ch1/arbitrary-builtin-select", "ch1/sequence-bus"),
     ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
@@ -576,11 +577,14 @@ def test_full_preflight_arbitrary_direct_without_hardware(
 def test_full_plan_filters_modes_and_propagates_to_preflight(
     artifact_root, fake_git, mode, expected, unexpected,
 ):
-    artifacts = ("-DebugArtifacts",) if mode == "arbitrary" else ()
+    extra_args = {
+        "arbitrary": ("-DebugArtifacts",),
+        "burst": ("-IncludeBurstStartPhase",),
+    }.get(mode, ())
     result = _run_script(
         LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b",
         "-Suite", "full", "-Modes", mode, "-Connection", "usb",
-        "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly", *artifacts,
+        "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly", *extra_args,
     )
     assert result.returncode == 0, result.stdout + result.stderr + _preflight_diagnostics(artifact_root)
     report = _read_report(_only_run(artifact_root))
@@ -588,6 +592,24 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     assert unexpected not in report["planned_cases"]
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
+    if mode == "burst,output":
+        assert {"ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"}.isdisjoint(
+            report["planned_cases"]
+        )
+    if mode == "burst":
+        assert report["complete_mode_selection"] is False
+        recipes = {recipe["name"]: recipe for recipe in report["full_inventory"]}
+        for name, phase in (
+            ("ch1/burst-immediate", 0),
+            ("ch1/burst-counted-start-phase", 90),
+            ("ch1/burst-gated-start-phase", 45.1),
+        ):
+            recipe = recipes[name]
+            configure, = recipe["steps"]
+            assert recipe["observation"] is None
+            assert configure["result"]["burst_start_phase_deg"] == phase
+            assert configure["advanced_expected"]["settings"]["phase_deg"] == phase
+            assert "--verify-readback" in configure["arguments"]
     if mode == "output":
         assert {"sync/initial-safe-off", "sync/final-safe-off", "ch1/sync-configuration",
                 "ch1/configure-output", "ch1/output-control"} <= set(report["planned_cases"])
@@ -618,6 +640,12 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     assert readiness["status"] == "PASS"
     assert readiness["hardware_touched"] is False
     assert readiness["selected_modes"] == report["selected_modes"]
+    if mode == "burst":
+        cases = {case["name"].split("/", 1)[1]: case["status"] for case in readiness["cases"]}
+        assert cases["ch1/burst-invalid-start-phase-dry-run"] == "PASS"
+        for name in ("ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"):
+            assert cases[f"{name}/step1-dry-run"] == "PASS"
+            assert cases[f"{name}/step1-simulate"] == "PASS"
     if mode == "output":
         sync_stages = {
             case["name"].split("/", 1)[1]: case["status"]
@@ -1043,7 +1071,7 @@ function Invoke-FullCommand {
         return [pscustomobject]@{
             advanced_mode = 'BURST'
             settings = [pscustomobject]@{
-                burst_mode = 'counted'; count = 3
+                burst_mode = 'counted'; count = 3; phase_deg = 0
                 trigger_source = 'external'; trigger_slope = 'positive'
             }
         }
