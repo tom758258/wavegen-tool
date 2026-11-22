@@ -173,6 +173,15 @@ Full PASS is eligible evidence for a separate Product Live policy decision,
 never automatic promotion. 33510B stays validation-pending until an explicit
 Core policy change. Use the existing private/shareable evidence boundary.
 
+Full includes `software-sequence` by default. To check only its feature
+cases, pass `-Suite full -Modes software-sequence`. The mode uses one CLI
+invocation per sequence, with hardware-free dry-run and simulation checks,
+a PlanOnly inventory, and operator-confirmed Real Full observation when an
+output is enabled. Arbitrary cases apply only to models that support Arbitrary
+and use the contributor live route. The existing `sequence` mode covers native
+Arbitrary sequences. A mode subset provides evidence for the selected feature
+only.
+
 ## Test Output Locations
 
 Run pytest from the repository root. Put intentional test and validation

@@ -112,6 +112,29 @@ dry-run plans never include that field. Normalized configuration results remain
 requested values and must not be mistaken for independent observations.
 Configuration verification queries Trigger Delay only when explicitly supplied.
 
+### Software Sequence Results
+
+`run-software-sequence --file <sequence.json>` returns one JSON object with the
+usual Direct CLI `success`, `action`, and `error` fields. Results also report
+`model`, `canonical_model_id`, `channels`, `step_count`, `loop_count`,
+`execution_units`, `completed_loops`, `completed_step_executions`, and
+`total_wait_seconds`.
+
+A dry-run has `status: "planned"`, `executed: false`, and `cleanup: null`.
+Its `steps` array contains one ordered plan per input step. Simulation and
+live successes have `status: "completed"`, `executed: true`, and `results`
+with details for the first 200 completed executions, identified by one-based
+`loop` and `step`. Completed counts cover every execution. Error-queue steps
+report numeric error codes and bounded-read status. Sequence results omit
+raw instrument identity, local CSV paths, and waveform samples.
+
+Executed runs report `cleanup.attempted_channels`, `confirmed_off_channels`,
+and `errors`. Cleanup errors fail the command. Failure can include a
+`sequence` object with completed counts, cleanup details, and a `failed_step`
+with one-based `loop`, `step`, `action`, and the Core `error`. A controllable
+interruption exits with code 130 after attempting output cleanup. Step
+failures use the underlying Core error's normal exit-code mapping.
+
 ## Direct CLI Commands
 
 The public Direct CLI machine surface includes:
@@ -139,7 +162,7 @@ Worker events are `ready`, `job_accepted`, `job_started`, `job_finished`,
 exact integer-token `schema_version: 3`, `service: "wavegen-tool"`, `run_id`,
 and a UTC timestamp.
 
-All 30 Worker domain commands are async jobs. Every normal, controllable
+All 31 Worker domain commands are async jobs. Every normal, controllable
 termination emits `job_finished` with `state`, boolean `ok`, and required
 `result` and `error`. The terminal timestamp is fixed and shared with the
 HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and

@@ -132,6 +132,15 @@ not disable coupling or tracking automatically.
 Configuration leaves the selected output off. Output-on remains an explicit
 operation. The tool does not use `*RST` as part of normal operation.
 
+## Software Sequence Scope
+
+Software sequences support planning and simulation on all three registered
+models. Arbitrary actions require a model with Arbitrary support. Product
+Live on 33512B and 33521B admits sequences within the existing waveform,
+advanced, trigger, and main-output scope. A sequence containing an Arbitrary
+action requires the Direct CLI contributor validation route on an
+Arbitrary-capable model. Worker live sequences always use Product policy.
+
 ## Adapter Exposure
 
 The Direct CLI exposes the broader Core-backed waveform, modulation, burst,

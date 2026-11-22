@@ -10,6 +10,13 @@ import sys
 from enum import IntEnum
 from typing import Any, Sequence
 
+from wavegen_tool_core.software_sequence import (
+    SOFTWARE_SEQUENCE_ACTION,
+    SoftwareSequenceError,
+    SoftwareSequenceInterrupted,
+    read_software_sequence_file,
+    run_software_sequence,
+)
 from wavegen_tool_core.arbitrary import (
     ARBITRARY_COMMANDS,
     read_arbitrary_sequence_file,
@@ -132,6 +139,7 @@ class ExitCode(IntEnum):
     WAVEFORM_VERIFICATION_ERROR = 29
     ERROR_QUEUE_QUERY_ERROR = 30
     INTERNAL_ERROR = 70
+    INTERRUPTED = 130
 
 
 _ERROR_EXIT_CODES: tuple[tuple[type[WavegenError], ExitCode], ...] = (
@@ -827,6 +835,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_arbitrary_parsers(subparsers)
+    sequence_parser = subparsers.add_parser(
+        SOFTWARE_SEQUENCE_ACTION, help="Run a finite software sequence.", allow_abbrev=False,
+    )
+    _add_simulate_argument(sequence_parser)
+    _add_validation_support_policy_argument(sequence_parser)
+    sequence_parser.add_argument("--file", required=True, help="Local software sequence JSON file.")
+    sequence_parser.add_argument("--resource", help="Explicit VISA resource or WAVEGEN_TOOL_RESOURCE.")
+    sequence_parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
+    sequence_parser.add_argument("--dry-run", action="store_true", help="Plan without using VISA.")
+    sequence_parser.add_argument("--model", choices=_REGISTERED_MODEL_IDS)
+    sequence_parser.add_argument("--json", action="store_true", dest="json_output")
 
     identify_parser = subparsers.add_parser(
         "identify",
@@ -2134,7 +2153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-prbs",
         "configure-output",
         "configure-sync",
-    } | ARBITRARY_COMMANDS
+    } | ARBITRARY_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}
     validation_only_live_commands = {
         "identify",
         "status",
@@ -2190,6 +2209,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(
                 "--model requires --validation-allow-pending-live-support"
             )
+    if args.command == SOFTWARE_SEQUENCE_ACTION:
+        if args.validation_allow_pending_live_support:
+            if args.dry_run or args.simulate or args.model is None:
+                parser.error("Software sequence validation policy requires an explicit --model in live mode")
+        elif args.model is not None and not (args.dry_run or args.simulate):
+            parser.error("--model requires --dry-run, --simulate, or --validation-allow-pending-live-support")
     if args.command == "configure-sync" and args.validation_allow_pending_live_support:
         if args.dry_run or args.simulate or args.model is None:
             parser.error("Sync validation policy requires an explicit --model in live mode")
@@ -2226,6 +2251,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         and args.resource is None
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
+    if args.command == SOFTWARE_SEQUENCE_ACTION:
+        return _run_software_sequence(args)
     if args.command in ARBITRARY_COMMANDS:
         return _run_arbitrary(args)
     if args.command == "list-resources":
@@ -3669,6 +3696,24 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_software_sequence(args: argparse.Namespace) -> int:
+    def operation() -> dict[str, object]:
+        try:
+            document = read_software_sequence_file(args.file)
+            model = args.model or CANONICAL_MODEL_ID
+            if args.dry_run:
+                return run_software_sequence(document, model=model)
+            resource, factory = _simulated_target(model) if args.simulate else (args.resource, None)
+            return run_software_sequence(
+                document, resource=resource, backend=args.backend,
+                **_validation_live_injection(args), **_factory_injection(args.simulate, factory),
+            )
+        except KeyboardInterrupt as exc:
+            raise SoftwareSequenceInterrupted("Software sequence interrupted.") from exc
+
+    return _run_control(args, operation)
+
+
 def _run_arbitrary(args: argparse.Namespace) -> int:
     def operation() -> dict[str, object]:
         arguments = {"channel": args.channel}
@@ -4300,7 +4345,7 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
 
 
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
-    if action in ARBITRARY_COMMANDS:
+    if action in ARBITRARY_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         payload = dict(result, success=True, action=action, error=None)
         if not result["executed"]:
             payload["mode"] = "dry-run"
@@ -5094,6 +5139,8 @@ def _control_error_payload(
         "output_state": error.output_state,
         "error": _error_text(error),
     }
+    if isinstance(error, SoftwareSequenceError):
+        payload["sequence"] = error.details
     if action in {"configure-sync", "sync-output"}:
         payload.pop("output_state")
         payload["sync_state"] = None
@@ -5411,6 +5458,23 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
 
 
 def _human_control_success(action: str, result: Any) -> str:
+    if action == SOFTWARE_SEQUENCE_ACTION:
+        lines = [
+            f"Software sequence {result['status']} for {result['model']}.",
+            f"{result['step_count']} steps, {result['loop_count']} loops, "
+            f"{result['completed_step_executions']} of {result['execution_units']} executions completed.",
+            f"Total scheduled wait: {result['total_wait_seconds']:g} s.",
+        ]
+        if result["executed"]:
+            channels = ", ".join(str(channel) for channel in result["cleanup"]["confirmed_off_channels"])
+            if channels:
+                lines.append(f"Output confirmed OFF on channels {channels}.")
+        else:
+            for step in result["steps"]:
+                channel = f" (CH{step['channel']})" if "channel" in step else ""
+                lines.append(f"{step['step']}. {step['action']}{channel}")
+                lines.extend(step.get("commands", ()))
+        return "\n".join(lines)
     if action in {"configure-sync", "sync-output"}:
         planned = isinstance(result, SyncDryRunResult)
         lines = [f"Sync {'plan' if planned else 'readback'} for {result.model if planned else result.identity.model}."]
@@ -5979,7 +6043,14 @@ def _human_error_queue_success(result: Any) -> str:
 
 
 def _human_error(error: WavegenError) -> str:
-    return f"Error [{error.code}]: {_error_message(error)}"
+    lines = [f"Error [{error.code}]: {_error_message(error)}"]
+    if isinstance(error, SoftwareSequenceError):
+        if step := error.details.get("failed_step"):
+            lines.append(f"Loop {step['loop']}, step {step['step']} ({step['action']}).")
+        if cleanup := error.details.get("cleanup"):
+            for failure in cleanup["errors"]:
+                lines.append(f"Channel {failure['channel']} cleanup failed: {failure['message']}")
+    return "\n".join(lines)
 
 
 def _error_text(error: WavegenError) -> str:
@@ -5994,6 +6065,10 @@ def _error_message(error: WavegenError) -> str:
 
 
 def _exit_code_for_error(error: WavegenError) -> ExitCode:
+    if isinstance(error, SoftwareSequenceError):
+        error = error.cause
+    if isinstance(error, SoftwareSequenceInterrupted):
+        return ExitCode.INTERRUPTED
     for error_type, exit_code in _ERROR_EXIT_CODES:
         if isinstance(error, error_type):
             return exit_code

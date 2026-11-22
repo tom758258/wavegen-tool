@@ -34,7 +34,7 @@ The Worker has one active job slot. Orchestrators must handle `busy` and
 
 Manifest uses schema 2, declares Worker `v3-only` with `schema_versions=[3]`,
 `execution.model="multi_job"`, `execution.context_binding="per_command"`, and
-`common.async_jobs` contract version 1. The 30 domain commands are explicitly
+`common.async_jobs` contract version 1. The 31 domain commands are explicitly
 `async_job` in the Worker contract; no Manifest commands table is duplicated.
 Runtime features are fixed and match this declaration. No cancellation or
 streaming is adopted.
@@ -133,6 +133,14 @@ HTTP 202 confirms job admission, not successful readback. Retrieve the
 completed job result and use `result.advanced_mode` and
 `result.settings`. The command never modifies instrument settings,
 and does not need `allow_output_writes`.
+
+Use `run-software-sequence` to submit a finite order of operations for one
+instrument. Load the JSON on the caller side and put the object in
+`arguments.document`. For a live sequence that explicitly enables output,
+include `arguments.confirm_output: true` after operator confirmation. Preview
+the total wait in a dry-run before submitting a long job. Use the terminal
+outcome to decide whether the next instrument operation can proceed.
+See [Software Sequences](wavegen-worker-contract.md#software-sequences).
 
 ## Subprocess Example
 

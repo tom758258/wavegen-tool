@@ -748,6 +748,47 @@ catalog, use the Worker in simulate mode because each Direct CLI
 CSV as an absolute Worker-host path in `arguments.path` and submit the
 Sequence object in `arguments.document`.
 
+## Software Sequences
+
+Use `run-software-sequence --file` to run an ordered set of operations on one
+instrument. Save a version 1 document such as:
+
+```json
+{
+  "version": 1,
+  "loop_count": 2,
+  "steps": [
+    {"action": "configure-sine", "arguments": {"channel": 1, "frequency_hz": 1000, "amplitude_vpp": 0.1}},
+    {"action": "output", "arguments": {"channel": 1, "enabled": true}},
+    {"action": "wait", "arguments": {"seconds": 1}},
+    {"action": "output", "arguments": {"channel": 1, "enabled": false}}
+  ]
+}
+```
+
+```powershell
+wavegen-tool run-software-sequence --file sequence.json --dry-run --model keysight-33512b --json
+wavegen-tool run-software-sequence --file sequence.json --simulate --model keysight-33512b --json
+```
+
+Dry-run shows the reviewable step order and total scheduled wait once, even
+when the document repeats. Simulation shares waveform memory across steps.
+The [Software Sequence contract](../contracts/wavegen-worker-contract.md#software-sequences)
+defines the allowed actions and their arguments. For a CSV upload, use
+`arguments.path` with an absolute path or a path relative to the current
+working directory. `configure-arbitrary-sequence` takes the existing native
+sequence document inside the step's `arguments.document`.
+
+Live execution uses `--resource` or the operator's
+`WAVEGEN_TOOL_RESOURCE`. Core preflights the entire sequence against detected
+identity and live policy and requires controlled outputs to be OFF at entry.
+Press Ctrl+C to interrupt at a controllable step or wait. The sequence
+attempts to turn off and confirm every output it tried to enable, including
+after failure or interruption. A communication loss or a forcibly terminated
+process can leave the output state unknown. Configuration and uploaded
+waveforms can persist after a failure.
+
+
 ## Frequency List Sweep
 
 The Direct CLI provides:
@@ -980,7 +1021,7 @@ Worker startup validates admission but does not open a live resource or
 identify an instrument. A `ready` lifecycle event means the loopback HTTP plane
 is serving; it does not mean that physical hardware is connected or identified.
 
-See the [Worker contract](../contracts/wavegen-worker-contract.md) for the 30
+See the [Worker contract](../contracts/wavegen-worker-contract.md) for the 31
 domain commands and their request fields. Worker command names use kebab-case
 and request argument fields use snake_case. Selected-channel results retain
 Core's integer `channel`, defaulting to 1. A Bus `trigger` applies instrument-wide.

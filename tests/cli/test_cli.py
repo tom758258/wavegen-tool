@@ -4864,3 +4864,47 @@ def test_cli_burst_trigger_delay_requires_counted_burst(burst_options, capsys):
     assert code == ExitCode.CLI_USAGE
     assert payload["success"] is False
     assert payload["error"].startswith("waveform_parameter_error:")
+
+
+def test_software_sequence_file_has_single_json_result_and_uses_working_directory(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "wave.csv").write_text("0\n" * 8, encoding="utf-8")
+    documents = tmp_path / "documents"
+    documents.mkdir()
+    path = documents / "sequence.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "steps": [{"action": "upload-arbitrary", "arguments": {"name": "WAVE", "path": "wave.csv"}}],
+    }), encoding="utf-8")
+    for mode in ("--dry-run", "--simulate"):
+        assert main(["run-software-sequence", "--file", str(path), mode, "--json"]) == 0
+        capture = capsys.readouterr()
+        data = json.loads(capture.out)
+        assert capture.err == ""
+        assert data["success"] is True
+        assert data["executed"] is (mode == "--simulate")
+        assert "wave.csv" not in capture.out
+
+
+def test_software_sequence_ctrl_c_during_wait_returns_failure_and_confirms_off(tmp_path, monkeypatch, capsys):
+    from wavegen_tool_core.software_sequence import time as sequence_time
+
+    def interrupt(seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sequence_time, "sleep", interrupt)
+    path = tmp_path / "sequence.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "steps": [
+            {"action": "output", "arguments": {"enabled": True}},
+            {"action": "wait", "arguments": {"seconds": 1}},
+            {"action": "status"},
+        ],
+    }), encoding="utf-8")
+    assert main(["run-software-sequence", "--file", str(path), "--simulate", "--json"]) == 130
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["success"] is False
+    assert payload["sequence"]["completed_step_executions"] == 1
+    assert payload["sequence"]["failed_step"]["error"]["code"] == "interrupted"
+    assert payload["sequence"]["cleanup"]["confirmed_off_channels"] == [1]
