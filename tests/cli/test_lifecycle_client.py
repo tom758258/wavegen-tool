@@ -546,6 +546,26 @@ def test_lifecycle_clients_complete_simulate_worker_subprocess(capsys):
         assert last_job is not None
         assert last_job["worker_job_id"] == worker_job_id
 
+        reject_code = cli_module.main(
+            [
+                "send-command",
+                "--port",
+                str(port),
+                "--command",
+                "configure-sine",
+                "--arguments-json",
+                '{"frequency_hz":1000,"amplitude_vpp":0.1,'
+                '"burst":{"mode":"gated","start_phase_deg":45.100000000000001}}',
+                "--context-json",
+                json.dumps({"mode": "simulate", "planning_model_id": MODEL_ID}),
+                "--json",
+            ]
+        )
+        rejected = json.loads(capsys.readouterr().out)
+        assert reject_code == 2
+        assert rejected["http_status"] == 400
+        assert rejected["worker_response"]["error"]["code"] == "invalid_arguments"
+
         stop_code = cli_module.main(["worker-stop", "--port", str(port), "--json"])
         stop_payload = json.loads(capsys.readouterr().out)
         assert stop_code == 0

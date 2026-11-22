@@ -1102,9 +1102,11 @@ identity and final error-queue cases remain mandatory regardless of selection.
 
 Add `-IncludeBurstStartPhase` to `-Suite full -Modes burst` on either script
 to include the contributor-only Counted 90° and Gated 45.1° readback cases.
-The added cases keep output off. Preflight also checks that an invalid
-phase is rejected. Use the same options for Preflight and PlanOnly before
-an authorized Real Live run.
+The added cases keep output off and verify the programmed phase through
+readback. Measuring physical waveform behavior requires a separately
+authorized observation. Preflight also checks that an invalid phase is
+rejected. Use the same options for Preflight and PlanOnly before an authorized
+Real Live run.
 
 33512B admits CH1/CH2 Arbitrary; 33521B admits CH1; 33510B has no
 Arbitrary capability. All-target Preflight selects applicable recipes per

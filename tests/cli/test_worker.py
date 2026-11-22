@@ -1432,7 +1432,7 @@ def test_worker_arbitrary_http_workflow_validates_files_in_accepted_jobs(tmp_pat
     ),
     (
         "configure-square",
-        {**_sine_arguments(), "burst": {"mode": "gated", "polarity": "inverted", "start_phase_deg": 45.1}},
+        {**_sine_arguments(), "burst": {"mode": "gated", "polarity": "inverted"}},
         "burst_gate_polarity", "inverted",
     ),
     (
@@ -1455,8 +1455,63 @@ def test_worker_parity_forwards_advanced_operations(command, arguments, state_fi
     runtime._execute_command(_admitted_job(runtime, command, arguments))
     assert getattr(runtime.simulator_state.ch1, state_field) == expected
     assert runtime.simulator_state.ch1.output_enabled is False
-    if "start_phase_deg" in arguments.get("burst", {}):
-        assert runtime.simulator_state.ch1.burst_phase_deg == arguments["burst"]["start_phase_deg"]
+
+
+def _burst_phase_request(phase_token: str, *, mode: str) -> str:
+    payload = _payload(
+        "configure-sine",
+        {**_sine_arguments(), "burst": {"mode": "gated", "start_phase_deg": "PHASE_TOKEN"}},
+        mode=mode,
+    )
+    return json.dumps(payload).replace('"PHASE_TOKEN"', phase_token)
+
+
+def test_worker_simulate_validates_burst_start_phase_from_http_numbers():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        code, accepted = _request(
+            runtime, "POST", "/command", raw_body=_burst_phase_request("45.1", mode="simulate"),
+        )
+        assert code == 202
+        result = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")["result"]
+        assert result["burst"]["start_phase_deg"] == 45.1
+
+        code, rejected = _request(
+            runtime, "POST", "/command",
+            raw_body=_burst_phase_request("45.100000000000001", mode="simulate"),
+        )
+        assert code == 400
+        assert rejected["error"]["code"] == "invalid_arguments"
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
+def test_worker_product_live_rejects_burst_phase_underflow_before_visa(monkeypatch):
+    import wavegen_tool_core.visa as visa
+
+    state = Simulated33521BState(model_id=MODEL_ID)
+    manager_requests = []
+
+    def fake_create_resource_manager(library):
+        manager_requests.append(library)
+        return SimulatedResourceManager(state)
+
+    monkeypatch.setattr(visa, "create_resource_manager", fake_create_resource_manager)
+    runtime = WorkerRuntime(WorkerConfig("live", state.resource_name, "system", 0, True))
+    runtime.start()
+    try:
+        code, accepted = _request(
+            runtime, "POST", "/command", raw_body=_burst_phase_request("1e-325", mode="live"),
+        )
+        assert code == 202
+        failed = _wait_for_job(runtime, accepted["worker_job_id"], "failed")
+        assert failed["error"]["code"] == "waveform_parameter_error"
+        assert manager_requests == []
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
 
 
 def test_worker_sync_dispatch_uses_shared_core_for_plan_and_simulator():
