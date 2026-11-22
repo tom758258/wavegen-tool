@@ -1136,6 +1136,7 @@ def test_configure_sine_internal_am_dry_run_emits_ordered_json_without_visa(
     assert manager.opened_resources == []
     assert payload["am_enabled"] is True
     assert payload["am_frequency_hz"] == 1000.0
+    assert payload["am_shape"] == "sine"
     assert payload["am_depth_percent"] == 50.0
     assert payload["am_type"] == "normal"
     assert payload["output_state"] == "off"
@@ -1168,6 +1169,7 @@ def test_configure_sine_internal_am_dry_run_emits_ordered_json_without_visa(
         ["--am-frequency", "100"],
         ["--am-depth", "50"],
         ["--am-type", "dssc"],
+        ["--am-shape", "square"],
     ],
 )
 def test_incomplete_am_cli_group_fails_closed_without_visa(
@@ -1197,6 +1199,47 @@ def test_incomplete_am_cli_group_fails_closed_without_visa(
     assert manager.opened_resources == []
     assert payload["success"] is False
     assert payload["error"].startswith("waveform_parameter_error:")
+
+
+@pytest.mark.parametrize(
+    ("carrier", "mode", "shape", "settings"),
+    [
+        ("sine", "am", "square", ["--am-depth", "50"]),
+        ("sine", "fm", "up-ramp", ["--fm-deviation", "50"]),
+        ("sine", "pm", "triangle", ["--pm-deviation-deg", "50"]),
+        ("pulse", "pwm", "down-ramp", ["--pulse-width-s", "0.0001", "--pwm-deviation-s", "0.00002"]),
+        ("sine", "sum", "square", ["--sum-amplitude-percent", "20"]),
+    ],
+)
+def test_cli_modulation_shape_options_and_outputs(carrier, mode, shape, settings, capsys):
+    arguments = [
+        f"configure-{carrier}", "--frequency-hz", "1000", "--amplitude-vpp", "0.1",
+        f"--{mode}-frequency", "10", f"--{mode}-shape", shape, *settings,
+    ]
+
+    assert main([*arguments, "--dry-run", "--json"]) == ExitCode.SUCCESS
+    plan = json.loads(capsys.readouterr().out)
+    assert plan[f"{mode}_shape"] == shape
+    assert plan["executed"] is False
+
+    assert main([*arguments, "--simulate", "--verify-readback", "--json"]) == ExitCode.SUCCESS
+    result = json.loads(capsys.readouterr().out)
+    assert result[f"{mode}_shape"] == shape
+    assert result["readback_verified"] is True
+    assert result["output_state"] == "off"
+
+
+def test_cli_rejects_unknown_modulation_shape(capsys):
+    with pytest.raises(SystemExit) as error:
+        main([
+            "configure-sine", "--dry-run", "--json", "--frequency-hz", "1000",
+            "--amplitude-vpp", "0.1", "--am-frequency", "10", "--am-depth", "50",
+            "--am-shape", "down_ramp",
+        ])
+    assert error.value.code == ExitCode.CLI_USAGE
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "--am-shape" in output.err
 
 
 def test_configure_sine_internal_fm_dry_run_emits_ordered_json_without_visa(
@@ -2523,16 +2566,19 @@ def test_configure_pulse_internal_pwm_dry_run_emits_json_and_human_output(
         "5",
         "--pwm-deviation-s",
         "0.00002",
+        "--pwm-shape",
+        "down-ramp",
     ]
 
     assert main([*arguments, "--json"]) == ExitCode.SUCCESS
     payload = json.loads(capsys.readouterr().out)
     assert payload["pwm_enabled"] is True
+    assert payload["pwm_shape"] == "down-ramp"
     assert payload["pwm_frequency_hz"] == 5.0
     assert payload["pwm_deviation_s"] == 0.00002
     assert payload["commands"][-5:] == [
         "SOURce1:PWM:SOURce INTernal",
-        "SOURce1:PWM:INTernal:FUNCtion SINusoid",
+        "SOURce1:PWM:INTernal:FUNCtion NRAMp",
         "SOURce1:PWM:INTernal:FREQuency 5",
         "SOURce1:PWM:DEViation 2e-05",
         "SOURce1:PWM:STATe ON",
@@ -2542,6 +2588,7 @@ def test_configure_pulse_internal_pwm_dry_run_emits_json_and_human_output(
 
     assert main(arguments) == ExitCode.SUCCESS
     human_output = capsys.readouterr().out
+    assert "PWM modulation shape: down-ramp" in human_output
     assert "PWM modulation frequency (Hz): 5.0" in human_output
     assert "PWM width deviation (seconds): 2e-05" in human_output
     assert manager_calls == []

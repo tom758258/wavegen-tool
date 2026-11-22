@@ -8,6 +8,7 @@ import re
 import math
 
 from wavegen_tool_core._keysight_builtin import BUILTIN_ARBITRARY_PATHS
+from wavegen_tool_core._modulation_shapes import MODULATION_SHAPE_SCPI
 from wavegen_tool_core.capabilities import capabilities_for_model_id
 from wavegen_tool_core.identity import (
     CANONICAL_MODEL_ID,
@@ -22,6 +23,7 @@ _ARBITRARY_SEQUENCE_CAPACITY = 512
 _DEFAULT_ARBITRARY_NAME = BUILTIN_ARBITRARY_PATHS["EXP_RISE"]
 _DEFAULT_ARBITRARY_POINTS = 40
 _BUILTIN_ARBITRARY_POINTS = 128  # Synthetic allocation for catalog operations.
+_MODULATION_FUNCTIONS = frozenset(value.casefold() for value in MODULATION_SHAPE_SCPI.values())
 SIMULATED_33521B_IDN = "KEYSIGHT TECHNOLOGIES,33521B,SIM000001,1.0"
 
 
@@ -791,22 +793,10 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:AM:DSSC OFF": ("am_type", "normal"),
             f"SOURce{prefix_ch}:AM:DSSC ON": ("am_type", "dssc"),
             f"SOURce{prefix_ch}:AM:SOURce INTernal": ("am_source", "internal"),
-            f"SOURce{prefix_ch}:AM:INTernal:FUNCtion SINusoid": (
-                "am_internal_function",
-                "sine",
-            ),
             f"SOURce{prefix_ch}:FM:STATe OFF": ("fm_enabled", False),
             f"SOURce{prefix_ch}:FM:SOURce INTernal": ("fm_source", "internal"),
-            f"SOURce{prefix_ch}:FM:INTernal:FUNCtion SINusoid": (
-                "fm_internal_function",
-                "sine",
-            ),
             f"SOURce{prefix_ch}:PM:STATe OFF": ("pm_enabled", False),
             f"SOURce{prefix_ch}:PM:SOURce INTernal": ("pm_source", "internal"),
-            f"SOURce{prefix_ch}:PM:INTernal:FUNCtion SINusoid": (
-                "pm_internal_function",
-                "sine",
-            ),
             f"SOURce{prefix_ch}:FSKey:STATe OFF": ("fsk_enabled", False),
             f"SOURce{prefix_ch}:FSKey:SOURce INTernal": (
                 "fsk_source",
@@ -837,17 +827,9 @@ class SimulatedResource:
                 "pwm_source",
                 "internal",
             ),
-            f"SOURce{prefix_ch}:PWM:INTernal:FUNCtion SINusoid": (
-                "pwm_internal_function",
-                "sine",
-            ),
             f"SOURce{prefix_ch}:SUM:SOURce INTernal": (
                 "sum_source",
                 "internal",
-            ),
-            f"SOURce{prefix_ch}:SUM:INTernal:FUNCtion SINusoid": (
-                "sum_internal_function",
-                "sine",
             ),
             f"SOURce{prefix_ch}:SWEep:SPACing LINear": ("sweep_spacing", "linear"),
             f"SOURce{prefix_ch}:SWEep:SPACing LOGarithmic": (
@@ -862,6 +844,19 @@ class SimulatedResource:
         update = exact_updates.get(command)
         if update is not None:
             setattr(ch_state, update[0], update[1])
+            return
+
+        modulation = re.fullmatch(
+            rf"{source}:(AM|FM|PM|PWM|SUM):INTernal:FUNCtion (\w+)", command
+        )
+        if modulation:
+            mode, value = modulation.groups()
+            function = value.casefold()
+            if function not in _MODULATION_FUNCTIONS:
+                raise ValueError("Unsupported simulated modulation shape.")
+            if function == "sinusoid":
+                function = "sine"
+            setattr(ch_state, f"{mode.lower()}_internal_function", function)
             return
 
         # Generic output load handling (1..10000 or INF)

@@ -1,5 +1,6 @@
 """Core API for safe waveform-generator identification."""
 
+from wavegen_tool_core._modulation_shapes import MODULATION_SHAPES
 from wavegen_tool_core.backends import (
     PYVISA_BT_BACKEND,
     PYVISA_PY_BACKEND,
@@ -156,6 +157,7 @@ from wavegen_tool_core.visa import (
 from wavegen_tool_core.arbitrary import read_arbitrary_sequence_file, run_arbitrary
 
 __all__ = [
+    "MODULATION_SHAPES",
     "read_arbitrary_sequence_file",
     "run_arbitrary",
     "AMConfig",

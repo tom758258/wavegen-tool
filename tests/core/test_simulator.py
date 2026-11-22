@@ -1484,6 +1484,25 @@ def test_advanced_mode_readback_verifies_simulated_settings(
     assert state.ch1.output_enabled is False
 
 
+def test_simulated_pulse_modulation_shape_readback_on_channel_two() -> None:
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+    target = factory.resource_name
+
+    result = configure_pulse(
+        target, 1_000, 0.1, 0.0001, channel=2,
+        pwm=PWMConfig(100, 2e-5, "triangle"), verify_readback=True,
+        resource_manager_factory=factory,
+    )
+    observed = query_advanced_mode(target, channel=2, resource_manager_factory=factory)
+
+    assert result.output_state == "off"
+    assert observed.advanced_mode == "PWM"
+    assert observed.settings["shape"] == "triangle"
+    assert observed.settings["internal_function"] == "triangle"
+    assert query_advanced_mode(target, channel=1, resource_manager_factory=factory).advanced_mode == "CW"
+
+
 def test_advanced_mode_readback_respects_selected_channel() -> None:
     state = Simulated33521BState(model_id="keysight-33512b")
     factory = SimulatedResourceManagerFactory(state)

@@ -413,15 +413,21 @@ Static carrier commands expose these optional, Core-validated groups:
 | PWM | pulse | `--pwm-frequency`, `--pwm-deviation-s` |
 | Sum | sine, square, ramp, triangle, pulse | `--sum-frequency`, `--sum-amplitude-percent` |
 
-The internal modulation source is fixed by the corresponding Core path; AM,
-FM, PM, PWM, and Sum use an internal sine source. Partial groups and unsupported
-or mutually exclusive combinations are rejected.
+Select the internal modulation shape with `--am-shape`, `--fm-shape`,
+`--pm-shape`, `--pwm-shape`, or `--sum-shape`. Each accepts `sine` (the
+default), `square` (fixed 50% duty cycle), `up-ramp`, `triangle`, or
+`down-ramp`. Supply the required options for that mode when setting a shape.
+Product Live requires the `sine` shape. Dry-run and simulation accept all
+five shapes for the supported carriers.
 
 Key limits and relationships are:
 
-- AM depth is 0% through 100%; `--am-type` defaults to `normal`.
-- FM modulation frequency and deviation are at least 0.000001 Hz. Deviation is
-  limited by the carrier, a 15 MHz ceiling, and the carrier function maximum.
+- AM, FM, PM, PWM, and Sum modulation frequencies start at 0.000001 Hz.
+  The maximum for `sine` and `square` is 20 MHz on 33510B and 33512B and
+  30 MHz on 33521B. Both ramps and triangle have a 200 kHz maximum.
+- AM depth is 0% through 100%. The default AM type is `normal`.
+- FM deviation starts at 0.000001 Hz. Its maximum depends on the carrier,
+  the carrier function maximum, and a 15 MHz ceiling.
 - PM deviation is 0 through 360 degrees and carrier frequency must be greater
   than 20 times modulation frequency.
 - FSK rate is 0.000125 through 1,000,000 Hz; hop frequency must fit the selected
@@ -432,7 +438,7 @@ Key limits and relationships are:
   period, and edge margins.
 - Sum amplitude is 0% through 100% relative to carrier amplitude.
 
-Example AM dry-run:
+The following dry-run plans AM with a square modulation shape.
 
 ```powershell
 uv run wavegen-tool configure-sine `
@@ -442,7 +448,8 @@ uv run wavegen-tool configure-sine `
   --frequency-hz 1000000 `
   --amplitude-vpp 0.1 `
   --am-frequency 1000 `
-  --am-depth 50
+  --am-depth 50 `
+  --am-shape square --json
 ```
 
 Other internal modulation and Sum examples (run each independently):
@@ -474,8 +481,8 @@ uv run wavegen-tool configure-sine `
   --sum-frequency 10 --sum-amplitude-percent 20
 ```
 
-Pulse PWM uses an internal sine source; frequency and width deviation must
-be supplied together. PWM and AM cannot be combined:
+Pulse PWM requires both frequency and width deviation. PWM and AM are
+mutually exclusive. The following dry-run uses a triangle modulation shape.
 
 ```powershell
 uv run wavegen-tool configure-pulse `
@@ -486,7 +493,8 @@ uv run wavegen-tool configure-pulse `
   --amplitude-vpp 1 `
   --edge-time-s 0.00000005 `
   --pwm-frequency 5 `
-  --pwm-deviation-s 0.00002
+  --pwm-deviation-s 0.00002 `
+  --pwm-shape triangle
 ```
 
 An ordinary static waveform or sweep configuration disables applicable prior
