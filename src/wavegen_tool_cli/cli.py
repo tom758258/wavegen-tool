@@ -492,6 +492,10 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Gated Burst gate polarity (default: normal).",
     )
+    parser.add_argument(
+        "--burst-start-phase-deg",
+        help="Counted or Gated Burst start phase in degrees (default: 0).",
+    )
 
 
 def _burst_config_from_args(
@@ -504,24 +508,25 @@ def _burst_config_from_args(
         args.burst_trigger_timer_s,
         args.burst_trigger_slope,
     )
+    start_phase = args.burst_start_phase_deg
     if args.gated_burst:
         if any(value is not None for value in counted_values):
             raise WaveformParameterError(
                 "Gated Burst cannot be combined with Counted Burst options."
             )
-        return GatedBurstConfig(polarity=args.gate_polarity or "normal")
+        return GatedBurstConfig(
+            polarity=args.gate_polarity or "normal",
+            start_phase_deg=start_phase if start_phase is not None else 0.0,
+        )
     if args.gate_polarity is not None:
         raise WaveformParameterError(
             "Gate polarity requires --gated-burst."
         )
-    values = (
-        args.burst_count,
-        args.burst_period_s,
-        args.burst_trigger_source,
-        args.burst_trigger_timer_s,
-        args.burst_trigger_slope,
-    )
-    if all(value is None for value in values):
+    if start_phase is not None and args.burst_count is None:
+        raise WaveformParameterError(
+            "Burst start phase requires --burst-count or --gated-burst."
+        )
+    if all(value is None for value in counted_values):
         return None
     return CountedBurstConfig(
         count=args.burst_count,
@@ -529,6 +534,7 @@ def _burst_config_from_args(
         trigger_source=args.burst_trigger_source or "immediate",
         trigger_timer_s=args.burst_trigger_timer_s,
         trigger_slope=args.burst_trigger_slope,
+        start_phase_deg=start_phase if start_phase is not None else 0.0,
     )
 
 
@@ -4257,6 +4263,7 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
             "burst_enabled": True,
             "burst_mode": "gated",
             "burst_gate_polarity": burst.polarity,
+            "burst_start_phase_deg": burst.start_phase_deg,
         }
     return {
         "burst_enabled": True,
@@ -4266,6 +4273,7 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
         "burst_trigger_source": burst.trigger_source,
         "burst_trigger_timer_s": burst.trigger_timer_s,
         "burst_trigger_slope": burst.trigger_slope,
+        "burst_start_phase_deg": burst.start_phase_deg,
     }
 
 
@@ -5352,14 +5360,17 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
     burst = getattr(result, "burst", None)
     if burst is None:
         return ()
+    start_phase = f"Burst start phase (degrees): {burst.start_phase_deg}"
     if isinstance(burst, GatedBurstConfig):
         return (
             "Burst mode: gated",
             f"Burst gate polarity: {burst.polarity}",
+            start_phase,
         )
     lines = [
         f"Burst count: {burst.count}",
         f"Burst trigger source: {burst.trigger_source}",
+        start_phase,
     ]
     if burst.period_s is not None:
         lines.append(f"Burst period (seconds): {burst.period_s}")

@@ -155,7 +155,7 @@ def test_two_channel_simulator_isolates_external_and_gated_burst_cleanup() -> No
         factory.resource_name,
         1000,
         0.1,
-        burst=CountedBurstConfig(5, trigger_source="external"),
+        burst=CountedBurstConfig(5, trigger_source="external", start_phase_deg=90),
         channel=1,
         resource_manager_factory=factory,
     )
@@ -163,8 +163,9 @@ def test_two_channel_simulator_isolates_external_and_gated_burst_cleanup() -> No
         factory.resource_name,
         1000,
         0.1,
-        burst=GatedBurstConfig("inverted"),
+        burst=GatedBurstConfig("inverted", start_phase_deg=-45.1),
         channel=2,
+        verify_readback=True,
         resource_manager_factory=factory,
     )
 
@@ -175,6 +176,13 @@ def test_two_channel_simulator_isolates_external_and_gated_burst_cleanup() -> No
     assert state.ch2.burst_enabled is True
     assert state.ch2.burst_mode == "gated"
     assert state.ch2.burst_gate_polarity == "inverted"
+    assert state.ch1.burst_phase_deg == 90
+    assert state.ch2.burst_phase_deg == -45.1
+    session = SimulatedResource(state)
+    assert session.query("SOURce1:BURSt:PHASe?") == "90"
+    assert session.query("SOURce2:BURSt:PHASe?") == "-45.1"
+    advanced = query_advanced_mode(factory.resource_name, channel=2, resource_manager_factory=factory)
+    assert advanced.settings["phase_deg"] == -45.1
 
     configure_square(
         factory.resource_name,

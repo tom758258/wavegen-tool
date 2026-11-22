@@ -94,6 +94,7 @@ def test_configure_sine_counted_burst_dry_run_json(capsys) -> None:
     assert payload["burst_trigger_source"] == "immediate"
     assert payload["burst_trigger_timer_s"] is None
     assert payload["burst_mode"] == "counted"
+    assert payload["burst_start_phase_deg"] == 0.0
     assert payload["commands"][0] == "OUTPut1 OFF"
     assert payload["commands"][-1] == "SOURce1:BURSt:STATe ON"
     assert "OUTPut1 ON" not in payload["commands"]
@@ -111,6 +112,8 @@ def test_configure_sine_external_counted_burst_dry_run_json(capsys) -> None:
             "5",
             "--burst-trigger-source",
             "external",
+            "--burst-start-phase-deg",
+            "90",
             "--dry-run",
             "--json",
         ]
@@ -124,10 +127,11 @@ def test_configure_sine_external_counted_burst_dry_run_json(capsys) -> None:
     assert payload["burst_trigger_slope"] == "positive"
     assert payload["burst_period_s"] is None
     assert payload["burst_trigger_timer_s"] is None
+    assert payload["burst_start_phase_deg"] == 90
     assert payload["commands"][-6:] == [
         "SOURce1:BURSt:MODE TRIGgered",
         "SOURce1:BURSt:NCYCles 5",
-        "SOURce1:BURSt:PHASe 0",
+        "SOURce1:BURSt:PHASe 90",
         "TRIGger1:SOURce EXTernal",
         "TRIGger1:SLOPe POSitive",
         "SOURce1:BURSt:STATe ON",
@@ -151,6 +155,8 @@ def test_configure_sine_gated_burst_dry_run_json(capsys) -> None:
             "--gated-burst",
             "--gate-polarity",
             "inverted",
+            "--burst-start-phase-deg",
+            "-45.1",
             "--dry-run",
             "--json",
         ]
@@ -161,11 +167,12 @@ def test_configure_sine_gated_burst_dry_run_json(capsys) -> None:
     assert payload["burst_enabled"] is True
     assert payload["burst_mode"] == "gated"
     assert payload["burst_gate_polarity"] == "inverted"
+    assert payload["burst_start_phase_deg"] == -45.1
     assert "burst_count" not in payload
     assert payload["commands"][-4:] == [
         "SOURce1:BURSt:MODE GATed",
         "SOURce1:BURSt:GATE:POLarity INVerted",
-        "SOURce1:BURSt:PHASe 0",
+        "SOURce1:BURSt:PHASe -45.1",
         "SOURce1:BURSt:STATe ON",
     ]
     assert not any(
@@ -3885,6 +3892,7 @@ def test_counted_burst_cli_rejects_incompatible_options(
         ],
         ["--gated-burst", "--burst-count", "2"],
         ["--gate-polarity", "inverted"],
+        ["--burst-start-phase-deg", "0"],
     ],
 )
 def test_new_burst_cli_invalid_combinations_fail_before_visa(

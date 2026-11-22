@@ -90,16 +90,16 @@ request validation and safety rules documented for:
 - static sine, square, ramp, triangle, pulse, DC, noise, and PRBS;
 - supported AM, FM, PM, PWM, and Sum carrier combinations with a sine
   modulation shape, plus supported FSK and BPSK carrier combinations;
-- Counted Burst and Gated Burst on supported carriers;
+- Counted Burst and Gated Burst on supported carriers with start phase 0°;
 - sine, square, ramp, and triangle ordinary Sweeps with Immediate, Bus, or
   Timer, and List Sweeps with Immediate or Bus;
 - selected-channel status, output configuration, and output control;
 - explicit front-panel Sync OFF control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
 
-Product Live rejects non-sine AM, FM, PM, PWM, and Sum modulation shapes
-before configuration writes. Direct CLI contributor validation uses the
-existing explicit validation policy.
+Product Live rejects nonzero Burst start phase and non-sine AM, FM, PM, PWM,
+and Sum modulation shapes before configuration writes. These options are
+available in dry-run, simulation, and Direct CLI contributor validation.
 
 Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
 Core rejects these operations in Product Live mode for all models.

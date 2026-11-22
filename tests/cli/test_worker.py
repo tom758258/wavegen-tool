@@ -1432,7 +1432,7 @@ def test_worker_arbitrary_http_workflow_validates_files_in_accepted_jobs(tmp_pat
     ),
     (
         "configure-square",
-        {**_sine_arguments(), "burst": {"mode": "gated", "polarity": "inverted"}},
+        {**_sine_arguments(), "burst": {"mode": "gated", "polarity": "inverted", "start_phase_deg": 45.1}},
         "burst_gate_polarity", "inverted",
     ),
     (
@@ -1455,6 +1455,8 @@ def test_worker_parity_forwards_advanced_operations(command, arguments, state_fi
     runtime._execute_command(_admitted_job(runtime, command, arguments))
     assert getattr(runtime.simulator_state.ch1, state_field) == expected
     assert runtime.simulator_state.ch1.output_enabled is False
+    if "start_phase_deg" in arguments.get("burst", {}):
+        assert runtime.simulator_state.ch1.burst_phase_deg == arguments["burst"]["start_phase_deg"]
 
 
 def test_worker_sync_dispatch_uses_shared_core_for_plan_and_simulator():

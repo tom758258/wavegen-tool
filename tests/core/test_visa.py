@@ -4494,6 +4494,24 @@ def test_counted_burst_sine_returns_canonical_ordered_plan() -> None:
     assert "OUTPut1 ON" not in result.commands
 
 
+@pytest.mark.parametrize("phase", [-360, 0, 45.1, 360])
+def test_counted_burst_start_phase_accepts_tenth_degree_steps(phase):
+    result = dry_run_sine(
+        "keysight-33521b", 1000, 0.1, burst=CountedBurstConfig(2, 0.01, start_phase_deg=phase)
+    )
+
+    assert result.burst.start_phase_deg == phase
+    assert f"SOURce1:BURSt:PHASe {phase:g}" in result.commands
+
+
+@pytest.mark.parametrize("phase", [
+    -360.1, 360.1, 45.15, "45.100000000000001", float("nan"), float("inf"), "invalid", True,
+])
+def test_gated_burst_start_phase_rejects_invalid_values(phase):
+    with pytest.raises(WaveformParameterError, match="Burst start phase"):
+        dry_run_sine("keysight-33521b", 1000, 0.1, burst=GatedBurstConfig(start_phase_deg=phase))
+
+
 def test_configure_sine_counted_burst_writes_tail_and_returns_canonical_result() -> None:
     session = FakeSession()
     manager = FakeManager(session)
@@ -6414,6 +6432,61 @@ def test_advanced_mode_burst_count_readback_is_exact(reported_count, should_fail
     assert "SOURce1:BURSt:NCYCles?" in session.queries
     assert "OUTPut1 ON" not in session.writes
     assert session.close_calls == manager.close_calls == 1
+
+
+@pytest.mark.parametrize(("configure", "dry_run", "burst"), [
+    (configure_sine, dry_run_sine, CountedBurstConfig(2, 0.01, start_phase_deg=90)),
+    (configure_prbs, dry_run_prbs, GatedBurstConfig(start_phase_deg=-45.1)),
+])
+@pytest.mark.parametrize("matches", [True, False])
+def test_burst_start_phase_contributor_visa_readback(configure, dry_run, burst, matches):
+    query = "SOURce1:BURSt:PHASe?"
+    session = EchoAdvancedReadbackSession(
+        responses_by_command={} if matches else {query: "0"},
+    )
+    manager = FakeManager(session)
+    plan = dry_run("keysight-33521b", 1000, 0.1, burst=burst)
+
+    def execute():
+        return configure(
+            USB_RESOURCE, 1000, 0.1, burst=burst, verify_readback=True,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id="keysight-33521b",
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    if matches:
+        result = execute()
+        assert result.burst == burst
+        assert result.output_state == "off"
+    else:
+        with pytest.raises(WaveformVerificationError, match="BURSt:PHASe") as error:
+            execute()
+        assert error.value.output_state == "off"
+
+    assert session.writes == list(plan.commands)
+    phase_write = f"SOURce1:BURSt:PHASe {burst.start_phase_deg:g}"
+    assert session.writes.index("UNIT:ANGLe DEGree") < session.writes.index(phase_write)
+    assert session.events.index(("write", phase_write)) < session.events.index(("query", query))
+    assert session.writes[0] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in session.writes
+    assert session.close_calls == manager.close_calls == 1
+
+
+@pytest.mark.parametrize(("configure", "args"), [
+    (configure_sine, (1000, 0.1)),
+    (configure_prbs, (1000, 0.1)),
+    (configure_pulse, (1000, 0.1, 0.0001)),
+])
+def test_nonzero_burst_start_phase_rejected_before_product_live_visa_io(configure, args):
+    factory = Mock(side_effect=AssertionError("Product Live must reject before VISA I/O"))
+    with pytest.raises(UnsupportedInstrumentError, match="Nonzero Burst start phase"):
+        configure(
+            USB_RESOURCE, *args, burst=GatedBurstConfig(start_phase_deg=45.1),
+            resource_manager_factory=factory,
+        )
+    factory.assert_not_called()
+
 
 @pytest.mark.parametrize(
     ("enabled", "expected_mode", "frequency_response"),

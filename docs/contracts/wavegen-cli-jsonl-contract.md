@@ -91,6 +91,13 @@ or Sum include the active mode's shape in `am_shape`, `fm_shape`, `pm_shape`,
 modulation function corresponds to one of those values and also returns the
 existing `settings.internal_function`.
 
+Successful Direct CLI Burst configurations and dry-run plans include
+`burst_start_phase_deg` for both Counted and Gated Burst. It is the normalized
+requested start phase in degrees and defaults to 0.0. It is independent of the
+ordinary waveform `phase_deg`. An independent `readback-advanced` result with
+`advanced_mode="BURST"` reports the observed value in `settings.phase_deg`
+for both Burst modes.
+
 For the existing Advanced Mode configuration commands, a successful executed
 operation with `--verify-readback` adds `readback_verified: true` to Direct CLI
 JSON. A failed comparison retains `success: false` and the existing waveform

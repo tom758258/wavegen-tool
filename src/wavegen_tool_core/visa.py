@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 import csv
 from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation
 from io import StringIO
 import math
 from typing import Protocol
@@ -373,6 +374,7 @@ class CountedBurstConfig:
     trigger_source: object = "immediate"
     trigger_timer_s: object = None
     trigger_slope: object = None
+    start_phase_deg: object = 0.0
 
 
 @dataclass(frozen=True)
@@ -380,6 +382,7 @@ class GatedBurstConfig:
     """Gated-burst settings."""
 
     polarity: object = "normal"
+    start_phase_deg: object = 0.0
 
 
 BurstConfig = CountedBurstConfig | GatedBurstConfig
@@ -4577,7 +4580,13 @@ def _normalize_modulation_shape_and_frequency(
     return shape, frequency
 
 
-def _modulation_shape_validation_only_feature(configs: tuple[object, ...]) -> str | None:
+def _advanced_mode_validation_only_feature(configs: tuple[object, ...]) -> str | None:
+    if any(
+        isinstance(config, (CountedBurstConfig, GatedBurstConfig))
+        and config.start_phase_deg != 0.0
+        for config in configs
+    ):
+        return "Nonzero Burst start phase"
     if any(
         isinstance(config, (AMConfig, FMConfig, PMConfig, PWMConfig, SumConfig))
         and config.shape != "sine"
@@ -4626,6 +4635,13 @@ def _prepare_counted_burst(
         raise WaveformParameterError(
             "Waveform phase must be 0 degrees when Burst is enabled."
         )
+    start_phase = _normalize_burst_start_phase(config.start_phase_deg)
+    phase_command = f"SOURce1:BURSt:PHASe {_format_scpi_number(start_phase)}"
+    # PRBS has no ordinary phase setting, so its carrier plan omits angle units.
+    # Zero is independent of the current unit and retains the existing plan.
+    angle_unit_commands = (
+        ("UNIT:ANGLe DEGree",) if carrier == "prbs" and start_phase != 0.0 else ()
+    )
     if isinstance(config, GatedBurstConfig):
         if not isinstance(config.polarity, str):
             raise WaveformParameterError(
@@ -4636,11 +4652,12 @@ def _prepare_counted_burst(
             raise WaveformParameterError(
                 "Gated Burst polarity must be normal or inverted."
             )
-        normalized = GatedBurstConfig(polarity=polarity)
+        normalized = GatedBurstConfig(polarity=polarity, start_phase_deg=start_phase)
         return normalized, (
+            *angle_unit_commands,
             "SOURce1:BURSt:MODE GATed",
             f"SOURce1:BURSt:GATE:POLarity {'NORMal' if polarity == 'normal' else 'INVerted'}",
-            "SOURce1:BURSt:PHASe 0",
+            phase_command,
             "SOURce1:BURSt:STATe ON",
         )
     if isinstance(config.count, bool) or not isinstance(config.count, int):
@@ -4751,6 +4768,7 @@ def _prepare_counted_burst(
         trigger_source=trigger_source,
         trigger_timer_s=trigger_timer,
         trigger_slope=trigger_slope,
+        start_phase_deg=start_phase,
     )
     period_commands = (
         (f"SOURce1:BURSt:INTernal:PERiod {_format_scpi_number(period)}",)
@@ -4758,6 +4776,7 @@ def _prepare_counted_burst(
         else ()
     )
     commands = (
+        *angle_unit_commands,
         "SOURce1:BURSt:MODE TRIGgered",
         f"SOURce1:BURSt:NCYCles {config.count}",
         *period_commands,
@@ -4766,7 +4785,7 @@ def _prepare_counted_burst(
             if trigger_timer is not None
             else ()
         ),
-        "SOURce1:BURSt:PHASe 0",
+        phase_command,
         (
             "TRIGger1:SOURce EXTernal"
             if trigger_source == "external"
@@ -6635,7 +6654,7 @@ def configure_pulse(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
-        validation_only_feature=_modulation_shape_validation_only_feature(preflight),
+        validation_only_feature=_advanced_mode_validation_only_feature(preflight),
     )
     (
         amplitude,
@@ -7218,6 +7237,7 @@ def configure_prbs(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=_advanced_mode_validation_only_feature((normalized_burst,)),
     )
     return PrbsConfigurationResult(
         resource=context.resource,
@@ -7735,6 +7755,18 @@ def _normalize_phase_deg(value: object, *, waveform: str) -> float:
             f"{waveform} phase must be between -360 and 360 degrees."
         )
     return phase
+
+
+def _normalize_burst_start_phase(value: object) -> float:
+    phase = _normalize_phase_deg(value, waveform="Burst start")
+    # Compare against the original input so decimal text cannot round onto a valid step.
+    try:
+        on_step = Decimal(str(value)) == Decimal(f"{phase:.1f}")
+    except InvalidOperation:
+        on_step = False
+    if not on_step:
+        raise WaveformParameterError("Burst start phase must use 0.1-degree increments.")
+    return phase or 0.0
 
 
 def resolve_voltage_inputs(
@@ -8523,6 +8555,7 @@ def query_advanced_mode(
                 prefix + "BURSt:MODE", frozenset({"TRIGGERED", "GATED"})
             )
             fields["burst_mode"] = "counted" if burst_mode == "triggered" else "gated"
+            fields["phase_deg"] = number(prefix + "BURSt:PHASe")
             if burst_mode == "gated":
                 fields["gate_polarity"] = choice(
                     prefix + "BURSt:GATE:POLarity",
@@ -8538,7 +8571,6 @@ def query_advanced_mode(
                         identity=context.identity,
                     )
                 fields["count"] = int(count)
-                fields["phase_deg"] = number(prefix + "BURSt:PHASe")
                 trigger = choice(
                     f"TRIGger{selected}:SOURce",
                     frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
@@ -8912,7 +8944,7 @@ def _prepare_and_write_to_supported_instrument(
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
         validation_only_feature=(
-            validation_only_feature or _modulation_shape_validation_only_feature(preflight[0])
+            validation_only_feature or _advanced_mode_validation_only_feature(preflight[0])
         ),
     )
     if not isinstance(values, tuple):  # pragma: no cover - defensive invariant

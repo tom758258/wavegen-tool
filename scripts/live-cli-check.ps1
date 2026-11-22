@@ -18,7 +18,8 @@ param(
     [string]$Python = ".\.venv\Scripts\python.exe",
 
     [switch]$DebugArtifacts,
-    [string]$OutputRoot = ".tmp_tests\cli_live"
+    [string]$OutputRoot = ".tmp_tests\cli_live",
+    [switch]$IncludeBurstStartPhase
 )
 
 Set-StrictMode -Version Latest
@@ -673,7 +674,7 @@ function Invoke-FullLiveCases {
 
 try {
     $modesSpecified = $PSBoundParameters.ContainsKey("Modes")
-    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified)
+    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified -IncludeBurstStartPhase:$IncludeBurstStartPhase)
     $targetProfile = Resolve-ValidationTarget -Target $Target
     $connectionName = $Connection.Trim().ToLowerInvariant()
     if ($connectionName -notin @("usb", "tcpip")) {
@@ -760,6 +761,7 @@ $preflightArguments = @(
 )
 if ($DebugArtifacts) { $preflightArguments += '-DebugArtifacts' }
 if ($Suite -eq 'full' -and $modesSpecified) { $preflightArguments += @('-Modes', ($selectedModes -join ',')) }
+if ($IncludeBurstStartPhase) { $preflightArguments += '-IncludeBurstStartPhase' }
 $preflightProcess = $null
 try {
     $preflightProcess = Invoke-CapturedCommand -Name 'preflight' -FilePath $powershellPath `
@@ -864,7 +866,7 @@ try {
         New-ArbitraryValidationFixtures -Directory (Join-Path $run.Private 'fixtures')
     } else { $null }
     $fullInventory = if ($Suite -eq 'full') {
-        @(Get-FullValidationInventory -Channels $channels -Modes $applicableModes -ArbitraryFixtures $fixtures)
+        @(Get-FullValidationInventory -Channels $channels -Modes $applicableModes -ArbitraryFixtures $fixtures -IncludeBurstStartPhase:$IncludeBurstStartPhase)
     } else { @() }
 } catch {
     Add-LiveCase -Cases $cases -Name 'mode-admission' -Status FAIL -FailureReasons $_.Exception.Message
@@ -916,6 +918,9 @@ Write-Host "  Phase: 0 deg"
 Write-Host "  Load: 50 ohm"
 Write-Host ""
 Write-Host "Safety:"
+if ($IncludeBurstStartPhase) {
+    Write-Host '  - Nonzero Burst start phase cases use Contributor Validation and keep the output OFF.'
+}
 if ($Suite -eq 'full') {
     Write-Host "  - Only output-control and confirmed observation cases use Output ON."
     Write-Host "  - Prepare a scope with a 50-ohm termination and a separate Ext Trig/Gate source for CH1 observations."
