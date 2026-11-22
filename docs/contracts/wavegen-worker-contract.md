@@ -112,7 +112,8 @@ The read-only `readback-advanced` command accepts an optional channel
 (default 1), requires no `allow_output_writes` authorization, and returns
 `advanced_mode` and `settings` in its normal terminal job result.
 It is supported in live and simulate contexts, not dry_run. It cannot
-configure a mode or broaden model/transport admission.
+configure a mode or broaden model/transport admission. For active Counted Burst
+or ordinary Sweep, `settings.trigger_delay_s` reports the stored delay in seconds.
 
 ## Command Arguments
 
@@ -183,6 +184,15 @@ Product Live execution. List Sweeps use `frequencies_hz` (a JSON array)
 and the same voltage, phase, load and carrier options as their ordinary
 sweep counterparts. With Immediate, supply `dwell_s`. With Bus, omit it.
 
+Ordinary Sweeps accept top-level `trigger_delay_s`. Counted Burst uses
+`burst.trigger_delay_s`. Supply a JSON number from 0 through 1000 in exact
+4 ns increments, or omit the field to leave the instrument's setting in
+place. Explicit `null` is rejected. Gated Burst and List Sweeps reject this
+field. Dry-run and simulation accept valid delays. Core rejects every
+explicit delay in Worker Live before configuration writes, including zero.
+Successful ordinary Sweep and Counted Burst results report the normalized
+delay in their corresponding fields, or `null` when omitted.
+
 Static advanced options are nested JSON objects. Sine, Square, Ramp, and
 Triangle accept `am`, `fm`, `pm`, `fsk`, `bpsk`, `sum`, and `burst`.
 Pulse accepts `am`, `pwm`, `sum`, and `burst`. PRBS accepts `burst`.
@@ -197,7 +207,7 @@ Core validates which combinations the carrier supports.
 | `bpsk` | `phase_shift_deg`, `rate_hz` |
 | `pwm` | `modulation_frequency_hz`, `deviation_s`, optional `shape` |
 | `sum` | `modulation_frequency_hz`, `amplitude_percent`, optional `shape` |
-| `burst` (Counted) | `mode: "counted"`, `count`, optional `period_s`, `trigger_source`, `trigger_timer_s`, `trigger_slope`, `start_phase_deg` |
+| `burst` (Counted) | `mode: "counted"`, `count`, optional `period_s`, `trigger_source`, `trigger_timer_s`, `trigger_slope`, `start_phase_deg`, `trigger_delay_s` |
 | `burst` (Gated) | `mode: "gated"`, optional `polarity`, `start_phase_deg` |
 
 `start_phase_deg` defaults to 0.0 and accepts −360.0 through +360.0 degrees
@@ -217,7 +227,8 @@ execution before any configuration writes.
 `verify_readback` is an optional boolean for these static advanced
 configurations, ordinary sweeps and List Sweeps. Successful live or simulated
 verification reports `readback_verified: true` in the terminal result.
-Dry-run validates and plans the configuration only.
+Verification queries Trigger Delay only when explicitly supplied. Dry-run
+validates and plans the configuration only.
 
 `configure-output` accepts partial updates to `load`, `polarity`,
 `voltage_limit_low`, `voltage_limit_high`, `voltage_limits_enabled`,

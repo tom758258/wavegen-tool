@@ -928,3 +928,31 @@ def test_worker_reuses_core_for_incompatible_advanced_groups():
             worker_mode="simulate", allow_output_writes=False,
         )
     assert error.value.code == "invalid_arguments"
+
+
+@pytest.mark.parametrize(("command", "arguments"), [
+    ("configure-sine", {"burst": {"mode": "counted", "count": 3, "trigger_delay_s": None}}),
+    ("configure-sine", {"burst": {"mode": "gated", "trigger_delay_s": 0}}),
+    ("configure-sine-sweep", {"trigger_delay_s": True}),
+    ("configure-sine-sweep", {"trigger_delay_s": "0.1"}),
+    ("configure-sine-list-sweep", {"trigger_delay_s": 0}),
+])
+def test_worker_rejects_invalid_trigger_delay_arguments(command, arguments):
+    if command == "configure-sine-sweep":
+        arguments = {
+            "start_frequency_hz": 2, "stop_frequency_hz": 8, "spacing": "linear",
+            "sweep_time_s": 1, "amplitude_vpp": 0.1, **arguments,
+        }
+    elif command == "configure-sine-list-sweep":
+        arguments = {"frequencies_hz": [2, 8], "amplitude_vpp": 0.1, **arguments}
+    else:
+        arguments = {**_sine_arguments(), **arguments}
+
+    with pytest.raises(WorkerRequestValidationError, match="trigger_delay_s|Invalid burst object"):
+        validate_worker_command_request(
+            _payload(
+                command, arguments,
+                context={"mode": "dry_run", "planning_model_id": "keysight-33521b"},
+            ),
+            worker_mode="simulate", allow_output_writes=True,
+        )

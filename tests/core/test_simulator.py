@@ -1546,3 +1546,36 @@ def test_independent_advanced_readback_ch2_and_cw_state():
     assert two.settings["depth_percent"] == 35
     assert state.ch1.am_enabled is False
     assert state.ch2.am_enabled is True
+
+
+def test_trigger_delay_is_retained_across_modes_and_read_back_per_channel():
+    state = Simulated33521BState(model_id="keysight-33512b")
+    factory = SimulatedResourceManagerFactory(state)
+    resource = factory.resource_name
+    configure_sine_sweep(
+        resource, 2, 8, "linear", 1, 0.1, channel=2, trigger_delay_s=0.1,
+        verify_readback=True, resource_manager_factory=factory,
+    )
+    sweep = query_advanced_mode(resource, channel=2, resource_manager_factory=factory)
+    assert sweep.advanced_mode == "SWEEP"
+    assert sweep.settings["trigger_delay_s"] == 0.1
+
+    for channel, stored_delay in ((1, 0.0), (2, 0.1)):
+        configure_sine(
+            resource, 1000, 0.1, channel=channel, verify_readback=True,
+            burst=CountedBurstConfig(3, trigger_source="bus"), resource_manager_factory=factory,
+        )
+        readback = query_advanced_mode(resource, channel=channel, resource_manager_factory=factory)
+        assert readback.advanced_mode == "BURST"
+        assert readback.settings["trigger_delay_s"] == stored_delay
+
+    configure_sine(resource, 1000, 0.1, channel=2, burst=GatedBurstConfig(),
+                   resource_manager_factory=factory)
+    gated = query_advanced_mode(resource, channel=2, resource_manager_factory=factory)
+    assert gated.settings["burst_mode"] == "gated"
+    assert "trigger_delay_s" not in gated.settings
+    configure_sine_list_sweep(resource, [2, 8], 0.1, channel=2, trigger_source="bus",
+                              resource_manager_factory=factory)
+    listed = query_advanced_mode(resource, channel=2, resource_manager_factory=factory)
+    assert listed.advanced_mode == "LIST"
+    assert "trigger_delay_s" not in listed.settings

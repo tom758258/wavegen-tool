@@ -296,7 +296,9 @@ comparison with a previous request. It never sets output, trigger, or waveform
 parameters. The `--simulate` Direct CLI command starts a fresh simulator on
 each invocation; use a persistent Worker simulator to test readback after a
 separate simulated configure job. The existing `--verify-readback` remains
-the opt-in configure-and-compare operation.
+the opt-in configure-and-compare operation. For active Counted Burst and
+ordinary Sweep, `settings.trigger_delay_s` reports the delay stored on the
+selected channel, including a setting retained from an earlier operation.
 
 ### `read-errors`
 
@@ -511,6 +513,7 @@ Counted Burst options are:
 - `--burst-period-s`
 - `--burst-trigger-source {immediate,bus,timer,external}`
 - `--burst-trigger-timer-s`
+- `--burst-trigger-delay-s`
 - `--burst-trigger-slope {positive,negative}`
 
 Immediate uses count and period. Bus uses count and omits period/timer. Timer
@@ -522,6 +525,13 @@ Count is 1 through 100,000,000. An Immediate period is 0.000001 through 8000
 seconds. Immediate/Timer periods must allow the complete burst plus the Core
 safety margin. Counted sine and square carriers are capped at 6 MHz. Counted
 Burst is finite-only and mutually exclusive with modulation modes.
+
+`--burst-trigger-delay-s` requires `--burst-count` and the options for the
+selected trigger source. It accepts 0 through 1000 seconds in exact 4 ns
+increments. Omitting it leaves the instrument's stored delay in place.
+Explicitly passing `0` programs zero seconds. This option is available in
+dry-run, simulation, and Direct CLI contributor validation. Product Live
+and Worker Live reject every explicit value, including zero.
 
 Gated Burst uses:
 
@@ -553,7 +563,7 @@ Bus, Timer, and External Counted Burst use their own trigger parameters:
 uv run wavegen-tool configure-sine `
   --dry-run --model keysight-33521b `
   --frequency-hz 1000 --amplitude-vpp 0.1 `
-  --burst-count 3 --burst-trigger-source bus
+  --burst-count 3 --burst-trigger-source bus --burst-trigger-delay-s 0.1
 
 uv run wavegen-tool configure-sine `
   --dry-run --model keysight-33521b `
@@ -600,13 +610,17 @@ Required sweep options are:
 
 Optional common options include `--hold-time-s`, `--return-time-s`,
 `--trigger-source {immediate,bus,timer,external}`, `--trigger-timer-s`,
-`--trigger-slope {positive,negative}`, one voltage form, `--phase-deg`, and
-`--load`. Hold and return default to zero. The trigger source defaults to
+`--trigger-slope {positive,negative}`, `--trigger-delay-s`, one voltage form,
+`--phase-deg`, and `--load`. Hold and return default to zero. The trigger source defaults to
 Immediate. A Timer interval must be 0.000001 through 8000 seconds and at least
 the complete sweep, hold, and return duration. Only External accepts
 `--trigger-slope`, which defaults to `positive` and is always programmed.
 Omit `--trigger-timer-s` with External. External Sweep is available in dry-run,
 simulation, and contributor validation.
+
+`--trigger-delay-s` uses the same range and access rules as Counted Burst
+delay. It applies to linear and logarithmic sweeps with any otherwise
+supported trigger source. List Sweeps have no delay option.
 
 Square sweeps add `--duty-cycle-percent`, validated at the higher endpoint.
 Ramp sweeps add `--symmetry-percent`. Sweeps are selected-channel operations,
@@ -645,7 +659,7 @@ uv run wavegen-tool configure-triangle-sweep `
   --start-frequency-hz 100 --stop-frequency-hz 1000 `
   --spacing linear --sweep-time-s 1 `
   --amplitude-vpp 0.1 `
-  --trigger-source timer --trigger-timer-s 2
+  --trigger-source timer --trigger-timer-s 2 --trigger-delay-s 0.1
 ```
 
 Bus-triggered sweeps require a separate `trigger` command after live
@@ -899,8 +913,14 @@ uv run wavegen-tool configure-sine --simulate --frequency-hz 1000 `
 A successful executed verification adds `readback_verified: true` to Direct CLI
 JSON and `Advanced Mode readback: PASS` to text output. A mismatch, malformed
 response, or failed query returns a waveform verification error (exit code 29),
-with expected and actual values where available. Without the flag, executed
-results and queries are unchanged.
+with expected and actual values where available. Verification queries Trigger
+Delay only when this configuration explicitly sets it.
+
+An explicit delay also checks the instrument error queue before and after
+configuration, even without `--verify-readback`. Each check reads at most one
+entry. If the first check finds a queued error, the command reports it and
+stops before writing any settings. The second check reports any error it reads
+after the writes. Use `read-errors` to inspect remaining entries.
 
 The `--simulate` path checks an in-memory model only. The `--dry-run` path, even
 with `--verify-readback`, returns the normal offline plan and does not claim a

@@ -114,6 +114,8 @@ def test_configure_sine_external_counted_burst_dry_run_json(capsys) -> None:
             "external",
             "--burst-start-phase-deg",
             "90",
+            "--burst-trigger-delay-s",
+            "0",
             "--dry-run",
             "--json",
         ]
@@ -128,10 +130,12 @@ def test_configure_sine_external_counted_burst_dry_run_json(capsys) -> None:
     assert payload["burst_period_s"] is None
     assert payload["burst_trigger_timer_s"] is None
     assert payload["burst_start_phase_deg"] == 90
-    assert payload["commands"][-6:] == [
+    assert payload["burst_trigger_delay_s"] == 0
+    assert payload["commands"][-7:] == [
         "SOURce1:BURSt:MODE TRIGgered",
         "SOURce1:BURSt:NCYCles 5",
         "SOURce1:BURSt:PHASe 90",
+        "TRIGger1:DELay 0",
         "TRIGger1:SOURce EXTernal",
         "TRIGger1:SLOPe POSitive",
         "SOURce1:BURSt:STATe ON",
@@ -3716,6 +3720,8 @@ def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None
             "timer",
             "--trigger-timer-s",
             "1",
+            "--trigger-delay-s",
+            "0.1",
             "--json",
         ]
     )
@@ -3725,7 +3731,9 @@ def test_sweep_timer_cli_json_reports_timer_and_ordered_commands(capsys) -> None
     assert payload["trigger_source"] == "timer"
     assert payload["trigger_timer_s"] == 1.0
     assert payload["trigger_slope"] is None
-    assert payload["commands"][-3:] == [
+    assert payload["trigger_delay_s"] == 0.1
+    assert payload["commands"][-4:] == [
+        "TRIGger1:DELay 0.1",
         "TRIGger1:TIMer 1",
         "TRIGger1:SOURce TIMer",
         "SOURce1:FREQuency:MODE SWEep",
@@ -4844,3 +4852,15 @@ def test_arbitrary_product_live_remains_blocked_before_visa(monkeypatch, capsys)
         assert result != ExitCode.SUCCESS
         assert payload["success"] is False
         assert payload["error"] is not None
+
+
+@pytest.mark.parametrize("burst_options", [[], ["--gated-burst"]])
+def test_cli_burst_trigger_delay_requires_counted_burst(burst_options, capsys):
+    code = main([
+        "configure-sine", "--dry-run", "--json", "--frequency-hz", "1000",
+        "--amplitude-vpp", "0.1", "--burst-trigger-delay-s", "0", *burst_options,
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == ExitCode.CLI_USAGE
+    assert payload["success"] is False
+    assert payload["error"].startswith("waveform_parameter_error:")

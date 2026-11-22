@@ -81,6 +81,12 @@ symmetry, pulse-edge, PRBS, sweep timing/spacing/trigger, and List Sweep fields
 only when that Direct CLI command exposes them. Successful ordinary Sweep
 results and dry-run plans report `trigger_slope` as `"positive"` or
 `"negative"` for External and `null` for other sources.
+Counted Burst results and dry-run plans include `burst_trigger_delay_s`.
+Ordinary Sweep results and dry-run plans include `trigger_delay_s`. Both
+report the normalized requested delay in seconds, or `null` if omitted.
+An explicit zero is a write and has the same access restrictions as any
+other delay. Independent `readback-advanced` reports the observed
+`settings.trigger_delay_s` for active Counted Burst or ordinary Sweep.
 Internal result dataclasses may contain additional fields.
 
 Successful Direct CLI configurations and dry-run plans with AM, FM, PM, PWM,
@@ -104,6 +110,7 @@ JSON. A failed comparison retains `success: false` and the existing waveform
 verification error category (exit 29). Default executed results and hardware-free
 dry-run plans never include that field. Normalized configuration results remain
 requested values and must not be mistaken for independent observations.
+Configuration verification queries Trigger Delay only when explicitly supplied.
 
 ## Direct CLI Commands
 

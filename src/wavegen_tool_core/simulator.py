@@ -54,6 +54,7 @@ class SimulatedChannelState:
     sweep_return_time_s: float = 0.0
     trigger_source: str = "immediate"
     trigger_timer_s: float = 1.0
+    trigger_delay_s: float = 0.0
     burst_trigger_slope: str = "positive"
     phase_deg: float = 0.0
     amplitude_vpp: float = 0.1
@@ -954,6 +955,7 @@ class SimulatedResource:
             (f"SOURce{prefix_ch}:SWEep:RTIMe ", "sweep_return_time_s"),
             (f"SOURce{prefix_ch}:LIST:DWELl ", "list_dwell_s"),
             (f"TRIGger{prefix_ch}:TIMer ", "trigger_timer_s"),
+            (f"TRIGger{prefix_ch}:DELay ", "trigger_delay_s"),
             (f"SOURce{prefix_ch}:FUNCtion:SQUare:DCYCle ", "square_duty_cycle_percent"),
             (f"SOURce{prefix_ch}:FUNCtion:RAMP:SYMMetry ", "ramp_symmetry_percent"),
             (f"SOURce{prefix_ch}:FUNCtion:PULSe:WIDTh ", "pulse_width_s"),
@@ -1090,6 +1092,7 @@ class SimulatedResource:
             f"TRIGger{prefix_ch}:SOURce?": ch_state.trigger_source,
             f"TRIGger{prefix_ch}:SLOPe?": ch_state.burst_trigger_slope,
             f"TRIGger{prefix_ch}:TIMer?": _format_number(ch_state.trigger_timer_s),
+            f"TRIGger{prefix_ch}:DELay?": _format_number(ch_state.trigger_delay_s),
             f"SOURce{prefix_ch}:PHASe?": _format_number(ch_state.phase_deg),
             f"SOURce{prefix_ch}:FUNCtion:PULSe:TRANsition? MAXimum": "1e-6",
             f"SOURce{prefix_ch}:FUNCtion:PULSe:TRANsition:LEADing? MAXimum": "1e-6",
