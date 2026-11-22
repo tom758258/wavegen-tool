@@ -6545,6 +6545,7 @@ def configure_pulse(
                     output_state=output_state,
                 ) from exc
 
+        _check_trigger_delay_configuration(session, advanced_commands, before_writes=True)
         write_pulse_command(commands[0], None)
         for command in commands[1:18]:
             write_pulse_command(command, "off")
@@ -6716,6 +6717,7 @@ def configure_pulse(
         )
         for command in _channelize_commands(advanced_commands, selected_channel):
             write_pulse_command(command, "off")
+        _check_trigger_delay_configuration(session, advanced_commands, before_writes=False)
         if verify_readback:
             _verify_advanced_mode_configuration(
                 session,
@@ -8958,21 +8960,32 @@ def _verify_advanced_mode_configuration(
             )
 
 
-def _check_trigger_delay_configuration(session: VisaSession, commands: tuple[str, ...]) -> None:
+def _check_trigger_delay_configuration(
+    session: VisaSession, commands: tuple[str, ...], *, before_writes: bool
+) -> None:
     if not any(command.startswith("TRIGger1:DELay ") for command in commands):
         return
+    stage = "before" if before_writes else "after"
+    output_state = None if before_writes else "off"
     try:
         entry = _parse_error_queue_entry(session.query(SYSTEM_ERROR_QUERY))
     except ErrorQueueQueryError as exc:
-        raise exc.attach_context(output_state="off")
+        raise exc.attach_context(output_state=output_state)
     except Exception as exc:
         raise ErrorQueueQueryError(
-            "SYSTem:ERRor? failed after configuring Trigger Delay.", output_state="off"
+            f"{SYSTEM_ERROR_QUERY} failed {stage} configuration with Trigger Delay.",
+            output_state=output_state,
         ) from exc
     if entry.code != ERROR_QUEUE_NO_ERROR_CODE:
+        if before_writes:
+            raise VisaWriteError(
+                "Configuration with Trigger Delay stopped before any writes due to a "
+                f"pre-existing instrument error ({entry.code}): {entry.message}"
+            )
         raise VisaWriteError(
-            f"Instrument error after configuring Trigger Delay ({entry.code}): {entry.message}",
-            output_state="off",
+            f"Instrument error reported after configuration with Trigger Delay ({entry.code}): "
+            f"{entry.message}",
+            output_state=output_state,
         )
 
 
@@ -9004,9 +9017,10 @@ def _write_to_supported_instrument(
             _check_independent_channel_guard(session, capabilities, context)
         if verify_readback:
             _advanced_mode_readback_fields(commands)
+        _check_trigger_delay_configuration(session, commands, before_writes=True)
         for command in _channelize_commands(commands, selected_channel):
             session.write(command)
-        _check_trigger_delay_configuration(session, commands)
+        _check_trigger_delay_configuration(session, commands, before_writes=False)
         if verify_readback:
             _verify_advanced_mode_configuration(
                 session, context, commands, selected_channel=selected_channel
@@ -9060,9 +9074,10 @@ def _prepare_and_write_to_supported_instrument(
         if independent_channel_guard:
             _check_independent_channel_guard(session, capabilities, context)
         values, commands = prepare_configuration(capabilities)
+        _check_trigger_delay_configuration(session, commands, before_writes=True)
         for command in _channelize_commands(commands, selected_channel):
             session.write(command)
-        _check_trigger_delay_configuration(session, commands)
+        _check_trigger_delay_configuration(session, commands, before_writes=False)
         if verify_readback:
             _verify_advanced_mode_configuration(
                 session, context, commands, selected_channel=selected_channel

@@ -111,9 +111,9 @@ Trigger sends an instrument-wide Bus trigger and accepts an empty arguments obje
 The read-only `readback-advanced` command accepts an optional channel
 (default 1), requires no `allow_output_writes` authorization, and returns
 `advanced_mode` and `settings` in its normal terminal job result.
-It is supported in live and simulate contexts. It cannot configure a
-mode or broaden model/transport admission. For active Counted Burst or
-ordinary Sweep, `settings.trigger_delay_s` reports the stored delay in seconds.
+It is supported in live and simulate contexts, not dry_run. It cannot
+configure a mode or broaden model/transport admission. For active Counted Burst
+or ordinary Sweep, `settings.trigger_delay_s` reports the stored delay in seconds.
 
 ## Command Arguments
 

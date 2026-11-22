@@ -914,9 +914,13 @@ A successful executed verification adds `readback_verified: true` to Direct CLI
 JSON and `Advanced Mode readback: PASS` to text output. A mismatch, malformed
 response, or failed query returns a waveform verification error (exit code 29),
 with expected and actual values where available. Verification queries Trigger
-Delay only when this configuration explicitly sets it. Setting a delay also
-checks the instrument error queue after configuration, even without
-`--verify-readback`.
+Delay only when this configuration explicitly sets it.
+
+An explicit delay also checks the instrument error queue before and after
+configuration, even without `--verify-readback`. Each check reads at most one
+entry. If the first check finds a queued error, the command reports it and
+stops before writing any settings. The second check reports any error it reads
+after the writes. Use `read-errors` to inspect remaining entries.
 
 The `--simulate` path checks an in-memory model only. The `--dry-run` path, even
 with `--verify-readback`, returns the normal offline plan and does not claim a
