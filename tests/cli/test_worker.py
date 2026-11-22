@@ -1485,6 +1485,38 @@ def test_worker_sync_dispatch_uses_shared_core_for_plan_and_simulator():
         assert runtime.wait(timeout=2.0)
 
 
+def test_worker_modulation_shape_in_plan_and_simulated_job_results():
+    runtime = WorkerRuntime(_worker_config())
+    arguments = {
+        **_sine_arguments(),
+        "am": {"modulation_frequency_hz": 100, "depth_percent": 50, "shape": "up-ramp"},
+        "verify_readback": True,
+    }
+    runtime.start()
+    try:
+        def submit(command, args, mode):
+            code, response = _request(
+                runtime, "POST", "/command", _payload(command, args, mode=mode),
+            )
+            assert code == 202
+            return _wait_for_job(runtime, response["worker_job_id"], "succeeded")["result"]
+
+        plan = submit("configure-sine", arguments, "dry_run")
+        assert plan["am"]["shape"] == "up-ramp"
+        assert plan["executed"] is False
+
+        configured = submit("configure-sine", arguments, "simulate")
+        assert configured["am"]["shape"] == "up-ramp"
+        assert configured["readback_verified"] is True
+        assert configured["output_state"] == "off"
+
+        observed = submit("readback-advanced", {}, "simulate")
+        assert observed["settings"]["shape"] == "up-ramp"
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
 def test_worker_parity_dry_run_plans_list_trigger():
     runtime = WorkerRuntime(_worker_config())
     job = _admitted_job(

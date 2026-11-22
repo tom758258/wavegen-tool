@@ -51,6 +51,10 @@ Dry-run does not execute VISA I/O. Simulator results are deterministic test
 behavior, not evidence that a physical model, backend, connection, or command
 family has been validated.
 
+AM, FM, PM, PWM, and Sum support sine, square, rising ramp, triangle, and
+falling ramp modulation shapes in dry-run and simulation on all three
+registered models. The carrier limits for each mode apply.
+
 Arbitrary commands support dry-run and simulation for 33512B Channels 1 and 2
 (160 MSa/s) and 33521B Channel 1 (250 MSa/s). The standard 33510B profile
 rejects Arbitrary.
@@ -84,13 +88,18 @@ For admitted 33512B and 33521B resources, Product Live uses the same Core
 request validation and safety rules documented for:
 
 - static sine, square, ramp, triangle, pulse, DC, noise, and PRBS;
-- supported AM, FM, PM, FSK, BPSK, PWM, and Sum carrier combinations;
+- supported AM, FM, PM, PWM, and Sum carrier combinations with a sine
+  modulation shape, plus supported FSK and BPSK carrier combinations;
 - Counted Burst and Gated Burst on supported carriers;
 - sine, square, ramp, and triangle ordinary Sweeps with Immediate, Bus, or
   Timer, and List Sweeps with Immediate or Bus;
 - selected-channel status, output configuration, and output control;
 - explicit front-panel Sync OFF control;
 - bounded error-queue reads, identity, and instrument-wide bus trigger.
+
+Product Live rejects non-sine AM, FM, PM, PWM, and Sum modulation shapes
+before configuration writes. Direct CLI contributor validation uses the
+existing explicit validation policy.
 
 Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
 Core rejects these operations in Product Live mode for all models.

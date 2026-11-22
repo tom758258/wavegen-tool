@@ -11,6 +11,7 @@ from typing import Protocol
 
 from pyvisa.constants import RENLineOperation
 
+from wavegen_tool_core._modulation_shapes import MODULATION_SHAPES, MODULATION_SHAPE_SCPI
 from wavegen_tool_core.backends import (
     PYVISA_PY_BACKEND,
     SYSTEM_BACKEND,
@@ -303,27 +304,30 @@ class ArbitraryStatusResult(StatusResult):
 
 @dataclass(frozen=True)
 class AMConfig:
-    """Internal sine amplitude-modulation settings."""
+    """Internal amplitude-modulation settings."""
 
     modulation_frequency_hz: object
     depth_percent: object
     am_type: object = "normal"
+    shape: object = "sine"
 
 
 @dataclass(frozen=True)
 class FMConfig:
-    """Internal sine frequency-modulation settings."""
+    """Internal frequency-modulation settings."""
 
     modulation_frequency_hz: object
     deviation_hz: object
+    shape: object = "sine"
 
 
 @dataclass(frozen=True)
 class PMConfig:
-    """Internal sine phase-modulation settings."""
+    """Internal phase-modulation settings."""
 
     modulation_frequency_hz: object
     deviation_deg: object
+    shape: object = "sine"
 
 
 @dataclass(frozen=True)
@@ -344,18 +348,20 @@ class BPSKConfig:
 
 @dataclass(frozen=True)
 class PWMConfig:
-    """Internal sine pulse-width-modulation settings."""
+    """Internal pulse-width-modulation settings."""
 
     modulation_frequency_hz: object
     deviation_s: object
+    shape: object = "sine"
 
 
 @dataclass(frozen=True)
 class SumConfig:
-    """Internal sine summing-waveform settings."""
+    """Internal summing-waveform settings."""
 
     modulation_frequency_hz: object
     amplitude_percent: object
+    shape: object = "sine"
 
 
 @dataclass(frozen=True)
@@ -4542,24 +4548,43 @@ def _normalize_sine_sweep_spacing(value: object) -> str:
     return _normalize_sweep_spacing(value, waveform="Sine sweep")
 
 
-def _normalize_internal_sine_modulation_frequency(
+def _normalize_modulation_shape_and_frequency(
+    shape: object,
     value: object,
     *,
     modulation: str,
     capabilities: WavegenCapabilities,
-) -> float:
+) -> tuple[str, float]:
+    if not isinstance(shape, str) or shape not in MODULATION_SHAPE_SCPI:
+        raise WaveformParameterError(
+            f"{modulation} shape must be one of: {', '.join(MODULATION_SHAPES)}."
+        )
     frequency = _normalize_finite_number(
         value,
         "modulation frequency",
         waveform=modulation,
     )
-    maximum_frequency = capabilities.max_sine_square_pulse_noise_frequency_hz
+    maximum_frequency = (
+        capabilities.max_sine_square_pulse_noise_frequency_hz
+        if shape in {"sine", "square"}
+        else RAMP_TRIANGLE_MAX_FREQUENCY_HZ
+    )
     if not MODULATION_MIN_FREQUENCY_HZ <= frequency <= maximum_frequency:
         raise WaveformParameterError(
             f"{modulation} modulation frequency must be between 0.000001 Hz and "
             f"{_format_scpi_number(maximum_frequency)} Hz."
         )
-    return frequency
+    return shape, frequency
+
+
+def _modulation_shape_validation_only_feature(configs: tuple[object, ...]) -> str | None:
+    if any(
+        isinstance(config, (AMConfig, FMConfig, PMConfig, PWMConfig, SumConfig))
+        and config.shape != "sine"
+        for config in configs
+    ):
+        return "Non-sine modulation shapes"
+    return None
 
 
 def _validate_modulation_exclusive(
@@ -4774,7 +4799,8 @@ def _prepare_am(
             f"{carrier.upper()} carrier is not supported for AM configuration."
         )
 
-    frequency = _normalize_internal_sine_modulation_frequency(
+    shape, frequency = _normalize_modulation_shape_and_frequency(
+        config.shape,
         config.modulation_frequency_hz,
         modulation="AM",
         capabilities=capabilities,
@@ -4795,13 +4821,14 @@ def _prepare_am(
 
     normalized = AMConfig(
         modulation_frequency_hz=frequency,
+        shape=shape,
         depth_percent=depth,
         am_type=am_type,
     )
     commands = (
         "SOURce1:AM:SOURce INTernal",
         f"SOURce1:AM:DSSC {'ON' if am_type == 'dssc' else 'OFF'}",
-        "SOURce1:AM:INTernal:FUNCtion SINusoid",
+        f"SOURce1:AM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
         "SOURce1:AM:INTernal:FREQuency "
         f"{_format_scpi_number(frequency)}",
         f"SOURce1:AM:DEPTh {_format_scpi_number(depth)}",
@@ -4831,7 +4858,8 @@ def _prepare_fm(
         "carrier frequency",
         waveform="FM",
     )
-    modulation_frequency = _normalize_internal_sine_modulation_frequency(
+    shape, modulation_frequency = _normalize_modulation_shape_and_frequency(
+        config.shape,
         config.modulation_frequency_hz,
         modulation="FM",
         capabilities=capabilities,
@@ -4860,11 +4888,12 @@ def _prepare_fm(
 
     normalized = FMConfig(
         modulation_frequency_hz=modulation_frequency,
+        shape=shape,
         deviation_hz=deviation,
     )
     commands = (
         "SOURce1:FM:SOURce INTernal",
-        "SOURce1:FM:INTernal:FUNCtion SINusoid",
+        f"SOURce1:FM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
         "SOURce1:FM:INTernal:FREQuency "
         f"{_format_scpi_number(modulation_frequency)}",
         f"SOURce1:FM:DEViation {_format_scpi_number(deviation)}",
@@ -4894,7 +4923,8 @@ def _prepare_pm(
         "carrier frequency",
         waveform="PM",
     )
-    modulation_frequency = _normalize_internal_sine_modulation_frequency(
+    shape, modulation_frequency = _normalize_modulation_shape_and_frequency(
+        config.shape,
         config.modulation_frequency_hz,
         modulation="PM",
         capabilities=capabilities,
@@ -4915,11 +4945,12 @@ def _prepare_pm(
 
     normalized = PMConfig(
         modulation_frequency_hz=modulation_frequency,
+        shape=shape,
         deviation_deg=deviation,
     )
     commands = (
         "SOURce1:PM:SOURce INTernal",
-        "SOURce1:PM:INTernal:FUNCtion SINusoid",
+        f"SOURce1:PM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
         "SOURce1:PM:INTernal:FREQuency "
         f"{_format_scpi_number(modulation_frequency)}",
         f"SOURce1:PM:DEViation {_format_scpi_number(deviation)}",
@@ -5026,7 +5057,8 @@ def _prepare_pwm(
     if not isinstance(config, PWMConfig):
         raise WaveformParameterError("PWM configuration must use PWMConfig.")
 
-    modulation_frequency = _normalize_internal_sine_modulation_frequency(
+    shape, modulation_frequency = _normalize_modulation_shape_and_frequency(
+        config.shape,
         config.modulation_frequency_hz,
         modulation="PWM",
         capabilities=capabilities,
@@ -5057,11 +5089,12 @@ def _prepare_pwm(
 
     normalized = PWMConfig(
         modulation_frequency_hz=modulation_frequency,
+        shape=shape,
         deviation_s=deviation,
     )
     commands = (
         "SOURce1:PWM:SOURce INTernal",
-        "SOURce1:PWM:INTernal:FUNCtion SINusoid",
+        f"SOURce1:PWM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
         "SOURce1:PWM:INTernal:FREQuency "
         f"{_format_scpi_number(modulation_frequency)}",
         f"SOURce1:PWM:DEViation {_format_scpi_number(deviation)}",
@@ -5088,7 +5121,8 @@ def _prepare_sum(
             f"{carrier.upper()} carrier is not supported for Sum configuration."
         )
 
-    frequency = _normalize_internal_sine_modulation_frequency(
+    shape, frequency = _normalize_modulation_shape_and_frequency(
+        config.shape,
         config.modulation_frequency_hz,
         modulation="Sum",
         capabilities=capabilities,
@@ -5108,11 +5142,12 @@ def _prepare_sum(
 
     normalized = SumConfig(
         modulation_frequency_hz=frequency,
+        shape=shape,
         amplitude_percent=amplitude_percent,
     )
     commands = (
         "SOURce1:SUM:SOURce INTernal",
-        "SOURce1:SUM:INTernal:FUNCtion SINusoid",
+        f"SOURce1:SUM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
         "SOURce1:SUM:INTernal:FREQuency "
         f"{_format_scpi_number(frequency)}",
         "SOURce1:SUM:AMPLitude "
@@ -6349,7 +6384,7 @@ def configure_pulse(
     if verify_readback and not any(value is not None for value in (am, pwm, sum, burst)):
         raise WaveformParameterError("Advanced Mode readback requires an Advanced Mode.")
 
-    prepare_configuration(
+    preflight = prepare_configuration(
         _preflight_capabilities_for_configuration(resource_manager_factory)
     )
 
@@ -6385,10 +6420,7 @@ def configure_pulse(
             burst_commands,
         ) = prepare_configuration(capabilities)
         commands = _channelize_commands(commands, selected_channel)
-        am_commands = _channelize_commands(am_commands, selected_channel)
-        pwm_commands = _channelize_commands(pwm_commands, selected_channel)
-        sum_commands = _channelize_commands(sum_commands, selected_channel)
-        burst_commands = _channelize_commands(burst_commands, selected_channel)
+        advanced_commands = (*am_commands, *pwm_commands, *sum_commands, *burst_commands)
         source_prefix = f"SOURce{selected_channel}"
         output_prefix = f"OUTPut{selected_channel}"
 
@@ -6570,19 +6602,13 @@ def configure_pulse(
             abs_tolerance=0.0,
             context=context,
         )
-        for command in am_commands:
-            write_pulse_command(command, "off")
-        for command in pwm_commands:
-            write_pulse_command(command, "off")
-        for command in sum_commands:
-            write_pulse_command(command, "off")
-        for command in burst_commands:
+        for command in _channelize_commands(advanced_commands, selected_channel):
             write_pulse_command(command, "off")
         if verify_readback:
             _verify_advanced_mode_configuration(
                 session,
                 context,
-                (*am_commands, *pwm_commands, *sum_commands, *burst_commands),
+                advanced_commands,
                 selected_channel=selected_channel,
             )
         return (
@@ -6609,6 +6635,7 @@ def configure_pulse(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
+        validation_only_feature=_modulation_shape_validation_only_feature(preflight),
     )
     (
         amplitude,
@@ -8457,13 +8484,17 @@ def query_advanced_mode(
             fields["source"] = source
             if source == "internal":
                 if active not in {"FSKey", "BPSK"}:
-                    fields["internal_function"] = choice(
+                    internal_function = choice(
                         prefix + active + ":INTernal:FUNCtion",
                         frozenset({
                             "SINUSOID", "SQUARE", "TRIANGLE", "RAMP",
                             "NOISE", "PRBS", "ARB", "NRAMP", "UPRAMP", "DOWNRAMP",
                         }),
                     )
+                    fields["internal_function"] = internal_function
+                    shape = _MODULATION_SHAPE_READBACK.get(internal_function.upper())
+                    if shape is not None:
+                        fields["shape"] = shape
                     fields["internal_frequency_hz"] = number(
                         prefix + active + ":INTernal:FREQuency"
                     )
@@ -8687,6 +8718,12 @@ _READBACK_ENUM_ALIASES = {
 }
 
 
+_MODULATION_SHAPE_READBACK = {
+    command.upper(): shape for shape, command in MODULATION_SHAPE_SCPI.items()
+}
+_MODULATION_SHAPE_READBACK.update(UPRAMP="up-ramp", DOWNRAMP="down-ramp")
+
+
 def _canonical_readback_enum(value: str) -> str:
     normalized = value.strip().upper()
     return _READBACK_ENUM_ALIASES.get(normalized, normalized)
@@ -8719,7 +8756,12 @@ def _advanced_readback_matches(header: str, expected: str, response: str) -> boo
     try:
         expected_number = float(expected)
     except (ValueError, OverflowError):
-        return _canonical_readback_enum(expected) == _canonical_readback_enum(actual)
+        expected_enum = _canonical_readback_enum(expected)
+        actual_enum = _canonical_readback_enum(actual)
+        if header.endswith(":INTernal:FUNCtion"):
+            expected_enum = _MODULATION_SHAPE_READBACK.get(expected_enum, expected_enum)
+            actual_enum = _MODULATION_SHAPE_READBACK.get(actual_enum, actual_enum)
+        return expected_enum == actual_enum
     try:
         actual_number = float(actual)
     except (ValueError, OverflowError):
@@ -8869,7 +8911,9 @@ def _prepare_and_write_to_supported_instrument(
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
-        validation_only_feature=validation_only_feature,
+        validation_only_feature=(
+            validation_only_feature or _modulation_shape_validation_only_feature(preflight[0])
+        ),
     )
     if not isinstance(values, tuple):  # pragma: no cover - defensive invariant
         raise RuntimeError("configuration completed without prepared values")

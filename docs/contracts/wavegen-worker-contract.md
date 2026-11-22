@@ -190,15 +190,23 @@ Core validates which combinations the carrier supports.
 
 | Field | Object members |
 | --- | --- |
-| `am` | `modulation_frequency_hz`, `depth_percent`, optional `am_type` (`"normal"` or `"dssc"`) |
-| `fm` | `modulation_frequency_hz`, `deviation_hz` |
-| `pm` | `modulation_frequency_hz`, `deviation_deg` |
+| `am` | `modulation_frequency_hz`, `depth_percent`, optional `am_type` (`"normal"` or `"dssc"`), optional `shape` |
+| `fm` | `modulation_frequency_hz`, `deviation_hz`, optional `shape` |
+| `pm` | `modulation_frequency_hz`, `deviation_deg`, optional `shape` |
 | `fsk` | `hop_frequency_hz`, `rate_hz` |
 | `bpsk` | `phase_shift_deg`, `rate_hz` |
-| `pwm` | `modulation_frequency_hz`, `deviation_s` |
-| `sum` | `modulation_frequency_hz`, `amplitude_percent` |
+| `pwm` | `modulation_frequency_hz`, `deviation_s`, optional `shape` |
+| `sum` | `modulation_frequency_hz`, `amplitude_percent`, optional `shape` |
 | `burst` (Counted) | `mode: "counted"`, `count`, optional `period_s`, `trigger_source`, `trigger_timer_s`, `trigger_slope` |
 | `burst` (Gated) | `mode: "gated"`, optional `polarity` |
+
+The nested `shape` is `"sine"` by default and also accepts `"square"`,
+`"up-ramp"`, `"triangle"`, and `"down-ramp"` in dry-run and simulation.
+The modulation object's required members must accompany `shape`.
+For example, an AM object can be
+`{"modulation_frequency_hz": 1000, "depth_percent": 50, "shape": "up-ramp"}`.
+Core rejects other values and rejects non-sine shapes during Product Live
+execution before any configuration writes.
 
 `verify_readback` is an optional boolean for these static advanced
 configurations, ordinary sweeps and List Sweeps. Successful live or simulated

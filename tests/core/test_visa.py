@@ -1216,7 +1216,80 @@ def test_configure_sine_internal_am_writes_ordered_normal_sequence_with_output_o
     ]
     assert "OUTPut1 ON" not in session.writes
     assert result.output_state == "off"
-    assert result.am == AMConfig(1_000.0, 50.0, "normal")
+    assert result.am == AMConfig(1_000.0, 50.0, "normal", "sine")
+
+
+@pytest.mark.parametrize(
+    ("plan", "args", "mode", "config", "scpi"),
+    [
+        (dry_run_sine, (10_000, 0.1), "am", AMConfig(100, 50), "SINusoid"),
+        (dry_run_sine, (10_000, 0.1), "fm", FMConfig(100, 50, "square"), "SQUare"),
+        (dry_run_sine, (10_000, 0.1), "pm", PMConfig(100, 50, "up-ramp"), "RAMP"),
+        (dry_run_pulse, (1_000, 0.1, 0.0001), "pwm", PWMConfig(100, 2e-5, "triangle"),
+         "TRIangle"),
+        (dry_run_pulse, (1_000, 0.1, 0.0001), "sum", SumConfig(100, 50, "down-ramp"),
+         "NRAMp"),
+    ],
+)
+def test_modulation_shape_scpi_plan(plan, args, mode, config, scpi):
+    result = plan("keysight-33512b", *args, channel=2, **{mode: config})
+
+    assert getattr(result, mode) == config
+    assert f"SOURce2:{mode.upper()}:INTernal:FUNCtion {scpi}" in result.commands
+    assert result.commands[0] == "OUTPut2 OFF"
+    assert "OUTPut2 ON" not in result.commands
+
+
+@pytest.mark.parametrize(
+    ("model", "shape", "frequency", "valid"),
+    [
+        ("keysight-33510b", "square", 20_000_000, True),
+        ("keysight-33510b", "square", 20_000_001, False),
+        ("keysight-33521b", "square", 30_000_000, True),
+        ("keysight-33512b", "up-ramp", 200_000, True),
+        ("keysight-33512b", "up-ramp", 200_001, False),
+        ("keysight-33521b", "triangle", 200_001, False),
+        ("keysight-33521b", "down-ramp", 200_001, False),
+        ("keysight-33521b", "down-ramp", 1e-6, True),
+        ("keysight-33521b", "down-ramp", 0.9e-6, False),
+    ],
+)
+def test_modulation_shape_frequency_limits(model, shape, frequency, valid):
+    config = AMConfig(frequency, 50, shape=shape)
+    if valid:
+        assert dry_run_sine(model, 1_000, 0.1, am=config).am == config
+    else:
+        with pytest.raises(WaveformParameterError, match="AM modulation frequency"):
+            dry_run_sine(model, 1_000, 0.1, am=config)
+
+
+@pytest.mark.parametrize("shape", ["noise", "prbs", "arbitrary", "up_ramp", None, []])
+def test_invalid_modulation_shape_is_rejected_before_visa_io(shape):
+    factory = Mock()
+    with pytest.raises(WaveformParameterError, match="AM shape"):
+        configure_sine(
+            USB_RESOURCE, 1_000, 0.1, am=AMConfig(100, 50, shape=shape),
+            resource_manager_factory=factory,
+        )
+    factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("configure", "args", "options"),
+    [
+        (configure_sine, (1_000, 0.1), {"am": AMConfig(100, 50, shape="square")}),
+        (configure_pulse, (1_000, 0.1, 0.0001), {"am": AMConfig(100, 50, shape="up-ramp")}),
+        (configure_pulse, (1_000, 0.1, 0.0001), {"pwm": PWMConfig(100, 2e-5, "triangle")}),
+        (configure_pulse, (1_000, 0.1, 0.0001), {"sum": SumConfig(100, 50, "down-ramp")}),
+    ],
+)
+def test_non_sine_modulation_shape_is_rejected_before_product_live_visa_io(
+    configure, args, options,
+):
+    factory = Mock()
+    with pytest.raises(UnsupportedInstrumentError, match="Product Live"):
+        configure(USB_RESOURCE, *args, resource_manager_factory=factory, **options)
+    factory.assert_not_called()
 
 
 def test_dssc_am_differs_from_normal_only_in_dssc_selection():
@@ -6199,6 +6272,38 @@ def test_external_sweep_slope_readback_mismatch_leaves_output_off():
         )
     assert error.value.output_state == "off"
     assert session.writes[0] == "OUTPut1 OFF"
+    assert "OUTPut1 ON" not in session.writes
+    assert session.close_calls == manager.close_calls == 1
+
+
+@pytest.mark.parametrize(("response", "matches"), [("NRAM", True), ("RAMP", False)])
+def test_advanced_mode_readback_compares_modulation_shape(response, matches):
+    query = "SOURce1:AM:INTernal:FUNCtion?"
+    session = EchoAdvancedReadbackSession(responses_by_command={query: response})
+    manager = FakeManager(session)
+
+    def configure():
+        return configure_sine(
+            USB_RESOURCE,
+            1_000,
+            0.1,
+            am=AMConfig(10, 50, shape="down-ramp"),
+            verify_readback=True,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    if matches:
+        result = configure()
+        assert result.am.shape == "down-ramp"
+        assert result.output_state == "off"
+    else:
+        with pytest.raises(WaveformVerificationError, match="AM:INTernal:FUNCtion") as error:
+            configure()
+        assert error.value.output_state == "off"
+
+    assert "SOURce1:AM:INTernal:FUNCtion NRAMp" in session.writes
+    assert query in session.queries
     assert "OUTPut1 ON" not in session.writes
     assert session.close_calls == manager.close_calls == 1
 

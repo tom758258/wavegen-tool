@@ -894,6 +894,25 @@ def test_memory_listing_worker_live_admission_is_read_only():
     assert request.arguments == {"channel": 2}
 
 
+@pytest.mark.parametrize("am", [
+    {"shape": "square"},
+    {"modulation_frequency_hz": 100, "depth_percent": 50, "shape": "up_ramp"},
+    {"modulation_frequency_hz": 100, "depth_percent": 50, "shape": None},
+])
+def test_worker_rejects_invalid_nested_modulation_shape(am):
+    with pytest.raises(WorkerRequestValidationError) as error:
+        validate_worker_command_request(
+            _payload(
+                "configure-sine",
+                {**_sine_arguments(), "am": am},
+                context={"mode": "dry_run", "planning_model_id": "keysight-33521b"},
+            ),
+            worker_mode="simulate",
+            allow_output_writes=False,
+        )
+    assert error.value.code == "invalid_arguments"
+
+
 def test_worker_reuses_core_for_incompatible_advanced_groups():
     with pytest.raises(WorkerRequestValidationError) as error:
         validate_worker_command_request(

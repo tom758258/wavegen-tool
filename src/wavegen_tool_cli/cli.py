@@ -22,6 +22,7 @@ from wavegen_tool_core import (
     GatedBurstConfig,
     FMConfig,
     FSKConfig,
+    MODULATION_SHAPES,
     OutputConfig,
     PMConfig,
     PWMConfig,
@@ -186,19 +187,24 @@ _ADVANCED_READBACK_ACTIONS = _ADVANCED_STATIC_ACTIONS | frozenset(
 )
 _ADVANCED_OPTION_FIELDS = (
     "am_frequency",
+    "am_shape",
     "am_depth",
     "am_type",
     "fm_frequency",
+    "fm_shape",
     "fm_deviation",
     "pm_frequency",
+    "pm_shape",
     "pm_deviation_deg",
     "fsk_hop_frequency",
     "fsk_rate",
     "bpsk_phase_shift_deg",
     "bpsk_rate",
     "pwm_frequency",
+    "pwm_shape",
     "pwm_deviation_s",
     "sum_frequency",
+    "sum_shape",
     "sum_amplitude_percent",
     "burst_count",
     "burst_period_s",
@@ -282,11 +288,19 @@ def _add_voltage_input_arguments(
     )
 
 
+def _add_modulation_shape_argument(parser: argparse.ArgumentParser, mode: str) -> None:
+    parser.add_argument(
+        f"--{mode}-shape",
+        choices=MODULATION_SHAPES,
+        help="Internal modulation shape (default: sine when the mode is configured).",
+    )
+
+
 def _add_am_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--am-frequency",
         default=None,
-        help="Internal sine AM modulation frequency in Hz.",
+        help="Internal AM modulation frequency in Hz.",
     )
     parser.add_argument(
         "--am-depth",
@@ -299,16 +313,18 @@ def _add_am_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="AM type (default: normal when AM is configured).",
     )
+    _add_modulation_shape_argument(parser, "am")
 
 
 def _am_config_from_args(args: argparse.Namespace) -> AMConfig | None:
-    values = (args.am_frequency, args.am_depth, args.am_type)
+    values = (args.am_frequency, args.am_depth, args.am_type, args.am_shape)
     if all(value is None for value in values):
         return None
     return AMConfig(
         modulation_frequency_hz=args.am_frequency,
         depth_percent=args.am_depth,
         am_type="normal" if args.am_type is None else args.am_type,
+        shape=args.am_shape or "sine",
     )
 
 
@@ -316,22 +332,24 @@ def _add_fm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--fm-frequency",
         default=None,
-        help="Internal sine FM modulation frequency in Hz.",
+        help="Internal FM modulation frequency in Hz.",
     )
     parser.add_argument(
         "--fm-deviation",
         default=None,
         help="FM peak frequency deviation in Hz.",
     )
+    _add_modulation_shape_argument(parser, "fm")
 
 
 def _fm_config_from_args(args: argparse.Namespace) -> FMConfig | None:
-    values = (args.fm_frequency, args.fm_deviation)
+    values = (args.fm_frequency, args.fm_deviation, args.fm_shape)
     if all(value is None for value in values):
         return None
     return FMConfig(
         modulation_frequency_hz=args.fm_frequency,
         deviation_hz=args.fm_deviation,
+        shape=args.fm_shape or "sine",
     )
 
 
@@ -339,22 +357,24 @@ def _add_pm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--pm-frequency",
         default=None,
-        help="Internal sine PM modulation frequency in Hz.",
+        help="Internal PM modulation frequency in Hz.",
     )
     parser.add_argument(
         "--pm-deviation-deg",
         default=None,
         help="PM peak phase deviation in degrees.",
     )
+    _add_modulation_shape_argument(parser, "pm")
 
 
 def _pm_config_from_args(args: argparse.Namespace) -> PMConfig | None:
-    values = (args.pm_frequency, args.pm_deviation_deg)
+    values = (args.pm_frequency, args.pm_deviation_deg, args.pm_shape)
     if all(value is None for value in values):
         return None
     return PMConfig(
         modulation_frequency_hz=args.pm_frequency,
         deviation_deg=args.pm_deviation_deg,
+        shape=args.pm_shape or "sine",
     )
 
 
@@ -408,22 +428,24 @@ def _add_pwm_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--pwm-frequency",
         default=None,
-        help="Internal sine PWM modulation frequency in Hz.",
+        help="Internal PWM modulation frequency in Hz.",
     )
     parser.add_argument(
         "--pwm-deviation-s",
         default=None,
         help="PWM pulse-width deviation in seconds.",
     )
+    _add_modulation_shape_argument(parser, "pwm")
 
 
 def _pwm_config_from_args(args: argparse.Namespace) -> PWMConfig | None:
-    values = (args.pwm_frequency, args.pwm_deviation_s)
+    values = (args.pwm_frequency, args.pwm_deviation_s, args.pwm_shape)
     if all(value is None for value in values):
         return None
     return PWMConfig(
         modulation_frequency_hz=args.pwm_frequency,
         deviation_s=args.pwm_deviation_s,
+        shape=args.pwm_shape or "sine",
     )
 
 
@@ -533,22 +555,24 @@ def _add_sum_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sum-frequency",
         default=None,
-        help="Internal sine Sum frequency in Hz.",
+        help="Internal Sum frequency in Hz.",
     )
     parser.add_argument(
         "--sum-amplitude-percent",
         default=None,
-        help="Internal sine Sum amplitude relative to carrier amplitude (percent).",
+        help="Internal Sum amplitude relative to carrier amplitude (percent).",
     )
+    _add_modulation_shape_argument(parser, "sum")
 
 
 def _sum_config_from_args(args: argparse.Namespace) -> SumConfig | None:
-    values = (args.sum_frequency, args.sum_amplitude_percent)
+    values = (args.sum_frequency, args.sum_amplitude_percent, args.sum_shape)
     if all(value is None for value in values):
         return None
     return SumConfig(
         modulation_frequency_hz=args.sum_frequency,
         amplitude_percent=args.sum_amplitude_percent,
+        shape=args.sum_shape or "sine",
     )
 
 
@@ -4148,6 +4172,7 @@ def _am_payload_fields(result: Any) -> dict[str, object]:
     return {
         "am_enabled": True,
         "am_frequency_hz": am.modulation_frequency_hz,
+        "am_shape": am.shape,
         "am_depth_percent": am.depth_percent,
         "am_type": am.am_type,
     }
@@ -4160,6 +4185,7 @@ def _fm_payload_fields(result: Any) -> dict[str, object]:
     return {
         "fm_enabled": True,
         "fm_frequency_hz": fm.modulation_frequency_hz,
+        "fm_shape": fm.shape,
         "fm_deviation_hz": fm.deviation_hz,
     }
 
@@ -4171,6 +4197,7 @@ def _pm_payload_fields(result: Any) -> dict[str, object]:
     return {
         "pm_enabled": True,
         "pm_frequency_hz": pm.modulation_frequency_hz,
+        "pm_shape": pm.shape,
         "pm_deviation_deg": pm.deviation_deg,
     }
 
@@ -4204,6 +4231,7 @@ def _pwm_payload_fields(result: Any) -> dict[str, object]:
     return {
         "pwm_enabled": True,
         "pwm_frequency_hz": pwm.modulation_frequency_hz,
+        "pwm_shape": pwm.shape,
         "pwm_deviation_s": pwm.deviation_s,
     }
 
@@ -4215,6 +4243,7 @@ def _sum_payload_fields(result: Any) -> dict[str, object]:
     return {
         "sum_enabled": True,
         "sum_frequency_hz": sum_config.modulation_frequency_hz,
+        "sum_shape": sum_config.shape,
         "sum_amplitude_percent": sum_config.amplitude_percent,
     }
 
@@ -5249,6 +5278,7 @@ def _human_am_lines(result: Any) -> tuple[str, ...]:
         return ()
     return (
         f"AM type: {am.am_type}",
+        f"AM modulation shape: {am.shape}",
         f"AM modulation frequency (Hz): {am.modulation_frequency_hz}",
         f"AM depth (percent): {am.depth_percent}",
     )
@@ -5259,6 +5289,7 @@ def _human_fm_lines(result: Any) -> tuple[str, ...]:
     if fm is None:
         return ()
     return (
+        f"FM modulation shape: {fm.shape}",
         f"FM modulation frequency (Hz): {fm.modulation_frequency_hz}",
         f"FM deviation (Hz): {fm.deviation_hz}",
     )
@@ -5269,6 +5300,7 @@ def _human_pm_lines(result: Any) -> tuple[str, ...]:
     if pm is None:
         return ()
     return (
+        f"PM modulation shape: {pm.shape}",
         f"PM modulation frequency (Hz): {pm.modulation_frequency_hz}",
         f"PM deviation (degrees): {pm.deviation_deg}",
     )
@@ -5299,6 +5331,7 @@ def _human_pwm_lines(result: Any) -> tuple[str, ...]:
     if pwm is None:
         return ()
     return (
+        f"PWM modulation shape: {pwm.shape}",
         f"PWM modulation frequency (Hz): {pwm.modulation_frequency_hz}",
         f"PWM width deviation (seconds): {pwm.deviation_s}",
     )
@@ -5309,6 +5342,7 @@ def _human_sum_lines(result: Any) -> tuple[str, ...]:
     if sum_config is None:
         return ()
     return (
+        f"Sum modulation shape: {sum_config.shape}",
         f"Sum modulation frequency (Hz): {sum_config.modulation_frequency_hz}",
         f"Sum amplitude (percent): {sum_config.amplitude_percent}",
     )

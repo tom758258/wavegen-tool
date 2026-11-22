@@ -83,6 +83,14 @@ results and dry-run plans report `trigger_slope` as `"positive"` or
 `"negative"` for External and `null` for other sources.
 Internal result dataclasses may contain additional fields.
 
+Successful Direct CLI configurations and dry-run plans with AM, FM, PM, PWM,
+or Sum include the active mode's shape in `am_shape`, `fm_shape`, `pm_shape`,
+`pwm_shape`, or `sum_shape`, respectively. Each value is one of `"sine"`,
+`"square"`, `"up-ramp"`, `"triangle"`, or `"down-ramp"`. A standalone
+`readback-advanced` result includes `settings.shape` when an internal
+modulation function corresponds to one of those values and also returns the
+existing `settings.internal_function`.
+
 For the existing Advanced Mode configuration commands, a successful executed
 operation with `--verify-readback` adds `readback_verified: true` to Direct CLI
 JSON. A failed comparison retains `success: false` and the existing waveform
@@ -125,6 +133,11 @@ HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and
 No cancellation or streaming feature is declared.
 
 Terminal successful job results contain the Core result serialized as JSON.
+AM, FM, PM, PWM, and Sum configuration results and plans report the selected
+`shape` in their respective nested modulation object. Standalone Advanced
+Mode readback returns `settings.shape` under the same conditions as Direct CLI
+readback.
+
 Selected-channel results retain Core's canonical integer `channel`. Failed
 jobs contain a Common Error; original backend, transport, identity,
 output-state, or cleanup diagnostics remain in `error.details.domain_error`.
