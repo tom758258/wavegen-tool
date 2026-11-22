@@ -103,6 +103,12 @@ available in dry-run, simulation, and Direct CLI contributor validation.
 
 Direct CLI and Worker offer Arbitrary operations in dry-run and simulation.
 Core rejects these operations in Product Live mode for all models.
+For 33510B, 33512B, and 33521B, explicit Trigger Delay on Counted Burst and
+ordinary Sweeps is available in dry-run, simulation, and Direct CLI
+contributor validation under the existing model and connection rules.
+Product Live and Worker Live reject explicit values, including zero, before
+configuration writes. Omitting the delay leaves the stored setting in place.
+
 External triggering for ordinary Sweeps is available in dry-run, simulation,
 and Direct CLI contributor validation. Core rejects it in Product Live.
 Front-panel Sync configuration and Sync ON are available in simulation and

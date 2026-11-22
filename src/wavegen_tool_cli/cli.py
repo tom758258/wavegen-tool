@@ -210,6 +210,7 @@ _ADVANCED_OPTION_FIELDS = (
     "burst_period_s",
     "burst_trigger_source",
     "burst_trigger_timer_s",
+    "burst_trigger_delay_s",
     "burst_trigger_slope",
     "gate_polarity",
 )
@@ -476,6 +477,10 @@ def _add_burst_arguments(parser: argparse.ArgumentParser) -> None:
         help="Counted Burst Timer trigger interval in seconds.",
     )
     parser.add_argument(
+        "--burst-trigger-delay-s",
+        help="Counted Burst trigger delay in seconds (0 to 1000, in 4 ns increments).",
+    )
+    parser.add_argument(
         "--burst-trigger-slope",
         choices=("positive", "negative"),
         default=None,
@@ -506,6 +511,7 @@ def _burst_config_from_args(
         args.burst_period_s,
         args.burst_trigger_source,
         args.burst_trigger_timer_s,
+        args.burst_trigger_delay_s,
         args.burst_trigger_slope,
     )
     start_phase = args.burst_start_phase_deg
@@ -526,6 +532,8 @@ def _burst_config_from_args(
         raise WaveformParameterError(
             "Burst start phase requires --burst-count or --gated-burst."
         )
+    if args.burst_trigger_delay_s is not None and args.burst_count is None:
+        raise WaveformParameterError("Burst trigger delay requires --burst-count.")
     if all(value is None for value in counted_values):
         return None
     return CountedBurstConfig(
@@ -533,6 +541,7 @@ def _burst_config_from_args(
         period_s=args.burst_period_s,
         trigger_source=args.burst_trigger_source or "immediate",
         trigger_timer_s=args.burst_trigger_timer_s,
+        trigger_delay_s=args.burst_trigger_delay_s,
         trigger_slope=args.burst_trigger_slope,
         start_phase_deg=start_phase if start_phase is not None else 0.0,
     )
@@ -549,6 +558,10 @@ def _add_sweep_trigger_arguments(parser: argparse.ArgumentParser) -> None:
         "--trigger-timer-s",
         default=None,
         help="Sweep Timer trigger interval in seconds.",
+    )
+    parser.add_argument(
+        "--trigger-delay-s",
+        help="Sweep trigger delay in seconds (0 to 1000, in 4 ns increments).",
     )
     parser.add_argument(
         "--trigger-slope",
@@ -2548,6 +2561,7 @@ def _run_configure_sine_sweep(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
@@ -2574,6 +2588,7 @@ def _run_sine_sweep_dry_run(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
@@ -2637,6 +2652,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             duty_cycle_percent=args.duty_cycle_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
@@ -2664,6 +2680,7 @@ def _run_square_sweep_dry_run(args: argparse.Namespace) -> int:
             duty_cycle_percent=args.duty_cycle_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
@@ -2727,6 +2744,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             symmetry_percent=args.symmetry_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
@@ -2754,6 +2772,7 @@ def _run_ramp_sweep_dry_run(args: argparse.Namespace) -> int:
             symmetry_percent=args.symmetry_percent,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
@@ -2816,6 +2835,7 @@ def _run_configure_triangle_sweep(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
@@ -2842,6 +2862,7 @@ def _run_triangle_sweep_dry_run(args: argparse.Namespace) -> int:
             args.phase_deg,
             trigger_source=args.trigger_source,
             trigger_timer_s=args.trigger_timer_s,
+            trigger_delay_s=args.trigger_delay_s,
             trigger_slope=args.trigger_slope,
             channel=args.channel,
         )
@@ -4272,6 +4293,7 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
         "burst_period_s": burst.period_s,
         "burst_trigger_source": burst.trigger_source,
         "burst_trigger_timer_s": burst.trigger_timer_s,
+        "burst_trigger_delay_s": burst.trigger_delay_s,
         "burst_trigger_slope": burst.trigger_slope,
         "burst_start_phase_deg": burst.start_phase_deg,
     }
@@ -4355,6 +4377,7 @@ def _control_success_payload(action: str, result: Any) -> dict[str, object]:
             return_time_s=result.return_time_s,
             trigger_source=result.trigger_source,
             trigger_timer_s=result.trigger_timer_s,
+            trigger_delay_s=result.trigger_delay_s,
             trigger_slope=result.trigger_slope,
             amplitude_vpp=result.amplitude_vpp,
             offset_v=result.offset_v,
@@ -4494,6 +4517,7 @@ def _sine_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_delay_s": result.trigger_delay_s,
         "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -4540,6 +4564,7 @@ def _square_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_delay_s": result.trigger_delay_s,
         "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -4587,6 +4612,7 @@ def _ramp_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_delay_s": result.trigger_delay_s,
         "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -4634,6 +4660,7 @@ def _triangle_sweep_dry_run_success_payload(result: Any) -> dict[str, object]:
         "return_time_s": result.return_time_s,
         "trigger_source": result.trigger_source,
         "trigger_timer_s": result.trigger_timer_s,
+        "trigger_delay_s": result.trigger_delay_s,
         "trigger_slope": result.trigger_slope,
         "amplitude_vpp": result.amplitude_vpp,
         "offset_v": result.offset_v,
@@ -5376,6 +5403,8 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
         lines.append(f"Burst period (seconds): {burst.period_s}")
     if burst.trigger_timer_s is not None:
         lines.append(f"Burst trigger timer (seconds): {burst.trigger_timer_s}")
+    if burst.trigger_delay_s is not None:
+        lines.append(f"Burst trigger delay (seconds): {burst.trigger_delay_s}")
     if burst.trigger_slope is not None:
         lines.append(f"Burst trigger slope: {burst.trigger_slope}")
     return tuple(lines)
@@ -5500,6 +5529,8 @@ def _human_control_success(action: str, result: Any) -> str:
             lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
         elif result.trigger_slope is not None:
             lines.append(f"Trigger slope: {result.trigger_slope}")
+        if result.trigger_delay_s is not None:
+            lines.append(f"Trigger delay (seconds): {result.trigger_delay_s}")
     if action in {
         "configure-square-sweep",
         "configure-ramp-sweep",
@@ -5523,6 +5554,8 @@ def _human_control_success(action: str, result: Any) -> str:
             lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
         elif result.trigger_slope is not None:
             lines.append(f"Trigger slope: {result.trigger_slope}")
+        if result.trigger_delay_s is not None:
+            lines.append(f"Trigger delay (seconds): {result.trigger_delay_s}")
         if action == "configure-square-sweep":
             lines.append(
                 f"Duty cycle (percent): {result.duty_cycle_percent}"
@@ -5606,6 +5639,11 @@ def _human_sine_sweep_dry_run_success(result: Any) -> str:
                 if result.trigger_timer_s is not None
                 else ()
             ),
+            *(
+                (f"Trigger delay (seconds): {result.trigger_delay_s}",)
+                if result.trigger_delay_s is not None
+                else ()
+            ),
             f"Planned output state: {result.output_state}",
             "Planned SCPI commands:",
             commands,
@@ -5639,6 +5677,8 @@ def _human_frequency_sweep_dry_run_success(
     ]
     if result.trigger_timer_s is not None:
         lines.append(f"Trigger timer (seconds): {result.trigger_timer_s}")
+    if result.trigger_delay_s is not None:
+        lines.append(f"Trigger delay (seconds): {result.trigger_delay_s}")
     if specific_line is not None:
         lines.append(specific_line)
     lines.extend(

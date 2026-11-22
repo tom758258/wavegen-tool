@@ -6430,6 +6430,8 @@ def test_advanced_mode_burst_count_readback_is_exact(reported_count, should_fail
         assert configure().output_state == "off"
 
     assert "SOURce1:BURSt:NCYCles?" in session.queries
+    assert "TRIGger1:DELay?" not in session.queries
+    assert "SYSTem:ERRor?" not in session.queries
     assert "OUTPut1 ON" not in session.writes
     assert session.close_calls == manager.close_calls == 1
 
@@ -6562,3 +6564,105 @@ def test_independent_advanced_readback_query_timeout_does_not_write():
             USB_RESOURCE, resource_manager_factory=RecordingFactory(FakeManager(session))
         )
     assert session.writes == []
+
+
+@pytest.mark.parametrize(
+    ("delay", "scpi_value"),
+    [(0, "0"), (4e-9, "4e-09"), (12e-9, "1.2e-08"), ("0.1", "0.1"), (1000, "1000")],
+)
+def test_counted_burst_trigger_delay_adds_only_the_delay_write(delay, scpi_value):
+    burst = CountedBurstConfig(3, trigger_source="bus")
+    baseline = dry_run_sine("keysight-33510b", 1000, 0.1, burst=burst)
+    plan = dry_run_sine(
+        "keysight-33510b", 1000, 0.1,
+        burst=CountedBurstConfig(3, trigger_source="bus", trigger_delay_s=delay),
+    )
+
+    assert baseline.burst.trigger_delay_s is None
+    assert plan.burst.trigger_delay_s == float(delay)
+    delay_command = f"TRIGger1:DELay {scpi_value}"
+    assert plan.commands[-3:] == (delay_command, "TRIGger1:SOURce BUS", "SOURce1:BURSt:STATe ON")
+    assert tuple(command for command in plan.commands if command != delay_command) == baseline.commands
+
+
+@pytest.mark.parametrize(
+    "delay", [5e-9, -0.1, 1000.000000004, "0.100000000000000001", "1e-325", "NaN", "Infinity", True, False],
+)
+def test_off_grid_or_invalid_trigger_delay_is_rejected_before_visa_io(delay):
+    factory = Mock(side_effect=AssertionError("Invalid delay must fail before VISA I/O"))
+    with pytest.raises(WaveformParameterError, match="trigger delay"):
+        configure_sine_sweep(
+            USB_RESOURCE, 2, 8, "linear", 1, 0.1, trigger_delay_s=delay,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=factory,
+        )
+    factory.assert_not_called()
+
+
+@pytest.mark.parametrize(("configure", "args", "options"), [
+    (configure_sine, (1000, 0.1),
+     {"burst": CountedBurstConfig(3, trigger_source="bus", trigger_delay_s=0)}),
+    (configure_sine_sweep, (2, 8, "linear", 1, 0.1), {"trigger_delay_s": 0}),
+])
+def test_product_live_rejects_explicit_zero_trigger_delay_before_visa_io(configure, args, options):
+    factory = Mock(side_effect=AssertionError("Trigger Delay must fail before Product Live VISA I/O"))
+    with pytest.raises(UnsupportedInstrumentError, match="Trigger Delay"):
+        configure(USB_RESOURCE, *args, **options, resource_manager_factory=factory)
+    factory.assert_not_called()
+
+
+@pytest.mark.parametrize("outcome", ["success", "one-step-mismatch", "timeout", "instrument-error", "coupled"])
+def test_contributor_trigger_delay_checks_readback_and_instrument_safety(outcome):
+    query = "TRIGger2:DELay?"
+    responses = {"SYSTem:ERRor?": '+0,"No error"'}
+    query_errors = {}
+    if outcome == "one-step-mismatch":
+        responses[query] = "0.100000004"
+    elif outcome == "timeout":
+        query_errors[query] = TimeoutError()
+    elif outcome == "instrument-error":
+        responses["SYSTem:ERRor?"] = '-221,"Settings conflict"'
+    elif outcome == "coupled":
+        responses["SOURce1:FREQuency:COUPle:STATe?"] = "ON"
+
+    session = EchoAdvancedReadbackSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command=responses,
+        query_errors_by_command=query_errors,
+    )
+    manager = FakeManager(session)
+
+    def configure():
+        return configure_ramp_sweep(
+            USB_RESOURCE, 2, 8, "logarithmic", 1, 0.1, channel=2,
+            trigger_source="timer", trigger_timer_s=2, trigger_delay_s=0.1,
+            verify_readback=outcome != "instrument-error",
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=RecordingFactory(manager),
+        )
+
+    if outcome == "coupled":
+        with pytest.raises(WaveformVerificationError):
+            configure()
+        assert session.writes == []
+        assert query not in session.queries
+    else:
+        if outcome == "success":
+            assert configure().trigger_delay_s == 0.1
+        elif outcome == "instrument-error":
+            with pytest.raises(VisaWriteError, match="Settings conflict") as error:
+                configure()
+            assert error.value.output_state == "off"
+        else:
+            with pytest.raises(WaveformVerificationError, match=query.removesuffix("?")) as error:
+                configure()
+            assert error.value.output_state == "off"
+        assert session.writes[-4:] == [
+            "TRIGger2:DELay 0.1", "TRIGger2:TIMer 2",
+            "TRIGger2:SOURce TIMer", "SOURce2:FREQuency:MODE SWEep",
+        ]
+        assert session.writes[0] == "OUTPut2 OFF"
+        assert not {"*RST", "OUTPut1 ON", "OUTPut2 ON"}.intersection(session.writes)
+        assert (query in session.queries) is (outcome != "instrument-error")
+
+    assert session.close_calls == manager.close_calls == 1

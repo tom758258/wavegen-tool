@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -1021,7 +1022,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         }
 
     def _handle_command(self) -> None:
-        payload, parse_error = self._read_json(preserve_burst_phase=True)
+        payload, parse_error = self._read_json(preserve_stepped_values=True)
         if parse_error is not None:
             self._send_json(
                 400,
@@ -1157,7 +1158,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         self.server.runtime.request_stop(acknowledge)
 
     def _read_json(
-        self, *, allow_empty: bool = False, preserve_burst_phase: bool = False
+        self, *, allow_empty: bool = False, preserve_stepped_values: bool = False
     ) -> tuple[object, str | None]:
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -1171,13 +1172,30 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
         try:
             body = raw.decode("utf-8")
             payload = json.loads(body)
-            if preserve_burst_phase and isinstance(payload, dict):
+            if preserve_stepped_values and isinstance(payload, dict):
                 arguments = payload.get("arguments")
-                burst = arguments.get("burst") if isinstance(arguments, dict) else None
-                if isinstance(burst, dict) and isinstance(burst.get("start_phase_deg"), float):
-                    # Recover the original decimal for Core without changing other JSON types.
-                    exact = json.loads(body, parse_float=str)
-                    burst["start_phase_deg"] = exact["arguments"]["burst"]["start_phase_deg"]
+                if isinstance(arguments, dict):
+                    exact_arguments = None
+                    groups = (
+                        (None, arguments, ("trigger_delay_s",)),
+                        ("burst", arguments.get("burst"), ("start_phase_deg", "trigger_delay_s")),
+                    )
+                    for key, options, fields in groups:
+                        if not isinstance(options, dict):
+                            continue
+                        for field in fields:
+                            if type(options.get(field)) is float:
+                                # Keep the original decimal where Core validates exact increments.
+                                if exact_arguments is None:
+                                    exact_arguments = json.loads(body, parse_float=str)["arguments"]
+                                exact_options = exact_arguments if key is None else exact_arguments[key]
+                                value = exact_options[field]
+                                if field == "trigger_delay_s" and isinstance(value, str):
+                                    try:
+                                        value = Decimal(value)
+                                    except InvalidOperation:
+                                        value = Decimal("NaN")
+                                options[field] = value
             return payload, None
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None, "Request body must contain valid UTF-8 JSON."

@@ -1585,3 +1585,57 @@ def test_worker_parity_dry_run_plans_list_trigger():
     assert result.executed is False
     assert result.trigger_source == "bus"
     assert runtime.simulator_state is None
+
+
+def test_worker_trigger_delay_preserves_http_precision_and_forwards_both_fields():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        counted = {**_sine_arguments(), "burst": {
+            "mode": "counted", "count": 3, "trigger_source": "bus", "trigger_delay_s": 0.1,
+        }}
+        code, accepted = _request(runtime, "POST", "/command", _payload("configure-sine", counted))
+        assert code == 202
+        result = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")["result"]
+        assert result["burst"]["trigger_delay_s"] == 0.1
+
+        sweep = {
+            "start_frequency_hz": 2, "stop_frequency_hz": 8, "spacing": "linear",
+            "sweep_time_s": 1, "amplitude_vpp": 1, "trigger_delay_s": 0, "verify_readback": True,
+        }
+        request = _payload("configure-square-sweep", sweep, job_id="sweep-delay")
+        code, accepted = _request(runtime, "POST", "/command", request)
+        assert code == 202
+        result = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")["result"]
+        assert result["trigger_delay_s"] == 0
+        assert result["readback_verified"] is True
+
+        raw = json.dumps(request).replace('"trigger_delay_s": 0,', '"trigger_delay_s": 1e-325,')
+        code, rejected = _request(runtime, "POST", "/command", raw_body=raw)
+        assert code == 400
+        assert rejected["error"]["code"] == "invalid_arguments"
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
+
+
+def test_worker_live_trigger_delay_rejected_before_visa_io(monkeypatch):
+    def forbidden_manager(_library):
+        pytest.fail("Worker Live Trigger Delay must fail before opening VISA")
+
+    monkeypatch.setattr("wavegen_tool_core.visa.create_resource_manager", forbidden_manager)
+    runtime = WorkerRuntime(_worker_config(mode="live"))
+    runtime.start()
+    try:
+        arguments = {**_sine_arguments(), "burst": {
+            "mode": "counted", "count": 3, "trigger_source": "bus", "trigger_delay_s": 0,
+        }}
+        code, accepted = _request(
+            runtime, "POST", "/command", _payload("configure-sine", arguments, mode="live"),
+        )
+        assert code == 202
+        result = _wait_for_job(runtime, accepted["worker_job_id"], "failed")
+        assert result["error"]["code"] == "unsupported_instrument"
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)

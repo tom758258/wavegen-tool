@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 from wavegen_tool_core import resolve_voltage_inputs
@@ -371,7 +372,7 @@ for _command in _SWEEP_COMMANDS:
             "hold_time_s", "return_time_s", "trigger_timer_s",
         }) | {"frequencies_hz", "dwell_s"}
     )
-    _ARGUMENT_FIELDS[_command] |= {"trigger_slope"}
+    _ARGUMENT_FIELDS[_command] |= {"trigger_slope", "trigger_delay_s"}
     _REQUIRED_ARGUMENT_FIELDS[_list_command] = frozenset({"frequencies_hz"})
     _DEFAULT_ARGUMENTS[_list_command] = {
         field: value for field, value in _DEFAULT_ARGUMENTS[_command].items()
@@ -606,6 +607,10 @@ def _validate_arguments(command: str, arguments: dict[str, object]) -> None:
     for field in ("trigger_source", "trigger_slope"):
         if field in arguments and not isinstance(arguments[field], str):
             raise WorkerRequestValidationError("invalid_arguments", f"{field} must be a string.")
+    _validate_trigger_delay_type(arguments)
+    burst = arguments.get("burst")
+    if isinstance(burst, Mapping):
+        _validate_trigger_delay_type(burst)
     trigger_source = arguments.get("trigger_source")
     if (
         command in _SWEEP_COMMANDS
@@ -710,6 +715,13 @@ def _validate_arbitrary_fields(command: str, arguments: Mapping[str, object]) ->
         )
 
 
+def _validate_trigger_delay_type(arguments: Mapping[str, object]) -> None:
+    if "trigger_delay_s" in arguments and type(arguments["trigger_delay_s"]) not in (
+        int, float, Decimal,
+    ):
+        raise WorkerRequestValidationError("invalid_arguments", "trigger_delay_s must be a number.")
+
+
 def configuration_options(
     command: str, arguments: Mapping[str, object], *, readback: bool = False
 ) -> dict[str, object]:
@@ -737,7 +749,7 @@ def configuration_options(
             raise WorkerRequestValidationError(
                 "invalid_arguments", f"Invalid {field} object for {command}."
             ) from exc
-    for field in ("trigger_source", "trigger_timer_s", "trigger_slope", "dwell_s"):
+    for field in ("trigger_source", "trigger_timer_s", "trigger_slope", "trigger_delay_s", "dwell_s"):
         if field in arguments:
             options[field] = arguments[field]
     if readback and "verify_readback" in arguments:
