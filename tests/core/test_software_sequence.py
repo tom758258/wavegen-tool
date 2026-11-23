@@ -520,6 +520,7 @@ def test_frequency_step_failure_keeps_output_safe_and_retains_cleanup_error(fake
     write, query = SimulatedResource.write, SimulatedResource.query
     two_errors = failure.startswith("two_startup_errors")
     traffic = []
+    malformed_reply_sent = False
 
     def fail_write(session, command):
         traffic.append(command)
@@ -541,6 +542,7 @@ def test_frequency_step_failure_keeps_output_safe_and_retains_cleanup_error(fake
         return write(session, command)
 
     def fail_query(session, command):
+        nonlocal malformed_reply_sent
         traffic.append(command)
         if failure == "start_readback" and command == "SOURce1:FREQuency?":
             return "3000"
@@ -549,7 +551,9 @@ def test_frequency_step_failure_keeps_output_safe_and_retains_cleanup_error(fake
             and command == "SYSTem:ERRor?"
             and "INITiate1:IMMediate" in traffic
             and not state.ch1.output_enabled
+            and not malformed_reply_sent
         ):
+            malformed_reply_sent = True
             return "malformed response"
         return query(session, command)
 
@@ -579,9 +583,11 @@ def test_frequency_step_failure_keeps_output_safe_and_retains_cleanup_error(fake
         report = error.value.details["failed_step"]["error"]
         assert "-221" in report["message"]
         if failure == "two_startup_errors_and_queue_read":
-            assert "error queue" in report["message"]
             assert state.ch1.trigger_count == 19
-            assert not error.value.cleanup_errors
+            assert not state.error_queue
+            read_failure, pending = report["cleanup_errors"]
+            assert "error queue" in read_failure
+            assert "-211" in pending and "source unconfirmed" in pending
         else:
             assert "-211" in report["message"] and "Trigger ignored" in report["message"]
             assert not state.error_queue

@@ -3169,6 +3169,9 @@ def _run_sine_list_sweep_once(
             primary_error = VisaWriteError("Could not apply the Frequency Step command.")
             primary_cause = exc
         finally:
+            cleanup_errors = []
+            cleanup_cause = None
+            cleanup_message = "Could not complete Frequency Step output OFF and trigger cleanup."
             try:
                 session.write(f"{output} OFF")
                 if _parse_status_output(session.query(f"{output}?")) != "off":
@@ -3176,7 +3179,10 @@ def _run_sine_list_sweep_once(
                 # The queue is FIFO. Establish an empty queue before restoration
                 # so pending errors cannot be attributed to restoration writes.
                 pending_error = _drain_frequency_step_errors(session, "before trigger restoration")
-                if primary_error is None:
+                queue_unverified = isinstance(pending_error, ErrorQueueQueryError)
+                if queue_unverified:
+                    cleanup_errors.append(str(pending_error))
+                elif primary_error is None:
                     primary_error = pending_error
                 elif pending_error is not None and isinstance(primary_error, WavegenError):
                     primary_error.args = (f"{primary_error} {pending_error}",)
@@ -3186,21 +3192,23 @@ def _run_sine_list_sweep_once(
                 session.write(f"{delay} {_format_scpi_number(saved_delay)}")
                 session.write(f"{count} {int(saved_count)}")
                 session.write(f"{continuous} {saved_continuous.upper()}")
-                # Without a confirmed empty queue, later entries have no reliable source.
-                if not isinstance(pending_error, ErrorQueueQueryError):
-                    restoration_error = _drain_frequency_step_errors(session, "after trigger restoration")
-                    if restoration_error is not None:
-                        raise restoration_error
+                when = "after trigger restoration"
+                if queue_unverified:
+                    when += " (source unconfirmed)"
+                restoration_error = _drain_frequency_step_errors(session, when)
+                if restoration_error is not None:
+                    cleanup_errors.append(str(restoration_error))
+                    cleanup_cause = restoration_error
             except Exception as exc:
-                message = "Could not complete Frequency Step output OFF and trigger cleanup."
-                if isinstance(exc, WavegenError):
-                    message = f"{message} {exc}"
+                cleanup_errors.append(str(exc) if isinstance(exc, WavegenError) else cleanup_message)
+                cleanup_cause = exc
+            if cleanup_errors:
                 if isinstance(primary_error, WavegenError):
-                    primary_error.attach_cleanup_errors((*primary_error.cleanup_errors, message))
+                    primary_error.attach_cleanup_errors((*primary_error.cleanup_errors, *cleanup_errors))
                 elif isinstance(primary_error, KeyboardInterrupt):
-                    primary_error.cleanup_errors = (message,)
+                    primary_error.cleanup_errors = tuple(cleanup_errors)
                 else:
-                    raise VisaCleanupError(message) from exc
+                    raise VisaCleanupError(cleanup_message).attach_cleanup_errors(tuple(cleanup_errors)) from cleanup_cause
 
         if primary_error is not None:
             if primary_cause is not None:

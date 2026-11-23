@@ -1821,6 +1821,60 @@ def test_software_sequence_cancel_reports_cleanup_failure(monkeypatch):
         assert runtime.wait(3)
 
 
+def test_frequency_step_cancel_reports_unverified_trigger_cleanup(monkeypatch, capsys):
+    from wavegen_tool_core import SimulatedResource
+
+    query, write = SimulatedResource.query, SimulatedResource.write
+    malformed_reply_sent = False
+
+    def fail_first_cleanup_query(session, command):
+        nonlocal malformed_reply_sent
+        channel = session.state.ch1
+        if (
+            command == "SYSTem:ERRor?"
+            and channel.list_runs
+            and not channel.output_enabled
+            and not malformed_reply_sent
+        ):
+            malformed_reply_sent = True
+            return "malformed response"
+        return query(session, command)
+
+    def reject_restoration(session, command):
+        if malformed_reply_sent and command == "SOURce1:FREQuency:MODE CW":
+            session.state.error_queue.append('-222,"Data out of range"')
+            return len(command)
+        return write(session, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", fail_first_cleanup_query)
+    monkeypatch.setattr(SimulatedResource, "write", reject_restoration)
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        status, job = _request(runtime, "POST", "/command", _payload("run-frequency-step", {
+            "start_frequency_hz": 1000, "stop_frequency_hz": 3000, "frequency_step_hz": 1000, "dwell_s": 5,
+        }))
+        assert status == 202
+        job_id = job["worker_job_id"]
+        assert _wait_until(lambda: runtime.simulator_state.ch1.list_runs == 1)
+        assert _request(runtime, "POST", "/cancel", {"schema_version": 3, "worker_job_id": job_id})[0] == 202
+        finished = _wait_for_job(runtime, job_id, "failed")
+        assert finished["error"]["code"] == "visa_cleanup_error"
+        sequence = finished["error"]["details"]["domain_error"]["sequence"]
+        assert sequence["cleanup"]["confirmed_off_channels"] == [1]
+        read_failure, pending = sequence["failed_step"]["error"]["cleanup_errors"]
+        assert "error queue" in read_failure
+        assert "-222" in pending and "source unconfirmed" in pending
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(3)
+
+    events = map(json.loads, capsys.readouterr().out.splitlines())
+    terminal, = [event for event in events if event["event"] == "job_finished"]
+    assert terminal["state"] == finished["state"]
+    assert terminal["error"] == finished["error"]
+
+
 @pytest.mark.parametrize("command", ["status", "run-software-sequence"])
 def test_cancel_racing_job_completion_preserves_actual_outcome(monkeypatch, command):
     runtime = WorkerRuntime(_worker_config())
