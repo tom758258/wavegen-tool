@@ -141,3 +141,15 @@ class ErrorQueueQueryError(WavegenError):
     """A SYSTem:ERRor? query failed, was empty, or returned a malformed response."""
 
     code = "error_queue_query_error"
+
+
+class SoftwareSequenceInterrupted(WavegenError):
+    """An operator interrupted a software sequence."""
+
+    code = "interrupted"
+
+
+class SoftwareSequenceCancelled(WavegenError):
+    """A running sequence observed cooperative cancellation."""
+
+    code = "cancelled"

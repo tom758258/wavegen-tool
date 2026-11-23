@@ -1821,24 +1821,25 @@ def test_software_sequence_cancel_reports_cleanup_failure(monkeypatch):
         assert runtime.wait(3)
 
 
-def test_frequency_step_cancel_reports_unverified_trigger_cleanup(monkeypatch, capsys):
+@pytest.mark.parametrize("malformed_reply", [False, True], ids=["instrument-error", "unverified-restoration"])
+def test_frequency_step_cancel_reports_instrument_and_cleanup_failures(monkeypatch, capsys, malformed_reply):
     from wavegen_tool_core import SimulatedResource
 
     query, write = SimulatedResource.query, SimulatedResource.write
     malformed_reply_sent = False
 
-    def fail_first_cleanup_query(session, command):
+    def query_error_queue(session, command):
         nonlocal malformed_reply_sent
         channel = session.state.ch1
-        if (
-            command == "SYSTem:ERRor?"
-            and channel.list_runs
-            and not channel.output_enabled
-            and not malformed_reply_sent
-        ):
+        if command != "SYSTem:ERRor?" or not channel.list_runs:
+            return query(session, command)
+        if malformed_reply and not channel.output_enabled and not malformed_reply_sent:
             malformed_reply_sent = True
             return "malformed response"
-        return query(session, command)
+        reply = query(session, command)
+        if not malformed_reply and channel.output_enabled:
+            session.state.error_queue.append('-211,"Trigger ignored"')
+        return reply
 
     def reject_restoration(session, command):
         if malformed_reply_sent and command == "SOURce1:FREQuency:MODE CW":
@@ -1846,7 +1847,7 @@ def test_frequency_step_cancel_reports_unverified_trigger_cleanup(monkeypatch, c
             return len(command)
         return write(session, command)
 
-    monkeypatch.setattr(SimulatedResource, "query", fail_first_cleanup_query)
+    monkeypatch.setattr(SimulatedResource, "query", query_error_queue)
     monkeypatch.setattr(SimulatedResource, "write", reject_restoration)
     runtime = WorkerRuntime(_worker_config())
     runtime.start()
@@ -1859,12 +1860,19 @@ def test_frequency_step_cancel_reports_unverified_trigger_cleanup(monkeypatch, c
         assert _wait_until(lambda: runtime.simulator_state.ch1.list_runs == 1)
         assert _request(runtime, "POST", "/cancel", {"schema_version": 3, "worker_job_id": job_id})[0] == 202
         finished = _wait_for_job(runtime, job_id, "failed")
-        assert finished["error"]["code"] == "visa_cleanup_error"
         sequence = finished["error"]["details"]["domain_error"]["sequence"]
         assert sequence["cleanup"]["confirmed_off_channels"] == [1]
-        read_failure, pending = sequence["failed_step"]["error"]["cleanup_errors"]
-        assert "error queue" in read_failure
-        assert "-222" in pending and "source unconfirmed" in pending
+        failure = sequence["failed_step"]["error"]
+        if malformed_reply:
+            assert finished["error"]["code"] == "visa_cleanup_error"
+            read_failure, pending = failure["cleanup_errors"]
+            assert "error queue" in read_failure
+            assert "-222" in pending and "source unconfirmed" in pending
+        else:
+            assert finished["error"]["code"] == failure["code"] == "visa_write_error"
+            assert "-211" in failure["message"]
+            assert "cleanup_errors" not in failure and sequence["cleanup"]["errors"] == []
+            assert runtime.simulator_state.ch1.frequency_mode == "CW"
     finally:
         runtime.request_stop()
         assert runtime.wait(3)

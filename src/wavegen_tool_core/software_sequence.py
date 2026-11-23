@@ -25,6 +25,8 @@ from .arbitrary import (
     run_arbitrary,
 )
 from .errors import (
+    SoftwareSequenceCancelled,
+    SoftwareSequenceInterrupted,
     StatusQueryError,
     UnsupportedInstrumentError,
     VisaCleanupError,
@@ -103,18 +105,6 @@ _BOOL_FIELDS = {
     "voltage_limits_enabled",
     "autorange_enabled",
 }
-
-
-class SoftwareSequenceInterrupted(WavegenError):
-    """An operator interrupted a software sequence."""
-
-    code = "interrupted"
-
-
-class SoftwareSequenceCancelled(WavegenError):
-    """A running sequence observed cooperative cancellation."""
-
-    code = "cancelled"
 
 
 class SoftwareSequenceError(WavegenError):

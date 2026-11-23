@@ -32,6 +32,8 @@ from wavegen_tool_core.errors import (
     ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
+    SoftwareSequenceCancelled,
+    SoftwareSequenceInterrupted,
     StatusQueryError,
     UnsupportedInstrumentError,
     UnsupportedTransportError,
@@ -3103,24 +3105,30 @@ def _check_frequency_step_errors(session: VisaSession, phase: str) -> None:
         raise VisaWriteError(f"Frequency Step {phase} instrument error ({entry.code}): {entry.message}")
 
 
-def _drain_frequency_step_errors(session: VisaSession, when: str) -> WavegenError | None:
+def _drain_frequency_step_errors(
+    session: VisaSession, when: str
+) -> tuple[VisaWriteError | None, ErrorQueueQueryError | None]:
     entries = []
+    read_error = None
     # Allow the no-error response after the normal queue depth and bound reads
     # if the instrument keeps reporting errors.
     for _ in range(DEFAULT_ERROR_QUEUE_MAX_READS + 1):
         try:
             entry = _query_frequency_step_error(session, when)
         except ErrorQueueQueryError as exc:
-            problem = str(exc)
+            read_error = exc
             break
         if entry.code == ERROR_QUEUE_NO_ERROR_CODE:
-            if not entries:
-                return None
-            return VisaWriteError(f"Frequency Step instrument errors {when}: " + " | ".join(entries))
+            break
         entries.append(f"({entry.code}): {entry.message}")
     else:
-        problem = f"Could not confirm an empty Frequency Step error queue {when} within the read limit."
-    return ErrorQueueQueryError(" ".join((problem, *entries)))
+        read_error = ErrorQueueQueryError(
+            f"Could not confirm an empty Frequency Step error queue {when} within the read limit."
+        )
+    instrument_error = None
+    if entries:
+        instrument_error = VisaWriteError(f"Frequency Step instrument errors {when}: " + " | ".join(entries))
+    return instrument_error, read_error
 
 
 def _run_sine_list_sweep_once(
@@ -3163,7 +3171,10 @@ def _run_sine_list_sweep_once(
             _check_frequency_step_errors(session, "startup")
             _wait_for_counted_list(session, channel, dwell_deadline, wait)
             check_cancel()
-        except (WavegenError, KeyboardInterrupt) as exc:
+        except KeyboardInterrupt as exc:
+            primary_error = SoftwareSequenceInterrupted("Software sequence interrupted.")
+            primary_cause = exc
+        except WavegenError as exc:
             primary_error = exc
         except Exception as exc:
             primary_error = VisaWriteError("Could not apply the Frequency Step command.")
@@ -3178,37 +3189,37 @@ def _run_sine_list_sweep_once(
                     raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
                 # The queue is FIFO. Establish an empty queue before restoration
                 # so pending errors cannot be attributed to restoration writes.
-                pending_error = _drain_frequency_step_errors(session, "before trigger restoration")
-                queue_unverified = isinstance(pending_error, ErrorQueueQueryError)
-                if queue_unverified:
-                    cleanup_errors.append(str(pending_error))
-                elif primary_error is None:
-                    primary_error = pending_error
-                elif pending_error is not None and isinstance(primary_error, WavegenError):
-                    primary_error.args = (f"{primary_error} {pending_error}",)
-                if isinstance(primary_error, WavegenError):
+                pending_error, read_error = _drain_frequency_step_errors(session, "before trigger restoration")
+                if read_error is not None:
+                    cleanup_errors.append(str(read_error))
+                    cleanup_cause = read_error
+                if pending_error is not None:
+                    # An instrument failure takes precedence over cooperative cancellation.
+                    if primary_error is None or isinstance(primary_error, SoftwareSequenceCancelled):
+                        primary_cause = primary_error
+                        primary_error = pending_error
+                    else:
+                        primary_error.args = (f"{primary_error} {pending_error}",)
+                if primary_error is not None:
                     primary_error.attach_context(output_state="off")
                 session.write(f"SOURce{channel}:FREQuency:MODE CW")
                 session.write(f"{delay} {_format_scpi_number(saved_delay)}")
                 session.write(f"{count} {int(saved_count)}")
                 session.write(f"{continuous} {saved_continuous.upper()}")
                 when = "after trigger restoration"
-                if queue_unverified:
+                if read_error is not None:
                     when += " (source unconfirmed)"
-                restoration_error = _drain_frequency_step_errors(session, when)
-                if restoration_error is not None:
-                    cleanup_errors.append(str(restoration_error))
-                    cleanup_cause = restoration_error
+                for error in _drain_frequency_step_errors(session, when):
+                    if error is not None:
+                        cleanup_errors.append(str(error))
+                        cleanup_cause = error
             except Exception as exc:
                 cleanup_errors.append(str(exc) if isinstance(exc, WavegenError) else cleanup_message)
                 cleanup_cause = exc
             if cleanup_errors:
-                if isinstance(primary_error, WavegenError):
-                    primary_error.attach_cleanup_errors((*primary_error.cleanup_errors, *cleanup_errors))
-                elif isinstance(primary_error, KeyboardInterrupt):
-                    primary_error.cleanup_errors = tuple(cleanup_errors)
-                else:
+                if primary_error is None:
                     raise VisaCleanupError(cleanup_message).attach_cleanup_errors(tuple(cleanup_errors)) from cleanup_cause
+                primary_error.attach_cleanup_errors((*primary_error.cleanup_errors, *cleanup_errors))
 
         if primary_error is not None:
             if primary_cause is not None:
