@@ -783,6 +783,12 @@ def test_worker_publishes_expected_domain_commands():
         "clear-arbitrary-memory",
         "output",
         "run-software-sequence",
+        "run-timed-output",
+        "run-amplitude-ramp",
+        "run-output-cycle",
+        "run-waveform-sequence",
+        "run-frequency-step",
+        "apply-quick-output-preset",
     }
 
 def test_worker_advanced_readback_is_readonly_and_has_no_dry_run():
