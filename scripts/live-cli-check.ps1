@@ -522,6 +522,10 @@ function Invoke-FullLiveCases {
                         }
                     }
                     $turningOn = $command -eq 'output' -and $step.arguments[2] -eq 'on'
+                    if ($command -eq 'run-software-sequence') {
+                        $document = Get-Content -LiteralPath $step.arguments[2] -Raw -Encoding UTF8 | ConvertFrom-Json
+                        $turningOn = (Get-SoftwareSequenceIntent $document).output_on
+                    }
                     if ($turningOn -and -not $observation -and $recipe.family -cne 'output-control') {
                         throw 'Output ON is restricted to output-control and confirmed observation cases.'
                     }
@@ -538,11 +542,17 @@ function Invoke-FullLiveCases {
                         $mainOnAttempted = $true
                         $mainOffByChannel[$channel] = $false
                     }
+                    if ($command -eq 'run-software-sequence' -and $turningOn) {
+                        Write-Host "Observe CH$channel now. The software sequence will turn output OFF."
+                    }
                     $syncOnInFlight = $turningSyncOn
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
                     $syncOnInFlight = $false
                     if ($command -eq 'status') {
                         Assert-FullReadback -Payload $result -Expected @{ output_state = 'off' } -MainChannel $channel
+                    }
+                    if ($command -eq 'run-software-sequence') {
+                        Assert-SoftwareSequenceResult -Payload $result -Intent $step.sequence_intent -Channel $channel
                     }
                     Assert-FullReadback -Payload $result -Expected $step.result
                     if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
@@ -569,7 +579,7 @@ function Invoke-FullLiveCases {
                     }
                     Assert-FullErrorQueue -Name "$name-errors"
                 }
-                if ($observation) {
+                if ($observation -and $recipe.family -ne 'software-sequence') {
                     if ($externalInput) { Write-Host $observation.action }
                     Write-Host "Observe CH$channel for $($observation.seconds) seconds. Output will then turn off."
                     Start-Sleep -Seconds $observation.seconds
@@ -862,11 +872,14 @@ try {
     $applicableModes = if ($Suite -eq 'full') {
         @(Get-ApplicableValidationModes -Modes $selectedModes -Capabilities $payload.capabilities -RejectUnsupportedArbitrary:($modesSpecified))
     } else { @() }
-    $fixtures = if ($Suite -eq 'full' -and @($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
-        New-ArbitraryValidationFixtures -Directory (Join-Path $run.Private 'fixtures')
+    $fixtureDirectory = Join-Path $run.Private 'fixtures'
+    $fixtures = if ($Suite -eq 'full' -and (
+        @($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0 -or
+        ('software-sequence' -in $applicableModes -and $payload.capabilities.max_arbitrary_sample_rate_hz -gt 0))) {
+        New-ArbitraryValidationFixtures -Directory $fixtureDirectory
     } else { $null }
     $fullInventory = if ($Suite -eq 'full') {
-        @(Get-FullValidationInventory -Channels $channels -Modes $applicableModes -ArbitraryFixtures $fixtures -IncludeBurstStartPhase:$IncludeBurstStartPhase)
+        @(Get-FullValidationInventory -Channels $channels -Modes $applicableModes -ArbitraryFixtures $fixtures -SequenceFixtureDirectory $fixtureDirectory -IncludeBurstStartPhase:$IncludeBurstStartPhase)
     } else { @() }
 } catch {
     Add-LiveCase -Cases $cases -Name 'mode-admission' -Status FAIL -FailureReasons $_.Exception.Message
@@ -907,6 +920,12 @@ Write-Host ""
 Write-Host "Validation cases:"
 foreach ($caseName in $plannedCases) {
     Write-Host "  $caseName"
+}
+if ($Suite -eq 'full') {
+    foreach ($recipe in @($fullInventory | Where-Object family -eq 'software-sequence')) {
+        $intent = $recipe.steps[0].sequence_intent
+        Write-Host "  $($recipe.name) intent - Output ON: $($intent.output_on), waveform uploads: $($intent.upload_count)"
+    }
 }
 Write-Host ""
 Write-Host "Representative waveform:"

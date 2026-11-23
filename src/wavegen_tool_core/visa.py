@@ -8784,42 +8784,46 @@ _ADVANCED_MODULATION_PREFIXES = (
 )
 
 
-def _advanced_mode_readback_fields(commands: tuple[str, ...]) -> dict[str, str]:
+def _advanced_mode_readback_fields(
+    commands: tuple[str, ...], *, channel: int = 1
+) -> dict[str, str]:
     """Select only the active mode's settings from an already validated SCPI plan."""
 
+    source = f"SOURce{channel}:"
+    trigger = f"TRIGger{channel}:"
     enabled = [
         name
         for name in _ADVANCED_MODULATION_PREFIXES
-        if f"SOURce1:{name}:STATe ON" in commands
+        if f"{source}{name}:STATe ON" in commands
     ]
     if len(enabled) > 1:
         raise WaveformParameterError("Only one Advanced Mode may be verified.")
     active = enabled[0] if enabled else None
 
     if active is not None:
-        prefixes = (f"SOURce1:{active}:",)
+        prefixes = (f"{source}{active}:",)
         if active == "BURSt":
-            prefixes += ("TRIGger1:",)
+            prefixes += (trigger,)
     else:
         frequency_modes = [
             command.split(" ", 1)[1]
             for command in commands
-            if command.startswith("SOURce1:FREQuency:MODE ")
+            if command.startswith(f"{source}FREQuency:MODE ")
         ]
         frequency_mode = frequency_modes[-1].upper() if frequency_modes else "CW"
         if frequency_mode == "LIST":
             prefixes = (
-                "SOURce1:LIST:",
-                "SOURce1:FREQuency:MODE",
-                "TRIGger1:",
+                f"{source}LIST:",
+                f"{source}FREQuency:MODE",
+                trigger,
             )
         elif frequency_mode == "SWEEP":
             prefixes = (
-                "SOURce1:FREQuency:STARt",
-                "SOURce1:FREQuency:STOP",
-                "SOURce1:SWEep:",
-                "SOURce1:FREQuency:MODE",
-                "TRIGger1:",
+                f"{source}FREQuency:STARt",
+                f"{source}FREQuency:STOP",
+                f"{source}SWEep:",
+                f"{source}FREQuency:MODE",
+                trigger,
             )
         else:
             raise WaveformParameterError(

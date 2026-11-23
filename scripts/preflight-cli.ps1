@@ -212,8 +212,10 @@ foreach ($targetProfile in $targets) {
             Write-Host ""
             continue
         }
-        $fixtures = if (@($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
-            New-ArbitraryValidationFixtures -Directory (Join-Path $targetDirectory 'fixtures')
+        $fixtureDirectory = Join-Path $targetDirectory 'fixtures'
+        $fixtures = if (@($applicableModes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0 -or
+            ('software-sequence' -in $applicableModes -and $payload.capabilities.max_arbitrary_sample_rate_hz -gt 0)) {
+            New-ArbitraryValidationFixtures -Directory $fixtureDirectory
         } else { $null }
         if ($IncludeBurstStartPhase) {
             $name = "${modelId}/ch1/burst-invalid-start-phase-dry-run"
@@ -231,7 +233,7 @@ foreach ($targetProfile in $targets) {
             } catch { $reasons += $_.Exception.Message }
             Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $(if ($null -ne $invocation) { $invocation.Process } else { $null })
         }
-        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures -IncludeBurstStartPhase:$IncludeBurstStartPhase)) {
+        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures -SequenceFixtureDirectory $fixtureDirectory -IncludeBurstStartPhase:$IncludeBurstStartPhase)) {
             if ($recipe.channel -notin $channelsTested) { [void]$channelsTested.Add($recipe.channel) }
             $stepIndex = 0
             foreach ($step in $recipe.steps) {
@@ -243,7 +245,7 @@ foreach ($targetProfile in $targets) {
                 $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence') -and
                     '--load-builtin' -notin $step.arguments) {
                     @('dry-run')
-                } elseif ($command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory')) {
+                } elseif ($command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory', 'run-software-sequence')) {
                     @('dry-run', 'simulate')
                 } else { @('simulate') }
                 foreach ($mode in $executionModes) {
@@ -262,8 +264,12 @@ foreach ($targetProfile in $targets) {
                         $payload = $invocation.Payload
                         if ($payload.success -ne $true -or $payload.action -cne $command -or $payload.mode -cne $mode) { throw 'Unexpected command result.' }
                         if ($usesChannel -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
+                        if ($command -eq 'run-software-sequence') {
+                            Assert-SoftwareSequenceResult -Payload $payload -Intent $step.sequence_intent -Channel $recipe.channel -DryRun:($mode -eq 'dry-run')
+                        }
                         if ($mode -eq 'dry-run') {
-                            if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or @($payload.commands).Count -eq 0) { throw 'Invalid hardware-free plan.' }
+                            if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or
+                                ($command -ne 'run-software-sequence' -and @($payload.commands).Count -eq 0)) { throw 'Invalid hardware-free plan.' }
                         } elseif ($payload.simulated -ne $true -or $payload.model -cne $capabilityModel) { throw 'Unexpected simulator identity or mode.' }
                         if ($command -in @('configure-sync', 'sync-output')) {
                             foreach ($key in $step.result.Keys) {

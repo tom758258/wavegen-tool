@@ -1639,3 +1639,88 @@ def test_worker_live_trigger_delay_rejected_before_visa_io(monkeypatch):
     finally:
         runtime.request_stop()
         assert runtime.wait(timeout=2.0)
+
+
+def test_software_sequence_worker_drains_busy_job_before_stopping(monkeypatch, capsys):
+    from wavegen_tool_core.software_sequence import time as sequence_time
+
+    waiting = threading.Event()
+    release = threading.Event()
+    sleep = time.sleep
+
+    def wait(seconds):
+        if seconds == 10:
+            waiting.set()
+            assert release.wait(5)
+        else:
+            sleep(seconds)
+
+    monkeypatch.setattr(sequence_time, "sleep", wait)
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        document = {"version": 1, "steps": [
+            {"action": "output", "arguments": {"enabled": True}},
+            {"action": "wait", "arguments": {"seconds": 10}},
+            {"action": "status"},
+        ]}
+        assert _request(runtime, "POST", "/command", _payload("run-software-sequence", {"document": document}))[0] == 202
+        assert waiting.wait(2)
+        assert _request(runtime, "POST", "/command", _payload("status"))[1]["reason"] == "busy"
+        assert _request(runtime, "POST", "/stop", {})[0] == 202
+        assert runtime.simulator_state.ch1.output_enabled
+    finally:
+        release.set()
+        runtime.request_stop()
+        assert runtime.wait(5)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    terminal, = [event for event in events if event["event"] == "job_finished"]
+    assert terminal["state"] == "succeeded"
+    assert terminal["result"]["completed_step_executions"] == 3
+    assert terminal["result"]["cleanup"]["confirmed_off_channels"] == [1]
+
+
+def test_software_sequence_admission_error_includes_invalid_step_location():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        document = {
+            "version": 1,
+            "steps": [{"action": "status"}, {"action": "status", "arguments": []}],
+        }
+        code, response = _request(
+            runtime, "POST", "/command", _payload("run-software-sequence", {"document": document})
+        )
+        assert code == 400
+        assert response["error"]["code"] == "invalid_arguments"
+        failed = response["error"]["details"]["domain_error"]["sequence"]["failed_step"]
+        assert (failed["loop"], failed["step"], failed["action"]) == (1, 2, "status")
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(5)
+
+
+def test_software_sequence_worker_preserves_nested_exact_decimal(capsys):
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        payload = _payload("run-software-sequence", {"document": {"version": 1, "steps": [{
+            "action": "configure-sine", "arguments": {
+                "frequency_hz": 1000, "amplitude_vpp": 0.1,
+                "burst": {"mode": "gated", "start_phase_deg": 0.1},
+            },
+        }]}}, mode="dry_run")
+        data = json.dumps(payload).replace('"start_phase_deg": 0.1', '"start_phase_deg": 0.10000000000000001')
+        code, accepted = _request(runtime, "POST", "/command", raw_body=data)
+        assert code == 202
+        failed = _wait_for_job(runtime, accepted["worker_job_id"], "failed")
+        domain_error = failed["error"]["details"]["domain_error"]
+        assert domain_error["sequence"]["failed_step"]["step"] == 1
+        assert "0.1-degree increments" in domain_error["message"]
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(5)
+    terminal, = [
+        e for e in map(json.loads, capsys.readouterr().out.splitlines()) if e["event"] == "job_finished"
+    ]
+    assert terminal["error"] == failed["error"]

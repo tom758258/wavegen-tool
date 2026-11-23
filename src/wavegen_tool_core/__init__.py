@@ -156,7 +156,10 @@ from wavegen_tool_core.visa import (
 
 from wavegen_tool_core.arbitrary import read_arbitrary_sequence_file, run_arbitrary
 
+from wavegen_tool_core.software_sequence import run_software_sequence
+
 __all__ = [
+    "run_software_sequence",
     "MODULATION_SHAPES",
     "read_arbitrary_sequence_file",
     "run_arbitrary",

@@ -64,7 +64,7 @@ does not expand Product Live support. Unknown context fields are rejected.
 
 ## Supported Commands
 
-All 30 domain commands accepted by `POST /command` are `async_job` commands
+All 31 domain commands accepted by `POST /command` are `async_job` commands
 under `common.async_jobs` contract version 1. Manifest declares
 `execution.model="multi_job"` and `execution.context_binding="per_command"`,
 with this feature and no duplicate commands table. Cancellation and streaming
@@ -103,9 +103,10 @@ Supported commands are:
 - `configure-arbitrary-sequence`
 - `list-arbitrary-memory`
 - `clear-arbitrary-memory`
+- `run-software-sequence`
 
 Dry-run accepts every `configure-*` command and the Arbitrary upload, list,
-and clear commands. Submit `sync-output` and `trigger` in live or simulate mode.
+and clear commands, plus `run-software-sequence`. Submit `sync-output` and `trigger` in live or simulate mode.
 Trigger sends an instrument-wide Bus trigger and accepts an empty arguments object.
 
 The read-only `readback-advanced` command accepts an optional channel
@@ -269,6 +270,53 @@ admission receives the Core unsupported-instrument error in the job result.
 `output` requires `enabled`, which must be a boolean. Optional
 `confirm_output`, when present, must also be a boolean. `confirm_output` is an
 admission safety field and is not passed to Core.
+
+### Software Sequences
+
+`run-software-sequence` takes `arguments.document` as a JSON object and optional
+boolean `arguments.confirm_output`. The document has integer `version: 1`,
+`steps` with 1–250 entries, and optional integer `loop_count` with a default of
+1 and a maximum of 10,000. The total number of step executions may be at most
+1,000,000. Each step contains an `action` and optional object `arguments`.
+Unknown fields are rejected.
+
+The allowed step actions are:
+
+- `configure-sine`, `configure-square`, `configure-ramp`, `configure-triangle`,
+  `configure-pulse`, `configure-dc`, `configure-noise`, and `configure-prbs`,
+  including the advanced options documented above;
+- the four ordinary Sweep and four List Sweep configuration commands;
+- `configure-output`, `output`, `trigger`, `status`, `readback-advanced`,
+  `read-errors`, and `wait`;
+- `upload-arbitrary`, `configure-arbitrary`, `configure-arbitrary-sequence`,
+  and `list-arbitrary-memory`.
+
+Steps use the argument names above. `wait` takes finite non-negative numeric
+`seconds` within the host timer range. It represents a host delay. A global
+Bus trigger checks both main outputs at entry on dual-channel models. Software
+sequences exclude Sync, memory clear, nested software sequences, and arbitrary
+instrument commands. Dry-run shows intent for actions that need runtime I/O
+and omits device readbacks.
+
+The Worker requires an absolute Worker-host-local CSV path for
+`upload-arbitrary`. CSV content is opened and validated in the background
+job. Native Arbitrary Sequence uses a separate version 1 document inside its
+step. Upload and native sequence creation require `loop_count: 1`, and a
+document cannot create the same name twice on the same channel.
+
+For a live software sequence, any write step, including an explicit OFF,
+requires Worker startup with `--allow-output-writes`. A step with
+`output.enabled: true` also requires outer `arguments.confirm_output: true`.
+Worker uses Product Live policy and rejects entire documents containing an
+Arbitrary step. Other model, feature, and output-state checks complete before
+the sequence sends any setting writes. A stopped Worker drains the admitted
+sequence through its normal completion and output cleanup. Check the dry-run
+total wait before admitting a long-running job.
+
+Success uses the [Software Sequence result](wavegen-cli-jsonl-contract.md#software-sequence-results).
+On failure, the Common Error carries sequence details at
+`error.details.domain_error.sequence` when available. HTTP 202 acknowledges
+the async job. Check the terminal event or `last_job` for the outcome.
 
 ## Live Write Safety
 

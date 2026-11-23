@@ -102,6 +102,24 @@ Consult the
 [Keysight Trueform Programming Guide](https://www.keysight.com/us/en/assets/9018-03714/service-manuals/9018-03714.pdf)
 for the underlying DATA, FUNCtion, FORMat, and TRIGger command semantics.
 
+## Software Sequences
+
+Call `run_software_sequence(document, model=...)` for a hardware-free plan.
+Supply `resource=...` and optionally a simulator factory to execute the same
+document. See the [document format](../contracts/wavegen-worker-contract.md#software-sequences).
+
+Core validates the whole sequence before the first setting write and verifies
+that the outputs it will control start OFF. A Bus trigger expands the initial
+check to every main output. Each step uses its existing Core operation with
+its own instrument session. Other controllers can change the instrument
+between steps, and host waits do not confirm completion of instrument
+triggers or waveform playback.
+
+Core tracks each channel before attempting ON and tries to turn it OFF and
+verify readback at completion, failure, or controllable interruption. Failed
+cleanup is reported even when all steps completed. Earlier settings and
+Arbitrary memory changes persist unless an operator changes them.
+
 ## Simulator Boundary
 
 Simulator mode uses Core's in-memory resource manager and state. Registered

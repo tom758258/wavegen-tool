@@ -450,16 +450,17 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "sweep-external-positive", "sweep-external-negative",
         "list-transition-cw-recovery", "list-bus-trigger", "configure-output", "output-control",
         "sync-configuration", "sync-control",
+        "software-sequence-basic", "software-sequence-advanced",
     }
     expected_parity = {
         "status", "static-sine", "modulation-am", "burst-immediate",
         "sweep-sine-linear", "list-transition-cw-recovery", "configure-output", "output-control",
-        "sync-configuration",
+        "sync-configuration", "software-sequence-advanced",
     }
     if model != "33510b":
         expected_primary |= {
             "arbitrary-upload-configure", "arbitrary-clear", "arbitrary-builtin-select",
-            "sequence-bus", "sequence-bus-functional", "sequence-external",
+            "sequence-bus", "sequence-bus-functional", "sequence-external", "software-sequence-arbitrary",
         }
         if model == "33512b":
             expected_parity.add("arbitrary-upload-configure")
@@ -517,7 +518,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "ch1/burst-bus", "ch1/burst-timer", "ch1/burst-external", "ch1/burst-external-negative",
         "ch1/burst-gated", "ch1/burst-gated-inverted", "ch1/sweep-sine-bus",
         "ch1/sweep-sine-timer", "ch1/sweep-external-positive",
-        "ch1/sweep-external-negative", "ch1/list-bus-trigger",
+        "ch1/sweep-external-negative", "ch1/list-bus-trigger", "ch1/software-sequence-basic",
     } | ({"ch1/sequence-bus-functional", "ch1/sequence-external"} if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
@@ -573,6 +574,7 @@ def test_full_preflight_arbitrary_direct_without_hardware(
     ("sweep", "ch1/sweep-external-positive", "ch1/list-bus-trigger"),
     ("arbitrary", "ch1/arbitrary-builtin-select", "ch1/sequence-bus"),
     ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
+    ("software-sequence", "ch1/software-sequence-basic", "ch1/sequence-bus"),
 ])
 def test_full_plan_filters_modes_and_propagates_to_preflight(
     artifact_root, fake_git, mode, expected, unexpected,
@@ -628,6 +630,25 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         assert catalog["result"]["names"] == [r"INT:\BUILTIN\SINC.ARB"]
         assert reuse["result"]["builtin_loaded"] is False
         assert reuse["readback"]["output_state"] == "off"
+    if mode == "software-sequence":
+        assert report["complete_mode_selection"] is False
+        recipes = {
+            recipe["name"]: recipe for recipe in report["full_inventory"]
+            if recipe["family"] != "inspection"
+        }
+        assert set(recipes) == {
+            "ch1/software-sequence-basic", "ch1/software-sequence-advanced",
+            "ch1/software-sequence-arbitrary",
+        }
+        for recipe in recipes.values():
+            step, = recipe["steps"]
+            assert step["arguments"][:2] == ["run-software-sequence", "--file"]
+        basic, = recipes["ch1/software-sequence-basic"]["steps"]
+        assert basic["sequence_intent"]["output_on"] is True
+        assert recipes["ch1/software-sequence-basic"]["observation"]
+        arbitrary, = recipes["ch1/software-sequence-arbitrary"]["steps"]
+        assert arbitrary["sequence_intent"]["upload_count"] == 1
+        assert arbitrary["sequence_intent"]["output_on"] is False
     if mode == "arbitrary,sequence":
         assert "ch1/sequence-bus" in report["planned_cases"]
         assert "ch1/sequence-bus-functional" in report["planned_cases"]
@@ -638,6 +659,11 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     preflight = next((artifact_root / "_preflight").glob("run_*/shareable/report.json"))
     readiness = json.loads(preflight.read_text(encoding="utf-8"))
     assert readiness["status"] == "PASS"
+    if mode == "software-sequence":
+        cases = {case["name"]: case["status"] for case in readiness["cases"]}
+        for name in recipes:
+            for execution_mode in ("dry-run", "simulate"):
+                assert cases[f"keysight-33521b/{name}/step1-{execution_mode}"] == "PASS"
     assert readiness["hardware_touched"] is False
     assert readiness["selected_modes"] == report["selected_modes"]
     if mode == "burst":
@@ -1368,3 +1394,57 @@ Write-Output ('RESULT:' + (@{
     assert result["clear_calls"] == 0
     assert result["status"] == "FAIL"
     assert result["cleanup_status"] == "PASS"
+
+
+@pytest.mark.parametrize("observation", ["confirmed", "declined", "missing"])
+def test_full_software_sequence_requires_observation_for_nested_output(artifact_root, observation):
+    result = _run_powershell_test(artifact_root, r'''
+Set-StrictMode -Version Latest
+$script:observation = 'OBSERVATION'
+$script:sequenceCalls = 0
+$script:cleanupCalled = $false
+$cases = [System.Collections.ArrayList]::new()
+$channelsTested = [System.Collections.ArrayList]::new()
+$targetCapabilityModel = '33521B'
+$recipeName = 'ch1/software-sequence-basic'
+$fullInventory = @(Get-FullValidationInventory -Channels @(1) -Modes software-sequence -SequenceFixtureDirectory $PSScriptRoot | Where-Object name -eq $recipeName)
+if ($script:observation -eq 'missing') { $fullInventory[0].observation = $null }
+function Read-LiveConfirmation { return $script:observation -eq 'confirmed' }
+function Read-Host { return 'Yes' }
+function Invoke-FullValidationReset {
+    param($Name, $SyncOff, $Channels)
+    $SyncOff.before_reset = 'confirmed'
+    $SyncOff.after_reset = 'confirmed'
+}
+function Invoke-FullCommand {
+    param($Name, $Arguments, [int]$Channel)
+    if ($Arguments[0] -eq 'run-software-sequence') {
+        if ($Channel -ne 0) { throw 'Sequence gets its channel from the document' }
+        $script:sequenceCalls++
+        return [pscustomobject]@{
+            executed = $true; status = 'completed'; channels = @(1); step_count = 4
+            loop_count = 1; execution_units = 4; completed_loops = 1
+            completed_step_executions = 4; total_wait_seconds = 3
+            results = @('configure-sine', 'output', 'wait', 'output' | ForEach-Object {
+                [pscustomobject]@{ action = $_ }
+            })
+            cleanup = @{ attempted_channels = @(1); confirmed_off_channels = @(1); errors = @() }
+        }
+    }
+    if ($Name -like '*/cleanup-command') {
+        $script:cleanupCalled = $Arguments[0] -eq 'output' -and $Arguments[2] -eq 'off'
+    }
+    return [pscustomobject]@{
+        output_state = 'off'; function = 'SIN'; sync_state = 'off'; readback_verified = $true
+        has_errors = $false; empty_confirmed = $true; limit_reached = $false
+    }
+}
+Invoke-FullLiveCases -Channels @(1) -CanRun $true
+$case = $cases | Where-Object name -eq $recipeName
+Write-Output ('RESULT:' + (@{
+    case = $case; sequenceCalls = $script:sequenceCalls; cleanupCalled = $script:cleanupCalled
+} | ConvertTo-Json -Depth 8 -Compress))
+'''.replace("OBSERVATION", observation))
+    assert result["cleanupCalled"] is True
+    assert result["sequenceCalls"] == (1 if observation == "confirmed" else 0)
+    assert result["case"]["status"] == ("PASS" if observation == "confirmed" else "FAIL")

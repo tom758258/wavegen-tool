@@ -782,6 +782,7 @@ def test_worker_publishes_expected_domain_commands():
         "list-arbitrary-memory",
         "clear-arbitrary-memory",
         "output",
+        "run-software-sequence",
     }
 
 def test_worker_advanced_readback_is_readonly_and_has_no_dry_run():
@@ -956,3 +957,32 @@ def test_worker_rejects_invalid_trigger_delay_arguments(command, arguments):
             ),
             worker_mode="simulate", allow_output_writes=True,
         )
+
+
+@pytest.mark.parametrize(("mode", "action", "values", "allow_writes", "expected"), [
+    ("live", "output", {"enabled": False}, False, "live_write_not_allowed"),
+    ("live", "output", {"enabled": True}, True, "output_confirmation_required"),
+    ("live", "upload-arbitrary", {"name": "WAVE", "path": "wave.csv"}, True, "invalid_arguments"),
+    ("live", "list-arbitrary-memory", {}, True, "invalid_arguments"),
+    ("simulate", "upload-arbitrary", {"name": "WAVE", "path": "wave.csv"}, True, "invalid_arguments"),
+    ("simulate", "wait", {"seconds": True}, True, "invalid_arguments"),
+])
+def test_software_sequence_admission_applies_nested_safety(mode, action, values, allow_writes, expected):
+    context = {"mode": mode}
+    if mode == "simulate":
+        context["planning_model_id"] = "keysight-33521b"
+    payload = _payload("run-software-sequence", {"document": {
+        "version": 1, "steps": [{"action": action, "arguments": values}],
+    }}, context=context)
+    with pytest.raises(WorkerRequestValidationError) as caught:
+        validate_worker_command_request(payload, worker_mode=mode, allow_output_writes=allow_writes)
+    assert caught.value.code == expected
+
+
+def test_software_sequence_admits_explicit_live_output_confirmation():
+    payload = _payload("run-software-sequence", {
+        "document": {"version": 1, "steps": [{"action": "output", "arguments": {"enabled": True}}]},
+        "confirm_output": True,
+    })
+    validated = validate_worker_command_request(payload, worker_mode="live", allow_output_writes=True)
+    assert validated.arguments == payload["arguments"]

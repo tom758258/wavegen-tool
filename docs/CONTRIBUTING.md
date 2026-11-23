@@ -165,7 +165,7 @@ contributor validation.
 
 Both runners accept `-Suite smoke|full`, defaulting to `smoke`.
 For Full only, `-Modes` selects any of `static`, `modulation`, `burst`,
-`sweep`, `list-sweep`, `output`, `arbitrary`, or `sequence`.
+`sweep`, `list-sweep`, `output`, `arbitrary`, `sequence`, or `software-sequence`.
 Omitting it selects all applicable families; Smoke plus Modes fails closed.
 A subset PASS is not complete admission evidence. The same filtered recipes
 are used by Preflight, PlanOnly, Real Live and reporting. Core-admitted

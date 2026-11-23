@@ -68,7 +68,13 @@ from wavegen_tool_core import (
     set_sync_output,
     validate_backend_transport,
 )
-from wavegen_tool_core.arbitrary import run_arbitrary
+from wavegen_tool_core.arbitrary import ARBITRARY_COMMANDS, run_arbitrary
+from wavegen_tool_core.software_sequence import (
+    SOFTWARE_SEQUENCE_ACTION,
+    SoftwareSequenceError,
+    parse_software_sequence_json,
+    run_software_sequence,
+)
 from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_PRODUCT
 from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 from wavegen_tool_core.transport import normalize_resource
@@ -79,7 +85,6 @@ from wavegen_tool_cli.worker_protocol import (
     worker_features,
 )
 from wavegen_tool_cli.worker_commands import (
-    ARBITRARY_COMMANDS,
     SUPPORTED_WORKER_COMMANDS,
     configuration_options,
     ValidatedWorkerCommand,
@@ -479,6 +484,8 @@ class WorkerRuntime:
         arguments = job.arguments
         context_mode = str(job.context["mode"])
         if context_mode == "dry_run":
+            if job.command == SOFTWARE_SEQUENCE_ACTION:
+                return run_software_sequence(arguments["document"], model=job.context["planning_model_id"])
             return self._execute_dry_run(job.command, arguments, job.context)
 
         simulator_state = self._simulator_state
@@ -494,6 +501,10 @@ class WorkerRuntime:
         if isinstance(expected_model_id, str):
             core_kwargs["expected_model_id"] = expected_model_id
         backend = self.config.backend
+        if job.command == SOFTWARE_SEQUENCE_ACTION:
+            return run_software_sequence(
+                arguments["document"], resource=resource, backend=backend, **core_kwargs
+            )
         if job.command in ARBITRARY_COMMANDS:
             return run_arbitrary(
                 job.command, arguments, resource=resource, backend=backend, **core_kwargs
@@ -1057,6 +1068,7 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
                     exc.code,
                     str(exc),
                     run_id=self.server.runtime.run_id,
+                    details=exc.details,
                 ),
             )
             return
@@ -1173,6 +1185,11 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             body = raw.decode("utf-8")
             payload = json.loads(body)
             if preserve_stepped_values and isinstance(payload, dict):
+                if payload.get("command") == SOFTWARE_SEQUENCE_ACTION:
+                    try:
+                        return parse_software_sequence_json(body), None
+                    except (ValueError, RecursionError, ArithmeticError):
+                        return None, "Request body must contain valid software sequence JSON."
                 arguments = payload.get("arguments")
                 if isinstance(arguments, dict):
                     exact_arguments = None
@@ -1240,6 +1257,7 @@ def _request_error(
     *,
     run_id: str,
     category: str = "validation",
+    details: dict[str, object] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": WORKER_SCHEMA_VERSION,
@@ -1248,7 +1266,7 @@ def _request_error(
         "job_id": job_id,
         "kind": "async_job" if command in SUPPORTED_WORKER_COMMANDS else None,
         "worker_job_id": None,
-        "error": common_error(category, code, message),
+        "error": common_error(category, code, message, details=details),
         "run_id": run_id,
     }
     return payload
@@ -1278,6 +1296,8 @@ def _wavegen_error_payload(error: WavegenError) -> dict[str, object]:
         "code": error.code,
         "message": str(error),
     }
+    if isinstance(error, SoftwareSequenceError):
+        payload["sequence"] = error.details
     for name in ("backend", "transport", "output_state"):
         value = getattr(error, name, None)
         if value is not None:

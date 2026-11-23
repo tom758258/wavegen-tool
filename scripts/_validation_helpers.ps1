@@ -496,7 +496,7 @@ function Get-AdvancedReadbackExpectation {
 }
 
 
-$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence')
+$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence', 'software-sequence')
 
 function Resolve-SelectedValidationModes {
     param(
@@ -583,12 +583,61 @@ function New-ArbitraryValidationFixtures {
         csv = $csv; idleCsv = $idleCsv; bus = $bus; busFunctional = $busFunctional; external = $external
         nameA = $names.A; nameB = $names.B; nameC = $names.C; nameD = $names.D; nameE = $names.E; nameF = $names.F
         nameG = $names.G; nameH = $names.H
+        softwareWave = "WGW_$token"; softwareNative = "WGN_$token"
     }
 }
 
 function Test-ValidationCommandUsesChannel {
     param([string]$Command)
-    return $Command -notin @('trigger', 'configure-sync', 'sync-output')
+    return $Command -notin @('trigger', 'configure-sync', 'sync-output', 'run-software-sequence')
+}
+
+function Get-SoftwareSequenceIntent {
+    param($Document)
+    $steps = @($Document.steps)
+    return [ordered]@{
+        actions = @($steps | ForEach-Object { $_.action })
+        output_on = @($steps | Where-Object { $_.action -ceq 'output' -and $_.arguments.enabled -eq $true }).Count -gt 0
+        upload_count = @($steps | Where-Object action -CEQ 'upload-arbitrary').Count
+        wait_seconds = [double](($steps | Where-Object action -CEQ 'wait' | ForEach-Object { $_.arguments.seconds } | Measure-Object -Sum).Sum)
+    }
+}
+
+function Assert-SoftwareSequenceResult {
+    param($Payload, $Intent, [int]$Channel, [switch]$DryRun)
+    $count = @($Intent.actions).Count
+    if ($Payload.step_count -ne $count -or $Payload.loop_count -ne 1 -or
+        $Payload.execution_units -ne $count -or $Payload.total_wait_seconds -ne $Intent.wait_seconds -or
+        (@($Payload.channels) -join ',') -cne [string]$Channel) {
+        throw 'Software sequence did not report the expected steps, wait or channel.'
+    }
+    if ($DryRun) {
+        if ($Payload.executed -ne $false -or $Payload.status -cne 'planned' -or
+            $Payload.completed_step_executions -ne 0 -or $null -ne $Payload.cleanup -or
+            (@($Payload.steps.action) -join ',') -cne ($Intent.actions -join ',')) {
+            throw 'Invalid hardware-free software sequence plan.'
+        }
+        return
+    }
+    $expectedCleanupChannel = if ($Intent.output_on) { [string]$Channel } else { '' }
+    if ($Payload.executed -ne $true -or $Payload.status -cne 'completed' -or
+        $Payload.completed_loops -ne 1 -or $Payload.completed_step_executions -ne $count -or
+        (@($Payload.results.action) -join ',') -cne ($Intent.actions -join ',') -or
+        $null -eq $Payload.cleanup -or @($Payload.cleanup.errors).Count -ne 0 -or
+        (@($Payload.cleanup.attempted_channels) -join ',') -cne $expectedCleanupChannel -or
+        (@($Payload.cleanup.confirmed_off_channels) -join ',') -cne $expectedCleanupChannel) {
+        throw 'Software sequence did not complete in order with confirmed safe cleanup.'
+    }
+    if ($Intent.upload_count -gt 0) {
+        $upload = $Payload.results[0]
+        $native = $Payload.results[2]
+        $catalog = $Payload.results[3]
+        $catalogNames = @($catalog.names | ForEach-Object { ($_ -split '[:/\\]')[-1] -replace '\.(arb|barb|seq)$' })
+        if ($upload.sample_count -ne 16 -or $native.step_count -ne 1 -or
+            $upload.name -notin $catalogNames -or $native.name -notin $catalogNames) {
+            throw 'Software sequence upload and native sequence were not confirmed in the Arbitrary catalog.'
+        }
+    }
 }
 
 function Get-FullValidationInventory {
@@ -596,6 +645,7 @@ function Get-FullValidationInventory {
         [Parameter(Mandatory = $true)][int[]]$Channels,
         [string[]]$Modes = $script:FullValidationModes,
         $ArbitraryFixtures = $null,
+        [string]$SequenceFixtureDirectory,
         [switch]$IncludeBurstStartPhase
     )
 
@@ -614,6 +664,24 @@ function Get-FullValidationInventory {
     function New-Step {
         param([string[]]$Arguments, [hashtable]$Readback = @{}, [hashtable]$Result = @{})
         return [pscustomobject]@{ arguments = $Arguments; readback = $Readback; result = $Result }
+    }
+    function New-SequenceCase {
+        param([int]$Channel, [string]$Kind, [object[]]$Actions, [hashtable]$Readback, $Observation)
+        $name = "software-sequence-$Kind"
+        $document = @{ version = 1; steps = @($Actions) }
+        $args = @('run-software-sequence')
+        if ($SequenceFixtureDirectory) {
+            [void][IO.Directory]::CreateDirectory($SequenceFixtureDirectory)
+            $path = Join-Path $SequenceFixtureDirectory "ch$Channel-$name.json"
+            Write-Utf8NoBomText -LiteralPath $path -Text ($document | ConvertTo-Json -Depth 10 -Compress)
+            $args += @('--file', $path)
+        }
+        $step = New-Step $args $Readback
+        $step | Add-Member -NotePropertyName sequence_intent -NotePropertyValue (Get-SoftwareSequenceIntent $document)
+        return [pscustomobject]@{
+            name = "ch$Channel/$name"; family = 'software-sequence'
+            channel = $Channel; required = $true; steps = @($step); observation = $Observation
+        }
     }
     Add-Recipe 'status' 'inspection' @((New-Step @('status'))) $true
     $outputOn = New-Step @('output', '--state', 'on') @{ output_state = 'on' }
@@ -873,6 +941,65 @@ function Get-FullValidationInventory {
         }
     }
     foreach ($channel in $Channels) {
+        if ('software-sequence' -in $Modes) {
+            $sineStep = @{
+                action = 'configure-sine'
+                arguments = @{ channel = $channel; frequency_hz = 1000; amplitude_vpp = 0.1; load = '50' }
+            }
+            $sweepStep = @{
+                action = 'configure-sine-sweep'
+                arguments = @{
+                    channel = $channel; start_frequency_hz = 2; stop_frequency_hz = 8
+                    spacing = 'linear'; sweep_time_s = 1; amplitude_vpp = 0.1; verify_readback = $true
+                }
+            }
+            if ($channel -eq 1) {
+                New-SequenceCase $channel 'basic' @(
+                    $sineStep,
+                    @{ action = 'output'; arguments = @{ channel = $channel; enabled = $true } },
+                    @{ action = 'wait'; arguments = @{ seconds = 3 } },
+                    @{ action = 'output'; arguments = @{ channel = $channel; enabled = $false } }
+                ) @{ function = 'SIN'; output_state = 'off' } @{
+                    expected = 'Observe a 1 kHz, 0.1 Vpp sine wave for about 3 seconds during the sequence, followed by output OFF.'
+                }
+                $modulated = @{
+                    action = 'configure-sine'
+                    arguments = $sineStep.arguments.Clone()
+                }
+                $modulated.arguments.am = @{ modulation_frequency_hz = 100; depth_percent = 50 }
+                $modulated.arguments.verify_readback = $true
+                New-SequenceCase $channel 'advanced' @(
+                    $modulated,
+                    $sweepStep
+                ) @{ function = 'SIN'; output_state = 'off' }
+                if ($null -ne $ArbitraryFixtures) {
+                    $playback = @{
+                        name = $ArbitraryFixtures.softwareWave
+                        sample_rate_hz = 1000000; amplitude_vpp = 0.1; load = '50'
+                    }
+                    $native = $playback.Clone()
+                    $native.version = 1
+                    $native.name = $ArbitraryFixtures.softwareNative
+                    $native.trigger_source = 'bus'
+                    $native.steps = @(@{ waveform = $playback.name; play_control = 'once' })
+                    $configure = $playback.Clone()
+                    $configure.channel = $channel
+                    New-SequenceCase $channel 'arbitrary' @(
+                        @{ action = 'upload-arbitrary'; arguments = @{
+                            channel = $channel; name = $playback.name; path = $ArbitraryFixtures.csv
+                        } },
+                        @{ action = 'configure-arbitrary'; arguments = $configure },
+                        @{ action = 'configure-arbitrary-sequence'; arguments = @{ channel = $channel; document = $native } },
+                        @{ action = 'list-arbitrary-memory'; arguments = @{ channel = $channel } }
+                    ) @{ function = 'ARB'; output_state = 'off' }
+                }
+            } else {
+                New-SequenceCase $channel 'advanced' @(
+                    $sweepStep,
+                    @{ action = 'status'; arguments = @{ channel = $channel } }
+                ) @{ function = 'SIN'; output_state = 'off' }
+            }
+        }
         foreach ($recipe in $recipes) {
             $mode = switch ($recipe.family) {
                 'output-config' { 'output' }

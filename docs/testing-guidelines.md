@@ -123,10 +123,11 @@ path.
 Both CLI runners default to `-Suite smoke`; the only other suite is `full`.
 `-Modes` applies only to `-Suite full`; explicitly combining it with Smoke fails
 before artifacts or any VISA I/O. Full defaults to every applicable feature mode.
-Available families: `static`, `modulation`, `burst`, `sweep`, `list-sweep`,
-`output`, `arbitrary`, `sequence`. Selecting a subset runs only those recipes
-and the shared identity, safe-off, error-queue and cleanup checks. An explicitly
-requested unsupported Arbitrary/Sequence mode for one model fails closed;
+Available families include `static`, `modulation`, `burst`, `sweep`, `list-sweep`,
+`output`, `arbitrary`, `sequence`, and `software-sequence`. Selecting a subset
+runs only those recipes and the shared identity, safe-off, error-queue and
+cleanup checks. An explicitly requested unsupported Arbitrary/Sequence mode
+for one model fails closed;
 all-target preflight skips those recipes for models lacking the Core capability.
 A subset PASS is not full-scope Product Live admission evidence.
 
@@ -172,6 +173,17 @@ cases never automatically qualify. Hardware-free testing is not real evidence.
 Full PASS is eligible evidence for a separate Product Live policy decision,
 never automatic promotion. 33510B stays validation-pending until an explicit
 Core policy change. Use the existing private/shareable evidence boundary.
+
+Full includes `software-sequence` by default. To check only its feature
+cases, pass `-Suite full -Modes software-sequence`. The mode uses one CLI
+invocation per sequence, with hardware-free dry-run and simulation checks,
+a PlanOnly inventory, and operator-confirmed Real Full observation when an
+output is enabled. Arbitrary cases apply only to models that support Arbitrary
+and use the contributor live route. The existing `sequence` mode covers native
+Arbitrary sequences. Software Sequence execution does not reset the instrument.
+The bounded Real Live Full reset is performed by the runner before each
+independent case, including cases selected through `-Modes software-sequence`.
+A mode subset provides evidence for the selected feature only.
 
 ## Test Output Locations
 
