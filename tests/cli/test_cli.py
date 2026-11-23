@@ -5012,3 +5012,47 @@ def test_frequency_step_ctrl_c_during_cleanup_preserves_already_read_error(when,
         "interrupted" in message and f"{when} trigger restoration" in message
         for message in error["cleanup_errors"]
     )
+
+
+@pytest.mark.parametrize("interrupt_at", ["write", "readback"])
+def test_frequency_step_ctrl_c_during_final_off_reports_interruption(interrupt_at, monkeypatch, capsys):
+    query, write = SimulatedResource.query, SimulatedResource.write
+    state = None
+    interrupted = False
+
+    def final_off(session, command):
+        nonlocal state, interrupted
+        channel = session.state.ch1
+        if command == "OUTPut1 OFF" and channel.list_runs and channel.frequency_mode == "CW":
+            state = session.state
+            if interrupt_at == "write" and not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt
+        return write(session, command)
+
+    def final_readback(session, command):
+        nonlocal interrupted
+        if state is not None and command == "OUTPut1?" and interrupt_at == "readback" and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+        return query(session, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", final_off)
+    monkeypatch.setattr(SimulatedResource, "query", final_readback)
+    assert main([
+        "run-frequency-step", "--start-frequency-hz", "1000", "--stop-frequency-hz", "3000",
+        "--frequency-step-hz", "1000", "--dwell-s", "0.001", "--simulate", "--json",
+    ]) == ExitCode.INTERRUPTED
+    assert interrupted and state is not None and not state.ch1.output_enabled
+    capture = capsys.readouterr()
+    assert not capture.err
+    result = json.loads(capture.out)
+    assert result["success"] is False and result["error"].startswith("interrupted:")
+    sequence = result["sequence"]
+    assert sequence["completed_step_executions"] == sequence["completed_loops"] == 1
+    assert "failed_step" not in sequence
+    cleanup = sequence["cleanup"]
+    assert cleanup["attempted_channels"] == [1]
+    assert cleanup["confirmed_off_channels"] == ([1] if interrupt_at == "write" else [])
+    error, = cleanup["errors"]
+    assert error["channel"] == 1 and error["code"] == "visa_cleanup_error"

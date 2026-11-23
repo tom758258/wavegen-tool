@@ -487,12 +487,16 @@ def _check_output_off(session: visa.VisaSession, channel: int) -> None:
         raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
 
 
-def _cleanup(resource: str, backend: str | None, options: dict, channels: set[int]) -> dict:
+def _cleanup(
+    resource: str, backend: str | None, options: dict, channels: set[int]
+) -> tuple[dict, bool]:
     cleanup = {"attempted_channels": sorted(channels), "confirmed_off_channels": [], "errors": []}
+    interrupted = False
     for channel in cleanup["attempted_channels"]:
         try:
             visa.set_output(resource, "off", backend, channel=channel, **options)
         except (Exception, KeyboardInterrupt) as exc:
+            interrupted = interrupted or isinstance(exc, KeyboardInterrupt)
             cause = (
                 exc
                 if isinstance(exc, WavegenError)
@@ -507,6 +511,7 @@ def _cleanup(resource: str, backend: str | None, options: dict, channels: set[in
                 **options,
             )
         except (Exception, KeyboardInterrupt) as exc:
+            interrupted = interrupted or isinstance(exc, KeyboardInterrupt)
             cause = (
                 exc
                 if isinstance(exc, WavegenError)
@@ -515,7 +520,7 @@ def _cleanup(resource: str, backend: str | None, options: dict, channels: set[in
             cleanup["errors"].append({"channel": channel, **_error_summary(cause)})
         else:
             cleanup["confirmed_off_channels"].append(channel)
-    return cleanup
+    return cleanup, interrupted
 
 
 def run_software_sequence(
@@ -661,11 +666,23 @@ def run_software_sequence(
             cause = WavegenError("Unexpected software sequence step failure.")
         failure = (step.action, index, loop, cause)
     finally:
-        details["cleanup"] = _cleanup(resource, backend, options, attempted)
+        cleanup, cleanup_interrupted = _cleanup(resource, backend, options, attempted)
+        details["cleanup"] = cleanup
     details["results"] = results
-    if failure is not None:
-        raise _step_failure(details, *failure)
-    if details["cleanup"]["errors"]:
+    step_error = _step_failure(details, *failure) if failure is not None else None
+    if cleanup_interrupted and (
+        step_error is None or not isinstance(step_error.cause, SoftwareSequenceInterrupted)
+    ):
+        message = "Software sequence interrupted during output cleanup."
+        if step_error is None:
+            raise SoftwareSequenceError(SoftwareSequenceInterrupted(message), details)
+        cause = SoftwareSequenceInterrupted(
+            f"{message} {step_error}", backend=step_error.backend, transport=step_error.transport
+        ).attach_cleanup_errors(step_error.cleanup_errors)
+        raise SoftwareSequenceError(cause, step_error.details) from step_error
+    if step_error is not None:
+        raise step_error
+    if cleanup["errors"]:
         raise SoftwareSequenceError(
             VisaCleanupError("Software sequence output cleanup failed."), details
         )
