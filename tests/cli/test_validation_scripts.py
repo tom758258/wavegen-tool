@@ -521,6 +521,8 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "ch1/burst-gated", "ch1/burst-gated-inverted", "ch1/sweep-sine-bus",
         "ch1/sweep-sine-timer", "ch1/sweep-external-positive",
         "ch1/sweep-external-negative", "ch1/list-bus-trigger", "ch1/software-sequence-basic",
+        "ch1/timed-output", "ch1/amplitude-ramp", "ch1/output-cycle",
+        "ch1/waveform-sequence", "ch1/frequency-step",
     } | ({"ch1/sequence-bus-functional", "ch1/sequence-external"} if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
