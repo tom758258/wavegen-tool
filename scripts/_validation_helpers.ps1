@@ -739,7 +739,19 @@ function Assert-BasicWorkflowResult {
         } else {
             $actual = $steps[0].$key
         }
-        if (($actual -join ',') -cne ($Intent.values[$key] -join ',')) { throw "Unexpected basic workflow value $key." }
+        $expected = $Intent.values[$key]
+        if ($expected -is [string]) {
+            if ($actual -cne $expected) { throw "Unexpected basic workflow value $key." }
+            continue
+        }
+        $actualValues = @($actual)
+        $expectedValues = @($expected)
+        if ($actualValues.Count -ne $expectedValues.Count) { throw "Unexpected basic workflow value count for $key." }
+        for ($point = 0; $point -lt $expectedValues.Count; $point++) {
+            if ($null -eq $actualValues[$point] -or [double]$actualValues[$point] -ne [double]$expectedValues[$point]) {
+                throw "Unexpected basic workflow value $key."
+            }
+        }
     }
 }
 
