@@ -3057,6 +3057,7 @@ def _plan_sine_list_sweep_once(model: str, arguments: dict[str, object]) -> dict
             *(f"{header}?" for header in plan.readback()),
             SYSTEM_ERROR_QUERY,
             *plan.start(),
+            SYSTEM_ERROR_QUERY,
             _OPERATION_CONDITION_QUERY,
             f"OUTPut{channel} OFF",
             f"OUTPut{channel}?",
@@ -3067,11 +3068,11 @@ def _plan_sine_list_sweep_once(model: str, arguments: dict[str, object]) -> dict
 
 
 def _wait_for_counted_list(
-    session: VisaSession, channel: int, seconds: float, wait: Callable[[float], None]
+    session: VisaSession, channel: int, dwell_deadline: float, wait: Callable[[float], None]
 ) -> None:
     # Allow the last point its entire nominal dwell even if the trigger count
-    # reaches zero as that point is selected. The instrument may still be busy.
-    wait(seconds)
+    # reaches zero as that point is selected. The startup query ran during dwell.
+    wait(max(0.0, dwell_deadline - monotonic()))
     deadline = monotonic() + DEFAULT_TIMEOUT_MS / 1000
     initiated = 1 << (channel + 2)
     while True:
@@ -3088,13 +3089,13 @@ def _wait_for_counted_list(
         wait(0.02)
 
 
-def _check_frequency_step_errors(session: VisaSession) -> None:
+def _check_frequency_step_errors(session: VisaSession, phase: str) -> None:
     try:
         entry = _parse_error_queue_entry(session.query(SYSTEM_ERROR_QUERY))
     except Exception as exc:
-        raise ErrorQueueQueryError("Could not read the Frequency Step error queue.") from exc
+        raise ErrorQueueQueryError(f"Could not read the Frequency Step error queue after {phase}.") from exc
     if entry.code != ERROR_QUEUE_NO_ERROR_CODE:
-        raise VisaWriteError(f"Frequency Step instrument error ({entry.code}): {entry.message}", output_state="off")
+        raise VisaWriteError(f"Frequency Step {phase} instrument error ({entry.code}): {entry.message}")
 
 
 def _run_sine_list_sweep_once(
@@ -3125,14 +3126,16 @@ def _run_sine_list_sweep_once(
             for command in plan.setup():
                 session.write(command)
             _verify_configuration_readback(session, context, plan.readback(), label="Frequency Step")
-            _check_frequency_step_errors(session)
+            _check_frequency_step_errors(session, "configuration")
             check_cancel()
             on, list_mode, initiate = plan.start()
             session.write(on)
             session.write(list_mode)
             check_cancel()
             session.write(initiate)
-            _wait_for_counted_list(session, channel, plan.seconds, wait)
+            dwell_deadline = monotonic() + plan.seconds
+            _check_frequency_step_errors(session, "startup")
+            _wait_for_counted_list(session, channel, dwell_deadline, wait)
             check_cancel()
         except (WavegenError, KeyboardInterrupt) as exc:
             primary_error = exc
@@ -3145,11 +3148,13 @@ def _run_sine_list_sweep_once(
                 session.write(f"{output} OFF")
                 if _parse_status_output(session.query(f"{output}?")) != "off":
                     raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
+                if isinstance(primary_error, WavegenError):
+                    primary_error.attach_context(output_state="off")
                 session.write(f"SOURce{channel}:FREQuency:MODE CW")
                 session.write(f"{delay} {_format_scpi_number(saved_delay)}")
                 session.write(f"{count} {int(saved_count)}")
                 session.write(f"{continuous} {saved_continuous.upper()}")
-                _check_frequency_step_errors(session)
+                _check_frequency_step_errors(session, "cleanup")
             except Exception as exc:
                 message = "Could not complete Frequency Step output OFF and trigger cleanup."
                 if isinstance(exc, WavegenError):
