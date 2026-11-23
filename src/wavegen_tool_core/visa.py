@@ -7551,6 +7551,61 @@ def send_bus_trigger(
     )
 
 
+def update_sine_amplitude(
+    resource: str,
+    amplitude_vpp: object,
+    backend: str | None = None,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> dict[str, object]:
+    """Update a Vpp sine amplitude with its output on, without changing its range setting."""
+    amplitude = _normalize_finite_number(amplitude_vpp, "amplitude")
+    if support_policy_mode == SUPPORT_POLICY_MODE_VALIDATION and expected_model_id is None:
+        raise WaveformParameterError("Amplitude Ramp live validation requires an exact model.")
+
+    def update(session: VisaSession, context: IdentificationResult) -> dict[str, object]:
+        capabilities = _capabilities_for_identity(context.identity)
+        selected = _validate_channel(channel, capabilities, context.identity.model)
+        _check_independent_channel_guard(session, capabilities, context)
+        source = f"SOURce{selected}"
+        output = f"OUTPut{selected}"
+        try:
+            if (
+                _parse_status_output(session.query(f"{output}?")) != "on"
+                or _parse_status_function(session.query(f"{source}:FUNCtion?")) not in {"SIN", "SINUSOID"}
+                or _parse_status_unit(session.query(f"{source}:VOLTage:UNIT?")) != "VPP"
+            ):
+                raise WaveformVerificationError("Amplitude Ramp requires an enabled sine output in Vpp.")
+            load = _normalize_load(_parse_status_load(session.query(f"{output}:LOAD?")))
+            offset = _parse_status_number(session.query(f"{source}:VOLTage:OFFSet?"), "offset")
+        except WavegenError:
+            raise
+        except Exception as exc:
+            raise StatusQueryError("Could not verify the active sine settings for Amplitude Ramp.") from exc
+        _validate_vpp_levels(amplitude, offset, load, "Amplitude Ramp")
+        session.write(f"{source}:VOLTage {_format_scpi_number(amplitude)}")
+        try:
+            actual = _parse_status_number(session.query(f"{source}:VOLTage?"), "amplitude")
+            state = _parse_status_output(session.query(f"{output}?"))
+        except Exception as exc:
+            raise StatusQueryError("Could not verify the Amplitude Ramp update.") from exc
+        if state != "on" or not math.isclose(actual, amplitude, rel_tol=1e-5, abs_tol=1e-9):
+            raise WaveformVerificationError("Amplitude Ramp readback did not confirm the update with output ON.")
+        return {"channel": selected, "amplitude_vpp": amplitude, "output_state": state}
+
+    _, result = _run_on_supported_instrument(
+        resource, backend, update,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+        validation_only_feature="Amplitude Ramp",
+    )
+    return result
+
+
 _SYNC_OFF = "OUTPut:SYNC OFF"
 _SYNC_STATE_QUERY = "OUTPut:SYNC?"
 _SYNC_STATE_REPLIES = {"0": "off", "1": "on", "OFF": "off", "ON": "on"}

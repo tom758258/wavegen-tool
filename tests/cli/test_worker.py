@@ -1642,20 +1642,18 @@ def test_worker_live_trigger_delay_rejected_before_visa_io(monkeypatch):
 
 
 def test_software_sequence_worker_drains_busy_job_before_stopping(monkeypatch, capsys):
-    from wavegen_tool_core.software_sequence import time as sequence_time
-
     waiting = threading.Event()
     release = threading.Event()
-    sleep = time.sleep
+    original_wait = threading.Event.wait
 
-    def wait(seconds):
-        if seconds == 10:
+    def wait(event, timeout=None):
+        if timeout == 10:
             waiting.set()
             assert release.wait(5)
-        else:
-            sleep(seconds)
+            return event.is_set()
+        return original_wait(event, timeout)
 
-    monkeypatch.setattr(sequence_time, "sleep", wait)
+    monkeypatch.setattr(threading.Event, "wait", wait)
     runtime = WorkerRuntime(_worker_config())
     runtime.start()
     try:
@@ -1724,3 +1722,137 @@ def test_software_sequence_worker_preserves_nested_exact_decimal(capsys):
         e for e in map(json.loads, capsys.readouterr().out.splitlines()) if e["event"] == "job_finished"
     ]
     assert terminal["error"] == failed["error"]
+
+
+def test_basic_workflow_cancel_targets_the_job_and_leaves_worker_running(capsys):
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        arguments = {"start_vpp": 0.1, "stop_vpp": 0.2, "step_vpp": 0.1, "dwell_s": 5}
+        status, reply = _request(runtime, "POST", "/command", _payload("run-amplitude-ramp", arguments))
+        assert status == 202
+        job_id = reply["worker_job_id"]
+        assert _wait_until(lambda: runtime.simulator_state.ch1.output_enabled)
+
+        def cancel(worker_job_id, version=3):
+            return _request(runtime, "POST", "/cancel", {
+                "schema_version": version, "worker_job_id": worker_job_id,
+            })
+
+        invalid_status, invalid = cancel(job_id, True)
+        assert invalid_status == 400 and invalid["worker_job_id"] == job_id
+        wrong_status, wrong = cancel("another-job")
+        assert wrong_status == 409 and wrong["status"] == "rejected"
+        assert runtime.simulator_state.ch1.output_enabled
+
+        accepted_status, accepted = cancel(job_id)
+        assert accepted_status == 202
+        assert accepted == {
+            "schema_version": 3, "run_id": runtime.run_id, "status": "accepted",
+            "worker_job_id": job_id, "error": None,
+        }
+        finished = _wait_for_job(runtime, job_id, "cancelled")
+        assert finished["ok"] is False
+        details = finished["error"]["details"]["domain_error"]["sequence"]
+        assert details["cleanup"]["confirmed_off_channels"] == [1]
+        assert not runtime.simulator_state.ch1.output_enabled
+        assert cancel(job_id)[0] == 409
+
+        status, reply = _request(runtime, "POST", "/command", _payload(
+            "apply-quick-output-preset", {"preset": "square"}
+        ))
+        assert status == 202
+        preset = _wait_for_job(runtime, reply["worker_job_id"], "succeeded")["result"]
+        assert preset["results"][0]["load"] == "high-z"
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(3)
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    finished = [event for event in events if event["event"] == "job_finished"]
+    assert [(event["state"], event["ok"]) for event in finished] == [("cancelled", False), ("succeeded", True)]
+    assert events[-1]["cancelled_jobs"] == 1
+
+
+def test_software_sequence_cancel_reports_cleanup_failure(monkeypatch):
+    from wavegen_tool_core import visa
+
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    set_output = visa.set_output
+
+    def fail_off(resource, state, *args, **kwargs):
+        if state == "off":
+            raise visa.VisaWriteError("Output OFF write failed.")
+        return set_output(resource, state, *args, **kwargs)
+
+    monkeypatch.setattr(visa, "set_output", fail_off)
+    try:
+        document = {"version": 1, "steps": [
+            {"action": "output", "arguments": {"enabled": True}},
+            {"action": "wait", "arguments": {"seconds": 5}},
+        ]}
+        status, job = _request(runtime, "POST", "/command", _payload(
+            "run-software-sequence", {"document": document},
+        ))
+        assert status == 202
+        job_id = job["worker_job_id"]
+        assert _wait_until(lambda: runtime.simulator_state.ch1.output_enabled)
+        assert _request(runtime, "POST", "/cancel", {
+            "schema_version": 3, "worker_job_id": job_id,
+        })[0] == 202
+        finished = _wait_for_job(runtime, job_id, "failed")
+        cleanup = finished["error"]["details"]["domain_error"]["sequence"]["cleanup"]
+        assert cleanup["confirmed_off_channels"] == []
+        assert [error["code"] for error in cleanup["errors"]] == [
+            visa.VisaWriteError.code, visa.WaveformVerificationError.code,
+        ]
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(3)
+
+
+@pytest.mark.parametrize("command", ["status", "run-software-sequence"])
+def test_cancel_racing_job_completion_preserves_actual_outcome(monkeypatch, command):
+    runtime = WorkerRuntime(_worker_config())
+    executed = threading.Event()
+    release = threading.Event()
+    operation = runtime._execute_command
+
+    def complete_before_reply(job):
+        result = operation(job)
+        executed.set()
+        assert release.wait(3)
+        return result
+
+    monkeypatch.setattr(runtime, "_execute_command", complete_before_reply)
+    runtime.start()
+    try:
+        arguments = {} if command == "status" else {"document": {"version": 1, "steps": [{"action": "status"}]}}
+        status, reply = _request(runtime, "POST", "/command", _payload(command, arguments))
+        assert status == 202 and executed.wait(2)
+        job_id = reply["worker_job_id"]
+        status, reply = _request(runtime, "POST", "/cancel", {"schema_version": 3, "worker_job_id": job_id})
+        assert status == (409 if command == "status" else 202)
+        release.set()
+        assert _wait_for_job(runtime, job_id, "succeeded")["ok"] is True
+    finally:
+        release.set()
+        runtime.request_stop()
+        assert runtime.wait(3)
+
+
+def test_worker_live_amplitude_ramp_rejected_at_admission():
+    request = _payload("run-amplitude-ramp", {
+        "start_vpp": 0.1, "stop_vpp": 0.1, "step_vpp": 0.1, "dwell_s": 1,
+        "confirm_output": True,
+    }, mode="live")
+    runtime = WorkerRuntime(_worker_config(mode="live"))
+    runtime.start()
+    try:
+        status, rejected = _request(runtime, "POST", "/command", request)
+        assert status == 400
+        assert rejected["worker_job_id"] is None
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(3)

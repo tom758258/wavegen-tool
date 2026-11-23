@@ -328,3 +328,179 @@ def test_contributor_arbitrary_still_requires_exact_live_identity(fake_instrumen
     result = run_software_sequence(document, expected_model_id=MODEL, **options)
     assert result["results"][0]["names"]
     assert writes == []
+
+
+@pytest.mark.parametrize("start,stop,expected", [
+    (0.1, 0.25, [0.1, 0.2, 0.25]),
+    (0.25, 0.1, [0.25, 0.15, 0.1]),
+    (0.1, 0.1, [0.1]),
+])
+def test_amplitude_ramp_keeps_output_on_through_each_update(
+    fake_instrument, monkeypatch, start, stop, expected,
+):
+    from wavegen_tool_core import run_basic_workflow
+
+    state, writes, _ = fake_instrument
+    state.ch1.autorange_enabled = False
+    held = []
+
+    def dwell(seconds):
+        assert seconds == 2
+        assert state.ch1.output_enabled
+        held.append(state.ch1.amplitude_vpp)
+
+    monkeypatch.setattr("wavegen_tool_core.software_sequence.time.sleep", dwell)
+    result = run_basic_workflow(
+        "run-amplitude-ramp",
+        {"start_vpp": start, "stop_vpp": stop, "step_vpp": 0.1, "dwell_s": 2},
+        resource=state.resource_name, support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        expected_model_id=MODEL,
+    )
+
+    assert held == expected
+    assert writes.count("OUTPut1 ON") == 1
+    effects = writes[writes.index("OUTPut1 ON") + 1:writes.index("OUTPut1 OFF", 1)]
+    assert effects == [f"SOURce1:VOLTage {point:g}" for point in expected[1:]]
+    assert all("RANGe:AUTO" not in command for command in writes)
+    assert state.ch1.autorange_enabled is False
+    assert result["cleanup"]["confirmed_off_channels"] == [1]
+
+
+def test_amplitude_ramp_bounds_and_product_policy(fake_instrument):
+    from wavegen_tool_core import run_basic_workflow
+
+    state, writes, queries = fake_instrument
+    action = "run-amplitude-ramp"
+    arguments = {"start_vpp": 0.01, "stop_vpp": 1.24, "step_vpp": 0.01, "dwell_s": 1}
+    result = run_basic_workflow(action, arguments, model=MODEL)
+    assert result["step_count"] == 250
+    assert result["total_wait_seconds"] == 124
+    assert result["steps"][-3]["amplitude_vpp"] == 1.24
+    at_limit = arguments | {"stop_vpp": 0.02, "dwell_s": 300}
+    assert run_basic_workflow(action, at_limit, model=MODEL)["total_wait_seconds"] == 600
+
+    for overrides in (
+        {"stop_vpp": 1.25}, {"dwell_s": 5}, {"step_vpp": 0},
+        {"stop_vpp": 11, "step_vpp": 10},
+    ):
+        with pytest.raises(WavegenError):
+            run_basic_workflow(action, arguments | overrides, model=MODEL)
+
+    with pytest.raises(WavegenError, match="outside Product Live"):
+        run_basic_workflow(action, arguments | {"stop_vpp": 0.01}, resource=state.resource_name)
+    assert writes == queries == []
+
+
+def test_amplitude_ramp_error_attempts_safe_off(fake_instrument, monkeypatch):
+    from wavegen_tool_core import run_basic_workflow
+
+    state, writes, _ = fake_instrument
+
+    def fail_update(*args, **kwargs):
+        assert state.ch1.output_enabled
+        raise visa.VisaWriteError("Amplitude write failed.")
+
+    monkeypatch.setattr(visa, "update_sine_amplitude", fail_update)
+    monkeypatch.setattr("wavegen_tool_core.software_sequence.time.sleep", lambda _: None)
+    with pytest.raises(SoftwareSequenceError) as failure:
+        run_basic_workflow(
+            "run-amplitude-ramp",
+            {"start_vpp": 0.1, "stop_vpp": 0.2, "step_vpp": 0.1, "dwell_s": 1},
+            resource=state.resource_name, support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            expected_model_id=MODEL,
+        )
+    assert failure.value.details["cleanup"]["confirmed_off_channels"] == [1]
+    assert writes[-1] == "OUTPut1 OFF"
+    assert not state.ch1.output_enabled
+
+
+def test_basic_workflows_schedule_existing_operations(fake_instrument, monkeypatch):
+    from wavegen_tool_core import run_basic_workflow
+
+    state, writes, _ = fake_instrument
+    observed = []
+    monkeypatch.setattr(
+        "wavegen_tool_core.software_sequence.time.sleep",
+        lambda seconds: observed.append((seconds, state.ch1.output_enabled, state.ch1.active_function)),
+    )
+    sine = {"action": "configure-sine", "arguments": {"frequency_hz": 1000, "amplitude_vpp": 0.1}}
+    square = {"action": "configure-square", "arguments": sine["arguments"]}
+    run_basic_workflow("run-timed-output", {"waveform": sine, "duration_s": 2}, resource=state.resource_name)
+    run_basic_workflow("run-output-cycle", {"on_s": 3, "off_s": 4, "cycles": 2}, resource=state.resource_name)
+    switch = run_basic_workflow("run-waveform-sequence", {"waveforms": [
+        {"waveform": sine, "duration_s": 5}, {"waveform": square, "duration_s": 6},
+    ]}, resource=state.resource_name)
+    assert observed == [
+        (2, True, "SIN"), (3, True, "SIN"), (4, False, "SIN"),
+        (3, True, "SIN"), (4, False, "SIN"), (5, True, "SIN"), (6, True, "SQUARE"),
+    ]
+    assert [step["output_state"] for step in switch["results"] if step["action"] == "output"] == [
+        "on", "off", "on", "off",
+    ]
+    assert switch["cleanup"]["confirmed_off_channels"] == [1]
+    assert writes[-1] == "OUTPut1 OFF"
+
+
+def test_frequency_step_uses_list_sweep_limits_and_dwell(fake_instrument, monkeypatch):
+    from wavegen_tool_core import run_basic_workflow
+
+    state, _, queries = fake_instrument
+    observed = []
+    monkeypatch.setattr("wavegen_tool_core.software_sequence.time.sleep", observed.append)
+    arguments = {"start_frequency_hz": 800, "stop_frequency_hz": 250, "frequency_step_hz": 200, "dwell_s": 1.25}
+    result = run_basic_workflow("run-frequency-step", arguments, resource=state.resource_name)
+    assert result["results"][0]["frequencies_hz"] == (800, 600, 400, 250)
+    assert result["results"][0]["dwell_s"] == 1.25
+    assert "SOURce1:LIST:FREQuency?" in queries and "SOURce1:LIST:DWELl?" in queries
+    assert observed == [5]
+    assert result["cleanup"]["confirmed_off_channels"] == [1]
+    for stop, valid in [(128, True), (129, False)]:
+        request = arguments | {"start_frequency_hz": 1, "stop_frequency_hz": stop, "frequency_step_hz": 1}
+        if valid:
+            preview = run_basic_workflow("run-frequency-step", request, model=MODEL)
+            assert len(preview["steps"][0]["frequencies_hz"]) == stop
+        else:
+            with pytest.raises(WavegenError):
+                run_basic_workflow("run-frequency-step", request, model=MODEL)
+
+
+@pytest.mark.parametrize("preset,function", [("sine", "SIN"), ("square", "SQUARE"), ("triangle", "TRIANGLE")])
+def test_quick_output_presets_apply_fixed_settings_with_output_off(fake_instrument, preset, function):
+    from wavegen_tool_core import run_basic_workflow
+
+    state, writes, _ = fake_instrument
+    result = run_basic_workflow("apply-quick-output-preset", {"preset": preset}, resource=state.resource_name)
+    assert state.ch1.active_function == function
+    assert state.ch1.frequency_hz == 1000
+    assert state.ch1.amplitude_vpp == 0.1
+    assert state.ch1.offset_v == 0
+    assert result["results"][0]["load"] == "high-z"
+    if preset == "square":
+        assert result["results"][0]["duty_cycle_percent"] == 50
+    assert "OUTPut1 ON" not in writes
+    assert result["cleanup"]["confirmed_off_channels"] == [1]
+
+
+def test_software_sequence_cancellation_between_steps_cleans_up(fake_instrument, monkeypatch):
+    from threading import Event
+
+    state, _, _ = fake_instrument
+    event = Event()
+    set_output = visa.set_output
+
+    def cancel_after_on(resource, output_state, *args, **kwargs):
+        result = set_output(resource, output_state, *args, **kwargs)
+        if output_state == "on":
+            event.set()
+        return result
+
+    monkeypatch.setattr(visa, "set_output", cancel_after_on)
+    with pytest.raises(SoftwareSequenceError) as failure:
+        run_software_sequence(
+            _document(ON, _step("status")), resource=state.resource_name, cancel_event=event,
+        )
+    details = failure.value.details
+    assert details["failed_step"]["action"] == "status"
+    assert details["completed_step_executions"] == 1
+    assert details["cleanup"]["confirmed_off_channels"] == [1]
+    assert not state.ch1.output_enabled

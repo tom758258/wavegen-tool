@@ -3,12 +3,16 @@
 WORKER_SCHEMA_VERSION = 3
 WORKER_SERVICE_NAME = "wavegen-tool"
 WORKER_COMPATIBILITY_POLICY = "v3-only"
+CANCELLABLE_COMMANDS = ("run-software-sequence", "run-amplitude-ramp")
 
 
 def worker_features() -> dict[str, object]:
     """Return the fixed features supported by every Wavegen Worker runtime."""
 
-    return {"common.async_jobs": {"contract_version": 1}}
+    return {
+        "common.async_jobs": {"contract_version": 1},
+        "common.job_cancel": {"contract_version": 1, "commands": list(CANCELLABLE_COMMANDS)},
+    }
 
 
 def common_error(

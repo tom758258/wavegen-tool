@@ -64,12 +64,11 @@ does not expand Product Live support. Unknown context fields are rejected.
 
 ## Supported Commands
 
-All 31 domain commands accepted by `POST /command` are `async_job` commands
+All domain commands accepted by `POST /command` are `async_job` commands
 under `common.async_jobs` contract version 1. Manifest declares
 `execution.model="multi_job"` and `execution.context_binding="per_command"`,
-with this feature and no duplicate commands table. Cancellation and streaming
-are not implemented or declared. `GET /status` and `POST /stop` are Common
-lifecycle HTTP endpoints, not domain async jobs.
+with these Common features and no duplicate commands table. `GET /status`,
+`POST /stop`, and `POST /cancel` are lifecycle HTTP endpoints.
 
 Supported commands are:
 
@@ -104,9 +103,16 @@ Supported commands are:
 - `list-arbitrary-memory`
 - `clear-arbitrary-memory`
 - `run-software-sequence`
+- `run-timed-output`
+- `run-amplitude-ramp`
+- `run-output-cycle`
+- `run-waveform-sequence`
+- `run-frequency-step`
+- `apply-quick-output-preset`
 
 Dry-run accepts every `configure-*` command and the Arbitrary upload, list,
-and clear commands, plus `run-software-sequence`. Submit `sync-output` and `trigger` in live or simulate mode.
+and clear commands, plus Software Sequence and all Basic Workflow commands.
+Submit `sync-output` and `trigger` in live or simulate mode.
 Trigger sends an instrument-wide Bus trigger and accepts an empty arguments object.
 
 The read-only `readback-advanced` command accepts an optional channel
@@ -318,6 +324,32 @@ On failure, the Common Error carries sequence details at
 `error.details.domain_error.sequence` when available. HTTP 202 acknowledges
 the async job. Check the terminal event or `last_job` for the outcome.
 
+### Basic Workflows
+
+All workflows take an optional integer `channel` (default 1) and use the
+[Software Sequence result](wavegen-cli-jsonl-contract.md#software-sequence-results).
+
+| Command | Required arguments | Additional optional arguments |
+| --- | --- | --- |
+| `run-timed-output` | `waveform`, `duration_s` | |
+| `run-amplitude-ramp` | `start_vpp`, `stop_vpp`, `step_vpp`, `dwell_s` | `frequency_hz` |
+| `run-output-cycle` | `on_s`, `off_s`, `cycles` | |
+| `run-waveform-sequence` | `waveforms` | |
+| `run-frequency-step` | `start_frequency_hz`, `stop_frequency_hz`, `frequency_step_hz`, `dwell_s` | `amplitude_vpp`, `offset_v`, `load` |
+| `apply-quick-output-preset` | `preset` | |
+
+`waveform` is a static configuration step with `action` and `arguments`.
+Its channel is supplied by the outer request. `waveforms` is an array of
+objects containing `waveform` and `duration_s`. `preset` is `sine`, `square`,
+or `triangle`. The CLI guide documents limits and parameters for the
+[six workflows](../cli/README.md#basic-workflows).
+
+Live workflows require `--allow-output-writes`. Workflows that turn output
+on also require `arguments.confirm_output: true`. The preset keeps the
+output OFF. Worker Live rejects Amplitude Ramp before execution. Simulation
+and dry-run accept it. Cancellation is supported for Amplitude Ramp and
+Software Sequence.
+
 ## Live Write Safety
 
 The following admission safety gate applies only when `context.mode` is `live`:
@@ -424,6 +456,20 @@ the instrument, execute `set_output`, or modify simulator output state.
 Output off remains an explicit command and should be submitted before a
 normal live shutdown.
 
+### Job Cancellation
+
+Wavegen exposes `POST /cancel` at the `cancel_url` in ready and HTTP status.
+It implements [Common Job Cancellation v1](common-worker-protocol.md#optional-job-cancellation)
+for `run-software-sequence` and `run-amplitude-ramp`. Submit schema version 3
+and the `worker_job_id` from job admission, with an optional string `reason`.
+HTTP 202 acknowledges the request. HTTP 409 rejects a job that is absent,
+terminal, or non-cancellable. Cancellation wakes a sequence wait and takes
+effect at a safe checkpoint after an in-flight instrument operation returns.
+The job performs its output cleanup and the Worker remains available. A job
+that observes cancellation and completes cleanup reports `cancelled`. An
+execution or cleanup failure reports `failed` and retains the diagnostics.
+If the job completes before observing cancellation it reports `succeeded`.
+
 ## JSONL Events
 
 Worker stdout contains only compact JSONL event objects. Events are
@@ -431,20 +477,20 @@ Worker stdout contains only compact JSONL event objects. Events are
 `stop_requested`, `error`, and `summary`. Every event uses schema version `3`,
 service `wavegen-tool`, the Worker `run_id`, and an UTC timestamp. The `ready`
 event includes the actual control port and loopback URLs. `summary` includes
-`ok`, `fatal_error`, the intended exit code, and accepted, succeeded, and failed
-counters. Fatal Worker error events use `scope="worker"` and `fatal=true`.
+`ok`, `fatal_error`, the intended exit code, and accepted, succeeded, failed,
+and cancelled counters. Fatal Worker error events use `scope="worker"` and `fatal=true`.
 Human diagnostics are written to stderr.
 
-Both successful and failed jobs emit exactly one `job_finished` on normal,
+Successful, failed, and cancelled jobs emit exactly one `job_finished` on normal,
 controllable paths, with `state`, `ok`, `result`, and `error`. Domain failures
 use an execution Common Error and retain the original diagnostics in
 `error.details.domain_error`; unexpected runner errors use category `worker`.
 The terminal and `last_job` retain the same fixed `timestamp_utc`, identity,
 state, result, and error. `active_job` has a queued/running state timestamp.
-Only the latest terminal is retained; no job history or cancellation is added.
+Only the latest terminal is retained.
 
-Ready and HTTP status declare the fixed runtime feature
-`common.async_jobs: {"contract_version": 1}` and the same URLs and `run_id`.
+Ready and HTTP status declare `common.async_jobs` and `common.job_cancel`,
+both at contract version 1, along with the same URLs and `run_id`.
 HTTP status adds Common `worker_state` and `fatal_error` alongside Wavegen's
 `ready/busy/stopping/error` diagnostic `status`. Busy remains Common
 `worker_state="running"` with `fatal_error=null`: control readiness does not

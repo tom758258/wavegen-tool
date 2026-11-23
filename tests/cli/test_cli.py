@@ -4924,3 +4924,34 @@ def test_software_sequence_ctrl_c_during_wait_returns_failure_and_confirms_off(t
     assert payload["sequence"]["completed_step_executions"] == 1
     assert payload["sequence"]["failed_step"]["error"]["code"] == "interrupted"
     assert payload["sequence"]["cleanup"]["confirmed_off_channels"] == [1]
+
+
+def test_timed_output_cli_reads_waveform_file_and_returns_json(tmp_path, capsys):
+    path = tmp_path / "waveform.json"
+    path.write_text(json.dumps({
+        "action": "configure-sine",
+        "arguments": {"frequency_hz": 2000, "amplitude_vpp": 0.2},
+    }), encoding="utf-8")
+    assert main(["run-timed-output", "--file", str(path), "--duration-s", ".01", "--dry-run", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["action"] == "run-timed-output" and result["executed"] is False
+    assert [step["action"] for step in result["steps"]] == ["configure-sine", "output", "wait", "output"]
+    assert result["steps"][0]["frequency_hz"] == 2000
+
+
+def test_amplitude_ramp_cli_validates_parameters_and_interrupts_safely(monkeypatch, capsys):
+    arguments = [
+        "run-amplitude-ramp", "--start-vpp", ".1", "--stop-vpp", ".2",
+        "--step-vpp", ".1", "--simulate", "--json",
+    ]
+    assert main(arguments + ["--dwell-s", "400"]) == 2
+    assert json.loads(capsys.readouterr().out)["success"] is False
+
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("wavegen_tool_core.software_sequence.time.sleep", interrupt)
+    assert main(arguments + ["--dwell-s", "1"]) == 130
+    result = json.loads(capsys.readouterr().out)
+    assert result["sequence"]["failed_step"]["error"]["code"] == "interrupted"
+    assert result["sequence"]["cleanup"]["confirmed_off_channels"] == [1]

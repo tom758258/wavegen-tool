@@ -108,6 +108,17 @@ Call `run_software_sequence(document, model=...)` for a hardware-free plan.
 Supply `resource=...` and optionally a simulator factory to execute the same
 document. See the [document format](../contracts/wavegen-worker-contract.md#software-sequences).
 
+Call `run_basic_workflow(action, arguments, model=...)` to plan a named
+basic workflow. Use `resource=...` with the normal Core execution options
+for simulation or admitted live execution. The argument object uses the
+[Worker workflow fields](../contracts/wavegen-worker-contract.md#basic-workflows)
+with output confirmation handled by the calling adapter. Core callers
+can pass a `threading.Event` as `cancel_event` to `run_software_sequence`
+or `run_basic_workflow`; it is checked between operations and wakes a wait.
+For amplitude updates, `update_sine_amplitude` requires an enabled sine in
+Vpp and uses the detected channel, load, and offset to validate the single
+voltage write. The calling workflow owns final safe-off cleanup.
+
 Core validates the whole sequence before the first setting write and verifies
 that the outputs it will control start OFF. A Bus trigger expands the initial
 check to every main output. Each step uses its existing Core operation with

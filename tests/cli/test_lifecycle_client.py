@@ -476,7 +476,14 @@ def test_lifecycle_clients_complete_simulate_worker_subprocess(capsys):
         assert ready is not None
         assert ready["event"] == "ready"
         assert ready["schema_version"] == 3
-        assert ready["features"] == {"common.async_jobs": {"contract_version": 1}}
+        assert ready["features"] == {
+            "common.async_jobs": {"contract_version": 1},
+            "common.job_cancel": {
+                "contract_version": 1,
+                "commands": ["run-software-sequence", "run-amplitude-ramp"],
+            },
+        }
+        assert ready["cancel_url"].endswith("/cancel")
         port = ready["control_port"]
         assert isinstance(port, int) and port > 0
 
@@ -501,7 +508,7 @@ def test_lifecycle_clients_complete_simulate_worker_subprocess(capsys):
         assert worker_status["schema_version"] == 3
         assert worker_status["run_id"] == ready["run_id"]
         assert worker_status["worker_state"] == "running" and worker_status["fatal_error"] is None
-        for key in ("features", "command_url", "status_url", "stop_url"):
+        for key in ("features", "command_url", "status_url", "stop_url", "cancel_url"):
             assert worker_status[key] == ready[key]
         assert wait_payload["status"] == "ready"
 

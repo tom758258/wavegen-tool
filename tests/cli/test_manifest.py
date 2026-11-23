@@ -14,7 +14,13 @@ EXPECTED_MANIFEST = {
         "schema_versions": [3],
     },
     "execution": {"model": "multi_job", "context_binding": "per_command"},
-    "features": {"common.async_jobs": {"contract_version": 1}},
+    "features": {
+        "common.async_jobs": {"contract_version": 1},
+        "common.job_cancel": {
+            "contract_version": 1,
+            "commands": ["run-software-sequence", "run-amplitude-ramp"],
+        },
+    },
 }
 
 

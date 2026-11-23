@@ -458,9 +458,15 @@ def _validate_status(payload: dict[str, object] | None) -> str | None:
     if state != expected_state[payload["status"]]:
         return "Worker state and Wavegen status disagree."
     features = payload.get("features")
+    declared_features = worker_features()
+    async_jobs = declared_features["common.async_jobs"]
     if (
-        features != worker_features()
+        features not in (declared_features, {"common.async_jobs": async_jobs})
         or type(features["common.async_jobs"]["contract_version"]) is not int
+        or ("common.job_cancel" in features and (
+            type(features["common.job_cancel"]["contract_version"]) is not int
+            or not _nonempty(payload.get("cancel_url"))
+        ))
     ):
         return "Worker status response contains invalid runtime features."
     if not all(_nonempty(payload.get(key)) for key in (
@@ -529,6 +535,8 @@ def _valid_job_snapshot(value: object, *, terminal: bool) -> bool:
     return (
         value.get("state") == "succeeded" and value["ok"] and value["error"] is None
         or value.get("state") == "failed" and not value["ok"] and _valid_error(value["error"])
+        or value.get("state") == "cancelled" and not value["ok"]
+        and (value["error"] is None or _valid_error(value["error"]))
     )
 
 
