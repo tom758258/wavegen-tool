@@ -19,6 +19,8 @@ is a separate, bounded reset exception described below.
 - Static sine, square, ramp, triangle, pulse, DC, noise, and PRBS waveforms
 - Supported AM, FM, PM, FSK, BPSK, PWM, and Sum configurations
 - Counted Burst, Gated Burst, linear/logarithmic frequency sweeps, and List Sweep
+- [Basic Workflows](docs/cli/README.md#basic-workflows) for timed output,
+  amplitude ramps, output cycles, waveform sequences, frequency steps, and presets
 - Named arbitrary-waveform CSV upload, playback, native sequences, and
   selected-channel volatile memory management in dry-run and simulation
 - Selected-channel status, output configuration, output control, and bounded

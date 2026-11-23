@@ -69,8 +69,10 @@ from wavegen_tool_core import (
     validate_backend_transport,
 )
 from wavegen_tool_core.arbitrary import ARBITRARY_COMMANDS, run_arbitrary
+from wavegen_tool_core.basic_workflows import BASIC_WORKFLOW_COMMANDS, run_basic_workflow
 from wavegen_tool_core.software_sequence import (
     SOFTWARE_SEQUENCE_ACTION,
+    SoftwareSequenceCancelled,
     SoftwareSequenceError,
     parse_software_sequence_json,
     run_software_sequence,
@@ -79,6 +81,7 @@ from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_PRODUCT
 from wavegen_tool_core.simulator import SimulatedResourceManagerFactory
 from wavegen_tool_core.transport import normalize_resource
 from wavegen_tool_cli.worker_protocol import (
+    CANCELLABLE_COMMANDS,
     WORKER_SCHEMA_VERSION,
     WORKER_SERVICE_NAME,
     common_error,
@@ -127,6 +130,7 @@ class JobRecord:
     finished_at: str | None = None
     result: object = None
     error: dict[str, object] | None = None
+    cancel_event: threading.Event | None = None
 
 
 def validate_worker_startup(
@@ -196,6 +200,7 @@ class WorkerRuntime:
         self._accepted_jobs = 0
         self._succeeded_jobs = 0
         self._failed_jobs = 0
+        self._cancelled_jobs = 0
         self._summary_emitted = False
         self._exit_code = 0
         self._simulator_state: Simulated33521BState | None = None
@@ -241,6 +246,7 @@ class WorkerRuntime:
                 command_url=self.command_url,
                 status_url=self.status_url,
                 stop_url=self.stop_url,
+                cancel_url=self.cancel_url,
                 features=worker_features(),
             )
             self._runner_thread.start()
@@ -265,6 +271,10 @@ class WorkerRuntime:
     @property
     def stop_url(self) -> str:
         return f"http://127.0.0.1:{self.control_port}/stop"
+
+    @property
+    def cancel_url(self) -> str:
+        return f"http://127.0.0.1:{self.control_port}/cancel"
 
     def wait(self, timeout: float | None = None) -> bool:
         """Wait for cooperative shutdown and close the listening socket."""
@@ -338,6 +348,7 @@ class WorkerRuntime:
                 context=dict(command.context),
                 state="queued",
                 accepted_at=_timestamp(),
+                cancel_event=threading.Event() if command.command in CANCELLABLE_COMMANDS else None,
             )
             if command.context["mode"] == "simulate":
                 self._simulator_state = simulator_state
@@ -352,6 +363,15 @@ class WorkerRuntime:
             )
             self._condition.notify_all()
         return "accepted", job
+
+    def request_cancel(self, worker_job_id: str) -> bool:
+        """Signal the specified active job if it can stop cooperatively."""
+        with self._condition:
+            job = self._active_job
+            if job is None or job.worker_job_id != worker_job_id or job.cancel_event is None:
+                return False
+            job.cancel_event.set()
+            return True
 
     def status_payload(self) -> dict[str, object]:
         with self._condition:
@@ -371,6 +391,7 @@ class WorkerRuntime:
                 "command_url": self.command_url,
                 "status_url": self.status_url,
                 "stop_url": self.stop_url,
+                "cancel_url": self.cancel_url,
                 "timestamp_utc": _timestamp(),
             }
 
@@ -432,11 +453,20 @@ class WorkerRuntime:
                     result = self._execute_command(job)
                 except WavegenError as exc:
                     domain_error = _wavegen_error_payload(exc)
+                    cancelled = isinstance(exc, SoftwareSequenceError) and isinstance(
+                        exc.cause, SoftwareSequenceCancelled
+                    )
+                    cleanup_failed = cancelled and bool(
+                        exc.cleanup_errors or (exc.details.get("cleanup") or {}).get("errors")
+                    )
                     error = common_error(
-                        "execution", exc.code, str(exc) or "Wavegen command failed.",
+                        "execution",
+                        "visa_cleanup_error" if cleanup_failed else exc.code,
+                        "Output cleanup failed after cancellation." if cleanup_failed
+                        else str(exc) or "Wavegen command failed.",
                         details={"domain_error": domain_error},
                     )
-                    self._finish_job(job, result=None, error=error)
+                    self._finish_job(job, result=None, error=error, cancelled=cancelled and not cleanup_failed)
                 except Exception:
                     traceback.print_exc(file=sys.stderr)
                     error = common_error(
@@ -465,15 +495,18 @@ class WorkerRuntime:
         *,
         result: object,
         error: dict[str, object] | None,
+        cancelled: bool = False,
     ) -> None:
         with self._condition:
-            job.state = "failed" if error is not None else "succeeded"
+            job.state = "cancelled" if cancelled else ("failed" if error is not None else "succeeded")
             job.finished_at = _timestamp()
             job.result = result
             job.error = error
             self._last_job = job
             self._active_job = None
-            if error is None:
+            if cancelled:
+                self._cancelled_jobs += 1
+            elif error is None:
                 self._succeeded_jobs += 1
             else:
                 self._failed_jobs += 1
@@ -485,7 +518,15 @@ class WorkerRuntime:
         context_mode = str(job.context["mode"])
         if context_mode == "dry_run":
             if job.command == SOFTWARE_SEQUENCE_ACTION:
-                return run_software_sequence(arguments["document"], model=job.context["planning_model_id"])
+                return run_software_sequence(
+                    arguments["document"], model=job.context["planning_model_id"],
+                    cancel_event=job.cancel_event,
+                )
+            if job.command in BASIC_WORKFLOW_COMMANDS:
+                return run_basic_workflow(
+                    job.command, {key: value for key, value in arguments.items() if key != "confirm_output"},
+                    model=job.context["planning_model_id"], cancel_event=job.cancel_event,
+                )
             return self._execute_dry_run(job.command, arguments, job.context)
 
         simulator_state = self._simulator_state
@@ -503,7 +544,13 @@ class WorkerRuntime:
         backend = self.config.backend
         if job.command == SOFTWARE_SEQUENCE_ACTION:
             return run_software_sequence(
-                arguments["document"], resource=resource, backend=backend, **core_kwargs
+                arguments["document"], resource=resource, backend=backend,
+                cancel_event=job.cancel_event, **core_kwargs,
+            )
+        if job.command in BASIC_WORKFLOW_COMMANDS:
+            return run_basic_workflow(
+                job.command, {key: value for key, value in arguments.items() if key != "confirm_output"},
+                resource=resource, backend=backend, cancel_event=job.cancel_event, **core_kwargs,
             )
         if job.command in ARBITRARY_COMMANDS:
             return run_arbitrary(
@@ -955,6 +1002,7 @@ class WorkerRuntime:
                 "accepted_jobs": self._accepted_jobs,
                 "succeeded_jobs": self._succeeded_jobs,
                 "failed_jobs": self._failed_jobs,
+                "cancelled_jobs": self._cancelled_jobs,
             }
         self._emit_event("summary", **payload)
 
@@ -1007,6 +1055,8 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 traceback.print_exc(file=sys.stderr)
                 self._send_json(500, self._error_envelope("stop_failed", "Stop request failed."))
+        elif self.path == "/cancel":
+            self._handle_cancel()
         else:
             self._send_json(404, self._error_envelope("not_found", "Unknown HTTP endpoint."))
 
@@ -1169,6 +1219,40 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
 
         self.server.runtime.request_stop(acknowledge)
 
+    def _handle_cancel(self) -> None:
+        body, parse_error = self._read_json()
+        candidate = body.get("worker_job_id") if isinstance(body, dict) else None
+        job_id = candidate if isinstance(candidate, str) and candidate.strip() else None
+        response = {
+            "schema_version": WORKER_SCHEMA_VERSION,
+            "run_id": self.server.runtime.run_id,
+            "worker_job_id": job_id,
+        }
+        if (
+            parse_error is not None or not isinstance(body, dict) or job_id is None
+            or body.keys() - {"schema_version", "worker_job_id", "reason"}
+            or type(body.get("schema_version")) is not int
+            or body["schema_version"] != WORKER_SCHEMA_VERSION
+            or ("reason" in body and not isinstance(body["reason"], str))
+        ):
+            error = common_error(
+                "validation", "invalid_request", parse_error or "Invalid POST /cancel request."
+            )
+            self._send_json(400, dict(response, status="error", error=error))
+            return
+        try:
+            accepted = self.server.runtime.request_cancel(job_id)
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            error = common_error("worker", "cancel_failed", "Cancel request failed.")
+            self._send_json(500, dict(response, status="error", error=error))
+            return
+        if accepted:
+            self._send_json(202, dict(response, status="accepted", error=None))
+        else:
+            error = common_error("admission", "job_not_cancellable", "No cancellable active job matches this ID.")
+            self._send_json(409, dict(response, status="rejected", error=error))
+
     def _read_json(
         self, *, allow_empty: bool = False, preserve_stepped_values: bool = False
     ) -> tuple[object, str | None]:
@@ -1185,11 +1269,13 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             body = raw.decode("utf-8")
             payload = json.loads(body)
             if preserve_stepped_values and isinstance(payload, dict):
-                if payload.get("command") == SOFTWARE_SEQUENCE_ACTION:
+                command = payload.get("command")
+                if isinstance(command, str) and command in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
                     try:
                         return parse_software_sequence_json(body), None
                     except (ValueError, RecursionError, ArithmeticError):
-                        return None, "Request body must contain valid software sequence JSON."
+                        label = "software sequence" if command == SOFTWARE_SEQUENCE_ACTION else "workflow"
+                        return None, f"Request body must contain valid {label} JSON."
                 arguments = payload.get("arguments")
                 if isinstance(arguments, dict):
                     exact_arguments = None
@@ -1282,7 +1368,7 @@ def _job_payload(job: JobRecord | None) -> dict[str, object] | None:
         "context": dict(job.context),
         "state": job.state,
         "timestamp_utc": job.finished_at or job.started_at or job.accepted_at,
-        **({"ok": job.error is None} if job.finished_at is not None else {}),
+        **({"ok": job.state == "succeeded"} if job.finished_at is not None else {}),
         "accepted_at": job.accepted_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,

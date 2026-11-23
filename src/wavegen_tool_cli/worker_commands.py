@@ -15,6 +15,7 @@ from wavegen_tool_core.action_arguments import (
     validate_action_arguments,
 )
 from wavegen_tool_core.errors import WavegenError, WaveformParameterError
+from wavegen_tool_core.basic_workflows import BASIC_WORKFLOW_COMMANDS, validate_basic_workflow
 from wavegen_tool_core.software_sequence import (
     SOFTWARE_SEQUENCE_ACTION,
     SoftwareSequenceError,
@@ -83,8 +84,9 @@ _ALLOWED_CONTEXT_FIELDS = frozenset(
 )
 _REQUEST_MODES = frozenset({"live", "simulate", "dry_run"})
 _WORKER_MODES = frozenset({"live", "simulate"})
-SUPPORTED_WORKER_COMMANDS = ACTION_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}
-_DRY_RUN_COMMANDS = DRY_RUN_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}
+_SEQUENCE_COMMANDS = BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}
+SUPPORTED_WORKER_COMMANDS = ACTION_COMMANDS | _SEQUENCE_COMMANDS
+_DRY_RUN_COMMANDS = DRY_RUN_COMMANDS | _SEQUENCE_COMMANDS
 _LIVE_WRITE_COMMANDS = DRY_RUN_COMMANDS - {"list-arbitrary-memory"} | {"trigger"}
 
 
@@ -155,9 +157,9 @@ def validate_worker_command_request(
             "dry_run context only supports configure-*, Arbitrary, and software sequence commands.",
         )
 
-    if command == SOFTWARE_SEQUENCE_ACTION:
+    if command in _SEQUENCE_COMMANDS:
         _validate_sequence_arguments(
-            request_mode, arguments, allow_output_writes=allow_output_writes
+            command, request_mode, arguments, allow_output_writes=allow_output_writes
         )
     else:
         try:
@@ -260,9 +262,11 @@ def _validate_context(
 
 
 def _validate_sequence_arguments(
-    request_mode: str, arguments: dict[str, object], *, allow_output_writes: bool
+    command: str, request_mode: str, arguments: dict[str, object], *, allow_output_writes: bool
 ) -> None:
-    if "document" not in arguments or arguments.keys() - {"document", "confirm_output"}:
+    if command == SOFTWARE_SEQUENCE_ACTION and (
+        "document" not in arguments or arguments.keys() - {"document", "confirm_output"}
+    ):
         raise WorkerRequestValidationError(
             "invalid_arguments", "run-software-sequence requires document and accepts optional confirm_output."
         )
@@ -270,9 +274,15 @@ def _validate_sequence_arguments(
         raise WorkerRequestValidationError("invalid_arguments", "confirm_output must be a boolean.")
     live = request_mode == "live"
     try:
-        sequence = validate_software_sequence(
-            arguments["document"], require_absolute_path=True, product_live=live
-        )
+        if command == SOFTWARE_SEQUENCE_ACTION:
+            sequence = validate_software_sequence(
+                arguments["document"], require_absolute_path=True, product_live=live
+            )
+        else:
+            sequence = validate_basic_workflow(
+                command, {key: value for key, value in arguments.items() if key != "confirm_output"},
+                product_live=live,
+            )
     except WavegenError as exc:
         details = (
             {"domain_error": {"code": exc.code, "message": str(exc), "sequence": exc.details}}

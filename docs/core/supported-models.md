@@ -141,6 +141,11 @@ advanced, trigger, and main-output scope. A sequence containing an Arbitrary
 action requires the Direct CLI contributor validation route on an
 Arbitrary-capable model. Worker live sequences always use Product policy.
 
+Basic Workflows use the same model and channel restrictions. Amplitude Ramp
+and its output-on amplitude update are available in dry-run, simulation,
+and Direct CLI Contributor Validation. Product Live and Worker Live reject
+Amplitude Ramp on all registered models.
+
 ## Adapter Exposure
 
 The Direct CLI exposes the broader Core-backed waveform, modulation, burst,

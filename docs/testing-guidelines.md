@@ -124,12 +124,22 @@ Both CLI runners default to `-Suite smoke`; the only other suite is `full`.
 `-Modes` applies only to `-Suite full`; explicitly combining it with Smoke fails
 before artifacts or any VISA I/O. Full defaults to every applicable feature mode.
 Available families include `static`, `modulation`, `burst`, `sweep`, `list-sweep`,
-`output`, `arbitrary`, `sequence`, and `software-sequence`. Selecting a subset
+`output`, `arbitrary`, `sequence`, `software-sequence`, and `basic-workflows`. Selecting a subset
 runs only those recipes and the shared identity, safe-off, error-queue and
 cleanup checks. An explicitly requested unsupported Arbitrary/Sequence mode
 for one model fails closed;
 all-target preflight skips those recipes for models lacking the Core capability.
 A subset PASS is not full-scope Product Live admission evidence.
+
+`basic-workflows` checks expanded sequence order, scheduled waits, output
+continuity during amplitude updates, List Sweep settings, presets, and
+confirmed cleanup. Its Preflight also exercises CANCEL and graceful STOP
+on a local simulated Worker. Real Live observations apply to workflow output
+and use the existing Contributor safeguards.
+For Frequency Step, verify the configured start frequency while output is OFF
+and confirm Output ON precedes LIST initiation. Use a scope in the authorized
+Real Live case to check the frequency order, first and last dwell, absence of
+a repeated pass, and final OFF.
 
 Smoke remains a representative Sine sanity check and never enables output:
 `smoke PASS != all implemented features validated`.

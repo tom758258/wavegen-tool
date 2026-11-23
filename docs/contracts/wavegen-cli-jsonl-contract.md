@@ -138,6 +138,14 @@ Document-level validation errors have no step location. A controllable
 interruption exits with code 130 after attempting output cleanup. Step failures
 use the underlying Core error's normal exit-code mapping.
 
+The six [Basic Workflow commands](wavegen-worker-contract.md#basic-workflows)
+use the same result structure with their own `action` and a top-level
+`channel`. Successful executions include the selected channel's safe-off
+confirmation. A dry-run describes the expanded workflow and its waits.
+Frequency Step reports a single `run-sine-list-sweep-once` step whose `seconds`
+and the workflow's `total_wait_seconds` report the nominal list dwell in total.
+The dry-run `commands` show Output ON before LIST and Immediate initiation.
+
 ## Direct CLI Commands
 
 The public Direct CLI machine surface includes:
@@ -152,7 +160,9 @@ The public Direct CLI machine surface includes:
 - `configure-sync` and `sync-output`;
 - `upload-arbitrary`, `configure-arbitrary`, `configure-arbitrary-sequence`,
   `list-arbitrary-memory`, and `clear-arbitrary-memory`;
-- `run-software-sequence`;
+- `run-software-sequence`, `run-timed-output`, `run-amplitude-ramp`,
+  `run-output-cycle`, `run-waveform-sequence`, `run-frequency-step`, and
+  `apply-quick-output-preset`;
 - `worker`, `send-command`, `worker-status`, `wait-ready`, and `worker-stop`.
 
 Direct command availability does not imply that the Worker accepts the same
@@ -166,12 +176,15 @@ Worker events are `ready`, `job_accepted`, `job_started`, `job_finished`,
 exact integer-token `schema_version: 3`, `service: "wavegen-tool"`, `run_id`,
 and a UTC timestamp.
 
-All 31 Worker domain commands are async jobs. Every normal, controllable
+All Worker domain commands are async jobs. Every normal, controllable
 termination emits `job_finished` with `state`, boolean `ok`, and required
 `result` and `error`. The terminal timestamp is fixed and shared with the
 HTTP `last_job` snapshot. Success uses `state="succeeded"`, `ok=true`, and
 `error=null`; failure uses `state="failed"`, `ok=false`, and a Common Error.
-No cancellation or streaming feature is declared.
+Cancellation uses `state="cancelled"` and `ok=false`. The Common Error
+preserves the cancellation details and sequence cleanup. A cleanup failure
+produces a failed terminal. Manifest and ready declare `common.job_cancel`
+contract version 1 with the supported commands, and ready supplies `cancel_url`.
 
 Terminal successful job results contain the Core result serialized as JSON.
 AM, FM, PM, PWM, and Sum configuration results and plans report the selected

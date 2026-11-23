@@ -788,6 +788,59 @@ after failure or interruption. A communication loss or a forcibly terminated
 process can leave the output state unknown. Configuration and uploaded
 waveforms can persist after a failure.
 
+## Basic Workflows
+
+The following examples plan each workflow without opening VISA. Use
+`--simulate` in place of `--dry-run` to execute against a simulator. Each
+command accepts `--channel` (default 1) and `--json`. Execution requires the
+selected channel to be OFF at entry and confirms OFF after execution. Inspect
+`cleanup` on success or failure before relying on the final output state.
+
+| Command | Example arguments |
+| --- | --- |
+| `run-timed-output` | `--file waveform.json --duration-s 2 --dry-run` |
+| `run-amplitude-ramp` | `--start-vpp 0.1 --stop-vpp 0.25 --step-vpp 0.1 --dwell-s 1 --dry-run` |
+| `run-output-cycle` | `--on-s 1 --off-s 1 --cycles 2 --dry-run` |
+| `run-waveform-sequence` | `--file waveforms.json --dry-run` |
+| `run-frequency-step` | `--start-frequency-hz 1000 --stop-frequency-hz 3000 --frequency-step-hz 1000 --dwell-s 1 --dry-run` |
+| `apply-quick-output-preset` | `--preset square --dry-run` |
+
+For Timed Output, `waveform.json` contains one static waveform configuration
+such as `{"action":"configure-sine","arguments":{"frequency_hz":1000,"amplitude_vpp":0.1}}`.
+For Waveform Sequence, `waveforms.json` is an array with up to 62 entries.
+Each entry contains that configuration under `waveform` and its own positive
+`duration_s`. The tool turns output OFF between waveform configurations.
+Output Cycle uses the channel's current waveform and waits through each ON
+and OFF interval, including the last OFF interval.
+
+Amplitude Ramp configures a sine at `--frequency-hz` (default 1000 Hz),
+zero offset, and a 50-ohm load setting. Enter a positive step magnitude.
+The ramp automatically selects the direction and includes both endpoints,
+using a shorter final step when necessary. All points, including the first
+and last, get a dwell. The 124-point limit follows from 250 Sequence steps:
+three for configure, ON and OFF, one wait per point, and one amplitude
+update per later point. Total scheduled dwell is at most 600 seconds, plus
+instrument communication time. Output stays enabled between amplitude
+updates. The instrument retains its current autorange setting and may
+produce transients when its hardware changes range. The ramp is available
+in dry-run, simulation, and the explicit Direct CLI Contributor route.
+
+Frequency Step configures the sine at the first frequency with output OFF,
+then reads back the starting frequency and Immediate List Sweep settings.
+It enables output before starting a counted native list for one pass. The
+instrument advances each point using the configured dwell. The workflow
+allows the final dwell to finish, switches output OFF, and returns to CW.
+The documented scheduled duration covers the list itself. Enabling and
+disabling output also take instrument communication time.
+
+The generated list includes the exact stop frequency and uses the existing
+128-point and dwell limits. `--amplitude-vpp`, `--offset-v`, and `--load`
+select the sine voltage settings.
+
+Quick Output Preset supports `sine`, `square`, and `triangle`, each
+configured at 1 kHz, 0.1 Vpp, zero offset, and high impedance. The square
+uses 50% duty. All three keep output OFF.
+
 
 ## Frequency List Sweep
 

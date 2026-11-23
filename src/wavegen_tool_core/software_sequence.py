@@ -8,7 +8,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from decimal import Decimal
-from threading import TIMEOUT_MAX
+from threading import TIMEOUT_MAX, Event
 
 from . import visa
 from .action_arguments import (
@@ -25,6 +25,8 @@ from .arbitrary import (
     run_arbitrary,
 )
 from .errors import (
+    SoftwareSequenceCancelled,
+    SoftwareSequenceInterrupted,
     StatusQueryError,
     UnsupportedInstrumentError,
     VisaCleanupError,
@@ -36,6 +38,8 @@ from .identity import SUPPORT_POLICY_MODE_PRODUCT, SUPPORT_POLICY_MODE_VALIDATIO
 from .simulator import SimulatedResourceManagerFactory
 
 SOFTWARE_SEQUENCE_ACTION = "run-software-sequence"
+_AMPLITUDE_UPDATE = "update-sine-amplitude"
+_FREQUENCY_LIST_ONCE = "run-sine-list-sweep-once"
 
 _WAVEFORM_OPERATIONS = {
     f"configure-{waveform}": (
@@ -65,7 +69,9 @@ _CONFIGURE_ACTIONS = frozenset(_WAVEFORM_OPERATIONS) | {"configure-output"}
 _CREATE_ACTIONS = {"upload-arbitrary", "configure-arbitrary-sequence"}
 _PLAYBACK_ACTIONS = {"configure-arbitrary", "configure-arbitrary-sequence"}
 _ARBITRARY_ACTIONS = _CREATE_ACTIONS | _PLAYBACK_ACTIONS | {"list-arbitrary-memory"}
-_CHANNEL_WRITE_ACTIONS = _CONFIGURE_ACTIONS | _CREATE_ACTIONS | _PLAYBACK_ACTIONS | {"output"}
+_CHANNEL_WRITE_ACTIONS = _CONFIGURE_ACTIONS | _CREATE_ACTIONS | _PLAYBACK_ACTIONS | {
+    "output", _AMPLITUDE_UPDATE, _FREQUENCY_LIST_ONCE,
+}
 _ACTIONS = _CHANNEL_WRITE_ACTIONS | {
     "list-arbitrary-memory",
     "trigger",
@@ -101,12 +107,6 @@ _BOOL_FIELDS = {
 }
 
 
-class SoftwareSequenceInterrupted(WavegenError):
-    """An operator interrupted a software sequence."""
-
-    code = "interrupted"
-
-
 class SoftwareSequenceError(WavegenError):
     """A sequence failure with bounded step and cleanup details."""
 
@@ -125,7 +125,9 @@ class _Step:
 
     @property
     def enables_output(self) -> bool:
-        return self.action == "output" and self.arguments["enabled"] is True
+        return self.action == _FREQUENCY_LIST_ONCE or (
+            self.action == "output" and self.arguments["enabled"] is True
+        )
 
 
 @dataclass(frozen=True)
@@ -241,7 +243,8 @@ def _error_summary(cause: WavegenError) -> dict[str, object]:
 
 
 def validate_software_sequence(
-    document: object, *, require_absolute_path: bool = False, product_live: bool = False
+    document: object, *, require_absolute_path: bool = False, product_live: bool = False,
+    _workflow_action: str | None = None,
 ) -> SoftwareSequence:
     """Validate the document and static safety constraints without device or file I/O."""
     if not isinstance(document, Mapping) or document.keys() - {"version", "loop_count", "steps"}:
@@ -285,7 +288,13 @@ def validate_software_sequence(
                 raise UnsupportedInstrumentError(
                     "Arbitrary operations are outside Product Live feature scope."
                 )
-            if action == "wait":
+            if action == _AMPLITUDE_UPDATE:
+                if _workflow_action != "run-amplitude-ramp":
+                    raise WaveformParameterError("Amplitude updates require Amplitude Ramp.")
+                if product_live:
+                    raise UnsupportedInstrumentError("Amplitude Ramp is outside Product Live feature scope.")
+                _validate_json_types(arguments)
+            elif action == "wait":
                 if arguments.keys() != {"seconds"}:
                     raise WaveformParameterError("wait requires only the seconds argument.")
                 _validate_json_types(arguments)
@@ -299,11 +308,16 @@ def validate_software_sequence(
                     raise WaveformParameterError(
                         "Output confirmation is an outer request argument."
                     )
+                configure_action = action
+                if action == _FREQUENCY_LIST_ONCE:
+                    if _workflow_action != "run-frequency-step":
+                        raise WaveformParameterError("A single-pass List Sweep requires Frequency Step.")
+                    configure_action = "configure-sine-list-sweep"
                 validate_action_arguments(
-                    action, arguments, require_absolute_path=require_absolute_path
+                    configure_action, arguments, require_absolute_path=require_absolute_path
                 )
                 _validate_json_types(arguments)
-                canonicalize_voltage_arguments(action, arguments)
+                canonicalize_voltage_arguments(configure_action, arguments)
                 if action in _CREATE_ACTIONS:
                     if loop_count != 1:
                         raise WaveformParameterError("Arbitrary creation requires loop_count=1.")
@@ -362,6 +376,15 @@ def _waveform_arguments(step: _Step, *, readback: bool = False) -> dict[str, obj
 
 def _plan_step(step: _Step, model: str, *, product_live: bool) -> dict[str, object]:
     action = step.action
+    if action == _FREQUENCY_LIST_ONCE:
+        return visa._plan_sine_list_sweep_once(model, step.arguments)
+    if action == _AMPLITUDE_UPDATE:
+        sine = visa.dry_run_sine(model, **step.arguments)
+        return {
+            "channel": sine.channel,
+            "amplitude_vpp": sine.amplitude_vpp,
+            "commands": [f"SOURce{sine.channel}:VOLTage {visa._format_scpi_number(sine.amplitude_vpp)}"],
+        }
     if action in _ARBITRARY_ACTIONS:
         return run_arbitrary(action, step.arguments, model=model)
     if action in _CONFIGURE_ACTIONS:
@@ -388,12 +411,36 @@ def _plan_step(step: _Step, model: str, *, product_live: bool) -> dict[str, obje
     return dict(step.arguments)
 
 
-def _execute_step(step: _Step, resource: str, backend: str | None, options: dict) -> object:
+def _check_cancellation(cancel_event: Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise SoftwareSequenceCancelled("Sequence cancellation requested.")
+
+
+def _wait(seconds: float, cancel_event: Event | None) -> None:
+    if cancel_event is None:
+        time.sleep(seconds)
+    elif cancel_event.wait(seconds):
+        _check_cancellation(cancel_event)
+
+
+def _execute_step(
+    step: _Step, resource: str, backend: str | None, options: dict,
+    cancel_event: Event | None,
+) -> object:
     action = step.action
     args = step.arguments
     if action == "wait":
-        time.sleep(args["seconds"])
+        _wait(args["seconds"], cancel_event)
         return args
+    if action == _FREQUENCY_LIST_ONCE:
+        return visa._run_sine_list_sweep_once(
+            resource, backend, args, wait=lambda seconds: _wait(seconds, cancel_event),
+            check_cancel=lambda: _check_cancellation(cancel_event), **options
+        )
+    if action == _AMPLITUDE_UPDATE:
+        return visa.update_sine_amplitude(
+            resource, args["amplitude_vpp"], backend, channel=args["channel"], **options
+        )
     if action in _ARBITRARY_ACTIONS:
         return run_arbitrary(action, args, resource=resource, backend=backend, **options)
     if action == "trigger":
@@ -440,12 +487,16 @@ def _check_output_off(session: visa.VisaSession, channel: int) -> None:
         raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
 
 
-def _cleanup(resource: str, backend: str | None, options: dict, channels: set[int]) -> dict:
+def _cleanup(
+    resource: str, backend: str | None, options: dict, channels: set[int]
+) -> tuple[dict, bool]:
     cleanup = {"attempted_channels": sorted(channels), "confirmed_off_channels": [], "errors": []}
+    interrupted = False
     for channel in cleanup["attempted_channels"]:
         try:
             visa.set_output(resource, "off", backend, channel=channel, **options)
         except (Exception, KeyboardInterrupt) as exc:
+            interrupted = interrupted or isinstance(exc, KeyboardInterrupt)
             cause = (
                 exc
                 if isinstance(exc, WavegenError)
@@ -460,6 +511,7 @@ def _cleanup(resource: str, backend: str | None, options: dict, channels: set[in
                 **options,
             )
         except (Exception, KeyboardInterrupt) as exc:
+            interrupted = interrupted or isinstance(exc, KeyboardInterrupt)
             cause = (
                 exc
                 if isinstance(exc, WavegenError)
@@ -468,7 +520,7 @@ def _cleanup(resource: str, backend: str | None, options: dict, channels: set[in
             cleanup["errors"].append({"channel": channel, **_error_summary(cause)})
         else:
             cleanup["confirmed_off_channels"].append(channel)
-    return cleanup
+    return cleanup, interrupted
 
 
 def run_software_sequence(
@@ -480,6 +532,8 @@ def run_software_sequence(
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: visa.ResourceManagerFactory | None = None,
+    cancel_event: Event | None = None,
+    _workflow_action: str | None = None,
 ) -> dict[str, object]:
     """Plan with a registered model, or execute against an explicit resource."""
     if (model is None) == (resource is None):
@@ -499,13 +553,21 @@ def run_software_sequence(
         and support_policy_mode != SUPPORT_POLICY_MODE_VALIDATION
         and not isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
     )
-    sequence = validate_software_sequence(document, product_live=product_live)
+    sequence = validate_software_sequence(
+        document, product_live=product_live, _workflow_action=_workflow_action
+    )
     options = dict(
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
         resource_manager_factory=resource_manager_factory,
     )
     counts = _sequence_counts(len(sequence.steps), sequence.loop_count)
+    if _workflow_action is not None:
+        counts["action"] = _workflow_action
+    try:
+        _check_cancellation(cancel_event)
+    except SoftwareSequenceCancelled as exc:
+        raise SoftwareSequenceError(exc, counts) from exc
     if resource is not None:
         try:
             identity = visa.identify_instrument(resource, backend, **options).identity
@@ -531,17 +593,19 @@ def run_software_sequence(
         "channels": sorted(channels | guarded_channels),
         "total_wait_seconds": sum(
             step.arguments["seconds"] for step in sequence.steps if step.action == "wait"
-        )
-        * sequence.loop_count,
+        ) * sequence.loop_count,
     }
     plans = []
     for index, step in enumerate(sequence.steps, 1):
         try:
+            _check_cancellation(cancel_event)
             if "channel" in step.arguments:
                 visa._validate_channel(
                     step.arguments["channel"], capabilities, model_info.canonical_model
                 )
             plan = _plan_step(step, model, product_live=product_live)
+            if step.action == _FREQUENCY_LIST_ONCE:
+                details["total_wait_seconds"] += plan["seconds"] * sequence.loop_count
         except WavegenError as exc:
             raise _step_failure(details, step.action, index, 1, exc) from exc
         if resource is None:
@@ -564,20 +628,22 @@ def run_software_sequence(
                 _check_output_off(session, channel)
 
         try:
+            _check_cancellation(cancel_event)
             visa._run_on_supported_instrument(resource, backend, preflight, **options)
         except WavegenError as exc:
             raise SoftwareSequenceError(exc, details) from exc
 
-    attempted = set()
+    attempted = set(controlled_channels) if _workflow_action is not None else set()
     results = []
     failure = None
     loop, index, step = 1, 1, sequence.steps[0]
     try:
         for loop in range(1, sequence.loop_count + 1):
             for index, step in enumerate(sequence.steps, 1):
+                _check_cancellation(cancel_event)
                 if step.enables_output:
                     attempted.add(step.arguments["channel"])
-                result = _execute_step(step, resource, backend, options)
+                result = _execute_step(step, resource, backend, options, cancel_event)
                 if len(results) < _MAX_RESULTS:
                     results.append(
                         {
@@ -591,18 +657,32 @@ def run_software_sequence(
             details["completed_loops"] += 1
     except (Exception, KeyboardInterrupt) as exc:
         if isinstance(exc, KeyboardInterrupt):
-            cause = SoftwareSequenceInterrupted("Software sequence interrupted.")
+            cause = SoftwareSequenceInterrupted("Software sequence interrupted.").attach_cleanup_errors(
+                getattr(exc, "cleanup_errors", ())
+            )
         elif isinstance(exc, WavegenError):
             cause = exc
         else:
             cause = WavegenError("Unexpected software sequence step failure.")
         failure = (step.action, index, loop, cause)
     finally:
-        details["cleanup"] = _cleanup(resource, backend, options, attempted)
+        cleanup, cleanup_interrupted = _cleanup(resource, backend, options, attempted)
+        details["cleanup"] = cleanup
     details["results"] = results
-    if failure is not None:
-        raise _step_failure(details, *failure)
-    if details["cleanup"]["errors"]:
+    step_error = _step_failure(details, *failure) if failure is not None else None
+    if cleanup_interrupted and (
+        step_error is None or not isinstance(step_error.cause, SoftwareSequenceInterrupted)
+    ):
+        message = "Software sequence interrupted during output cleanup."
+        if step_error is None:
+            raise SoftwareSequenceError(SoftwareSequenceInterrupted(message), details)
+        cause = SoftwareSequenceInterrupted(
+            f"{message} {step_error}", backend=step_error.backend, transport=step_error.transport
+        ).attach_cleanup_errors(step_error.cleanup_errors)
+        raise SoftwareSequenceError(cause, step_error.details) from step_error
+    if step_error is not None:
+        raise step_error
+    if cleanup["errors"]:
         raise SoftwareSequenceError(
             VisaCleanupError("Software sequence output cleanup failed."), details
         )

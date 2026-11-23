@@ -157,9 +157,13 @@ from wavegen_tool_core.visa import (
 from wavegen_tool_core.arbitrary import read_arbitrary_sequence_file, run_arbitrary
 
 from wavegen_tool_core.software_sequence import run_software_sequence
+from wavegen_tool_core.basic_workflows import run_basic_workflow
+from wavegen_tool_core.visa import update_sine_amplitude
 
 __all__ = [
     "run_software_sequence",
+    "run_basic_workflow",
+    "update_sine_amplitude",
     "MODULATION_SHAPES",
     "read_arbitrary_sequence_file",
     "run_arbitrary",

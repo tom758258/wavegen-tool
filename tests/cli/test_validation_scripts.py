@@ -451,6 +451,8 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "list-transition-cw-recovery", "list-bus-trigger", "configure-output", "output-control",
         "sync-configuration", "sync-control",
         "software-sequence-basic", "software-sequence-advanced",
+        "timed-output", "amplitude-ramp", "output-cycle", "waveform-sequence",
+        "frequency-step", "quick-output-preset",
     }
     expected_parity = {
         "status", "static-sine", "modulation-am", "burst-immediate",
@@ -519,6 +521,8 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
         "ch1/burst-gated", "ch1/burst-gated-inverted", "ch1/sweep-sine-bus",
         "ch1/sweep-sine-timer", "ch1/sweep-external-positive",
         "ch1/sweep-external-negative", "ch1/list-bus-trigger", "ch1/software-sequence-basic",
+        "ch1/timed-output", "ch1/amplitude-ramp", "ch1/output-cycle",
+        "ch1/waveform-sequence", "ch1/frequency-step",
     } | ({"ch1/sequence-bus-functional", "ch1/sequence-external"} if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
@@ -575,6 +579,7 @@ def test_full_preflight_arbitrary_direct_without_hardware(
     ("arbitrary", "ch1/arbitrary-builtin-select", "ch1/sequence-bus"),
     ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
     ("software-sequence", "ch1/software-sequence-basic", "ch1/sequence-bus"),
+    ("basic-workflows", "ch1/amplitude-ramp", "ch1/software-sequence-basic"),
 ])
 def test_full_plan_filters_modes_and_propagates_to_preflight(
     artifact_root, fake_git, mode, expected, unexpected,
@@ -664,6 +669,25 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         for name in recipes:
             for execution_mode in ("dry-run", "simulate"):
                 assert cases[f"keysight-33521b/{name}/step1-{execution_mode}"] == "PASS"
+    if mode == "basic-workflows":
+        recipes = {
+            recipe["name"]: recipe for recipe in report["full_inventory"]
+            if recipe["family"] != "inspection"
+        }
+        assert set(recipes) == {f"ch1/{name}" for name in (
+            "timed-output", "amplitude-ramp", "output-cycle",
+            "waveform-sequence", "frequency-step", "quick-output-preset",
+        )}
+        for name, recipe in recipes.items():
+            step, = recipe["steps"]
+            turns_on = name != "ch1/quick-output-preset"
+            assert step["workflow_intent"]["output_on"] is turns_on
+            assert bool(recipe["observation"]) is turns_on
+        cases = {case["name"]: case["status"] for case in readiness["cases"]}
+        for name in recipes:
+            for execution_mode in ("dry-run", "simulate"):
+                assert cases[f"keysight-33521b/{name}/step1-{execution_mode}"] == "PASS"
+        assert cases["keysight-33521b/basic-workflows-worker-lifecycle"] == "PASS"
     assert readiness["hardware_touched"] is False
     assert readiness["selected_modes"] == report["selected_modes"]
     if mode == "burst":

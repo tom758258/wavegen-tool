@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from io import StringIO
 import math
+from time import monotonic
 from typing import Protocol
 
 from pyvisa.constants import RENLineOperation
@@ -31,6 +32,8 @@ from wavegen_tool_core.errors import (
     ResourceDiscoveryError,
     ResourceManagerError,
     ResourceOpenError,
+    SoftwareSequenceCancelled,
+    SoftwareSequenceInterrupted,
     StatusQueryError,
     UnsupportedInstrumentError,
     UnsupportedTransportError,
@@ -2987,6 +2990,270 @@ def dry_run_sine_list_sweep(
         commands=_channelize_commands(commands, selected_channel),
         channel=selected_channel,
     )
+
+
+@dataclass(frozen=True)
+class _SingleListSweep:
+    sweep: SineListSweepDryRunResult
+
+    @property
+    def seconds(self) -> float:
+        return float(Decimal(str(self.sweep.dwell_s)) * len(self.sweep.frequencies_hz))
+
+    def trigger_settings(self) -> dict[str, str]:
+        channel = self.sweep.channel
+        # Counted Immediate triggers advance the list on the instrument's clock.
+        return {
+            f"INITiate{channel}:CONTinuous": "OFF",
+            f"TRIGger{channel}:COUNt": str(len(self.sweep.frequencies_hz)),
+            f"TRIGger{channel}:DELay": "0",
+        }
+
+    def readback(self) -> dict[str, str]:
+        channel = self.sweep.channel
+        return {
+            f"OUTPut{channel}": "OFF",
+            f"SOURce{channel}:FUNCtion": "SINusoid",
+            f"SOURce{channel}:FREQuency": _format_scpi_number(self.sweep.frequencies_hz[0]),
+            **_advanced_mode_readback_fields(self.sweep.commands, channel=channel),
+            f"SOURce{channel}:FREQuency:MODE": "CW",
+            **self.trigger_settings(),
+        }
+
+    def setup(self) -> tuple[str, ...]:
+        # Reuse List Sweep configuration, deferring its final transition into LIST.
+        return self.sweep.commands[:-1] + tuple(
+            f"{command} {value}" for command, value in self.trigger_settings().items()
+        )
+
+    def start(self) -> tuple[str, ...]:
+        channel = self.sweep.channel
+        return f"OUTPut{channel} ON", self.sweep.commands[-1], f"INITiate{channel}:IMMediate"
+
+    def summary(self) -> dict[str, object]:
+        return {
+            "channel": self.sweep.channel,
+            "frequencies_hz": self.sweep.frequencies_hz,
+            "dwell_s": self.sweep.dwell_s,
+            "trigger_source": self.sweep.trigger_source,
+            "amplitude_vpp": self.sweep.amplitude_vpp,
+            "offset_v": self.sweep.offset_v,
+            "phase_deg": self.sweep.phase_deg,
+            "load": self.sweep.load,
+            "seconds": self.seconds,
+            "output_state": "off",
+        }
+
+
+_OPERATION_CONDITION_QUERY = "STATus:OPERation:CONDition?"
+
+
+def _plan_sine_list_sweep_once(model: str, arguments: dict[str, object]) -> dict[str, object]:
+    plan = _SingleListSweep(dry_run_sine_list_sweep(model, **arguments))
+    channel = plan.sweep.channel
+    return {
+        **plan.summary(),
+        "commands": (
+            *(f"{header}?" for header in plan.trigger_settings()),
+            *plan.setup(),
+            *(f"{header}?" for header in plan.readback()),
+            SYSTEM_ERROR_QUERY,
+            *plan.start(),
+            SYSTEM_ERROR_QUERY,
+            _OPERATION_CONDITION_QUERY,
+            f"OUTPut{channel} OFF",
+            f"OUTPut{channel}?",
+            SYSTEM_ERROR_QUERY,
+            f"SOURce{channel}:FREQuency:MODE CW",
+            SYSTEM_ERROR_QUERY,
+        ),
+    }
+
+
+def _wait_for_counted_list(
+    session: VisaSession, channel: int, dwell_deadline: float, wait: Callable[[float], None]
+) -> None:
+    # Allow the last point its entire nominal dwell even if the trigger count
+    # reaches zero as that point is selected. The startup query ran during dwell.
+    wait(max(0.0, dwell_deadline - monotonic()))
+    deadline = monotonic() + DEFAULT_TIMEOUT_MS / 1000
+    initiated = 1 << (channel + 2)
+    while True:
+        try:
+            condition = int(session.query(_OPERATION_CONDITION_QUERY))
+            if not 0 <= condition <= 65535:
+                raise ValueError("Invalid operation condition register.")
+        except Exception as exc:
+            raise StatusQueryError("Could not read Frequency Step completion state.") from exc
+        if not condition & initiated:
+            return
+        if monotonic() >= deadline:
+            raise WaveformVerificationError("Frequency Step did not complete within the instrument wait limit.")
+        wait(0.02)
+
+
+def _query_frequency_step_error(session: VisaSession, when: str) -> SystemErrorEntry:
+    try:
+        return _parse_error_queue_entry(session.query(SYSTEM_ERROR_QUERY))
+    except Exception as exc:
+        raise ErrorQueueQueryError(f"Could not read the Frequency Step error queue {when}.") from exc
+
+
+def _check_frequency_step_errors(session: VisaSession, phase: str) -> None:
+    entry = _query_frequency_step_error(session, f"after {phase}")
+    if entry.code != ERROR_QUEUE_NO_ERROR_CODE:
+        raise VisaWriteError(f"Frequency Step {phase} instrument error ({entry.code}): {entry.message}")
+
+
+def _drain_frequency_step_errors(
+    session: VisaSession, when: str
+) -> tuple[VisaWriteError | None, ErrorQueueQueryError | SoftwareSequenceInterrupted | None]:
+    entries = []
+    read_error = None
+    # Allow the no-error response after the normal queue depth and bound reads
+    # if the instrument keeps reporting errors.
+    for _ in range(DEFAULT_ERROR_QUEUE_MAX_READS + 1):
+        try:
+            entry = _query_frequency_step_error(session, when)
+        except ErrorQueueQueryError as exc:
+            read_error = exc
+            break
+        except KeyboardInterrupt as exc:
+            # Previous reads have already removed their entries from the instrument.
+            read_error = SoftwareSequenceInterrupted(f"Frequency Step error queue read was interrupted {when}.")
+            read_error.__cause__ = exc
+            break
+        if entry.code == ERROR_QUEUE_NO_ERROR_CODE:
+            break
+        entries.append(f"({entry.code}): {entry.message}")
+    else:
+        read_error = ErrorQueueQueryError(
+            f"Could not confirm an empty Frequency Step error queue {when} within the read limit."
+        )
+    instrument_error = None
+    if entries:
+        instrument_error = VisaWriteError(f"Frequency Step instrument errors {when}: " + " | ".join(entries))
+    return instrument_error, read_error
+
+
+def _run_sine_list_sweep_once(
+    resource: str,
+    backend: str | None,
+    arguments: dict[str, object],
+    *,
+    wait: Callable[[float], None],
+    check_cancel: Callable[[], None],
+    **options,
+) -> dict[str, object]:
+    def run(session: VisaSession, context: IdentificationResult) -> dict[str, object]:
+        plan = _SingleListSweep(dry_run_sine_list_sweep(context.identity.canonical_model_id, **arguments))
+        channel = plan.sweep.channel
+        output = f"OUTPut{channel}"
+        _check_independent_channel_guard(session, _capabilities_for_identity(context.identity), context)
+        check_cancel()
+        # Restore these selected-channel trigger settings after the workflow.
+        continuous, count, delay = plan.trigger_settings()
+        saved_continuous = _parse_status_output(session.query(f"{continuous}?"))
+        saved_count = _parse_status_number(session.query(f"{count}?"), "trigger count")
+        saved_delay = _parse_status_number(session.query(f"{delay}?"), "trigger delay")
+        if not saved_count.is_integer() or not 1 <= saved_count <= 1_000_000 or not 0 <= saved_delay <= 1000:
+            raise StatusQueryError("Invalid Frequency Step trigger settings.")
+
+        primary_error = None
+        primary_cause = None
+        try:
+            for command in plan.setup():
+                session.write(command)
+            _verify_configuration_readback(session, context, plan.readback(), label="Frequency Step")
+            _check_frequency_step_errors(session, "configuration")
+            check_cancel()
+            on, list_mode, initiate = plan.start()
+            session.write(on)
+            session.write(list_mode)
+            check_cancel()
+            session.write(initiate)
+            dwell_deadline = monotonic() + plan.seconds
+            _check_frequency_step_errors(session, "startup")
+            _wait_for_counted_list(session, channel, dwell_deadline, wait)
+            check_cancel()
+        except KeyboardInterrupt as exc:
+            primary_error = SoftwareSequenceInterrupted("Software sequence interrupted.")
+            primary_cause = exc
+        except WavegenError as exc:
+            primary_error = exc
+        except Exception as exc:
+            primary_error = VisaWriteError("Could not apply the Frequency Step command.")
+            primary_cause = exc
+        finally:
+            cleanup_errors = []
+            cleanup_cause = None
+            cleanup_interrupt = None
+            output_off = False
+            cleanup_message = "Could not complete Frequency Step output OFF and trigger cleanup."
+            try:
+                session.write(f"{output} OFF")
+                if _parse_status_output(session.query(f"{output}?")) != "off":
+                    raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
+                output_off = True
+                # The queue is FIFO. Establish an empty queue before restoration
+                # so pending errors cannot be attributed to restoration writes.
+                pending_error, read_error = _drain_frequency_step_errors(session, "before trigger restoration")
+                if read_error is not None:
+                    cleanup_errors.append(str(read_error))
+                    cleanup_cause = read_error
+                    if isinstance(read_error, SoftwareSequenceInterrupted):
+                        cleanup_interrupt = read_error
+                if pending_error is not None:
+                    # An instrument failure takes precedence over cooperative cancellation.
+                    if primary_error is None or isinstance(primary_error, SoftwareSequenceCancelled):
+                        primary_cause = primary_error
+                        primary_error = pending_error
+                    else:
+                        primary_error.args = (f"{primary_error} {pending_error}",)
+                session.write(f"SOURce{channel}:FREQuency:MODE CW")
+                session.write(f"{delay} {_format_scpi_number(saved_delay)}")
+                session.write(f"{count} {int(saved_count)}")
+                session.write(f"{continuous} {saved_continuous.upper()}")
+                when = "after trigger restoration"
+                if read_error is not None:
+                    when += " (source unconfirmed)"
+                for error in _drain_frequency_step_errors(session, when):
+                    if error is not None:
+                        cleanup_errors.append(str(error))
+                        cleanup_cause = error
+                        if isinstance(error, SoftwareSequenceInterrupted):
+                            cleanup_interrupt = error
+            except KeyboardInterrupt as exc:
+                phase = "trigger restoration" if output_off else "output OFF confirmation"
+                cleanup_errors.append(f"Frequency Step {phase} was interrupted.")
+                cleanup_cause = cleanup_interrupt = exc
+            except Exception as exc:
+                cleanup_errors.append(str(exc) if isinstance(exc, WavegenError) else cleanup_message)
+                cleanup_cause = exc
+            if cleanup_interrupt is not None and not isinstance(primary_error, SoftwareSequenceInterrupted):
+                message = "Software sequence interrupted."
+                if primary_error is not None:
+                    message += f" {primary_error}"
+                interrupted = SoftwareSequenceInterrupted(message)
+                if primary_error is not None:
+                    interrupted.attach_cleanup_errors(primary_error.cleanup_errors)
+                primary_cause = primary_error or cleanup_interrupt
+                primary_error = interrupted
+            if output_off and primary_error is not None:
+                primary_error.attach_context(output_state="off")
+            if cleanup_errors:
+                if primary_error is None:
+                    raise VisaCleanupError(cleanup_message).attach_cleanup_errors(tuple(cleanup_errors)) from cleanup_cause
+                primary_error.attach_cleanup_errors((*primary_error.cleanup_errors, *cleanup_errors))
+
+        if primary_error is not None:
+            if primary_cause is not None:
+                raise primary_error from primary_cause
+            raise primary_error
+        return plan.summary()
+
+    _, result = _run_on_supported_instrument(resource, backend, run, **options)
+    return result
 
 
 def configure_square_list_sweep(
@@ -7551,6 +7818,61 @@ def send_bus_trigger(
     )
 
 
+def update_sine_amplitude(
+    resource: str,
+    amplitude_vpp: object,
+    backend: str | None = None,
+    *,
+    channel: int = 1,
+    support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
+    expected_model_id: str | None = None,
+    resource_manager_factory: ResourceManagerFactory | None = None,
+) -> dict[str, object]:
+    """Update a Vpp sine amplitude with its output on, without changing its range setting."""
+    amplitude = _normalize_finite_number(amplitude_vpp, "amplitude")
+    if support_policy_mode == SUPPORT_POLICY_MODE_VALIDATION and expected_model_id is None:
+        raise WaveformParameterError("Amplitude Ramp live validation requires an exact model.")
+
+    def update(session: VisaSession, context: IdentificationResult) -> dict[str, object]:
+        capabilities = _capabilities_for_identity(context.identity)
+        selected = _validate_channel(channel, capabilities, context.identity.model)
+        _check_independent_channel_guard(session, capabilities, context)
+        source = f"SOURce{selected}"
+        output = f"OUTPut{selected}"
+        try:
+            if (
+                _parse_status_output(session.query(f"{output}?")) != "on"
+                or _parse_status_function(session.query(f"{source}:FUNCtion?")) not in {"SIN", "SINUSOID"}
+                or _parse_status_unit(session.query(f"{source}:VOLTage:UNIT?")) != "VPP"
+            ):
+                raise WaveformVerificationError("Amplitude Ramp requires an enabled sine output in Vpp.")
+            load = _normalize_load(_parse_status_load(session.query(f"{output}:LOAD?")))
+            offset = _parse_status_number(session.query(f"{source}:VOLTage:OFFSet?"), "offset")
+        except WavegenError:
+            raise
+        except Exception as exc:
+            raise StatusQueryError("Could not verify the active sine settings for Amplitude Ramp.") from exc
+        _validate_vpp_levels(amplitude, offset, load, "Amplitude Ramp")
+        session.write(f"{source}:VOLTage {_format_scpi_number(amplitude)}")
+        try:
+            actual = _parse_status_number(session.query(f"{source}:VOLTage?"), "amplitude")
+            state = _parse_status_output(session.query(f"{output}?"))
+        except Exception as exc:
+            raise StatusQueryError("Could not verify the Amplitude Ramp update.") from exc
+        if state != "on" or not math.isclose(actual, amplitude, rel_tol=1e-5, abs_tol=1e-9):
+            raise WaveformVerificationError("Amplitude Ramp readback did not confirm the update with output ON.")
+        return {"channel": selected, "amplitude_vpp": amplitude, "output_state": state}
+
+    _, result = _run_on_supported_instrument(
+        resource, backend, update,
+        resource_manager_factory=resource_manager_factory,
+        support_policy_mode=support_policy_mode,
+        expected_model_id=expected_model_id,
+        validation_only_feature="Amplitude Ramp",
+    )
+    return result
+
+
 _SYNC_OFF = "OUTPut:SYNC OFF"
 _SYNC_STATE_QUERY = "OUTPut:SYNC?"
 _SYNC_STATE_REPLIES = {"0": "off", "1": "on", "OFF": "off", "ON": "on"}
@@ -8919,9 +9241,9 @@ def _advanced_readback_matches(header: str, expected: str, response: str) -> boo
     if not math.isfinite(actual_number):
         return False
     # Burst cycle count is discrete; a one-cycle difference must not pass.
-    if header.endswith(":BURSt:NCYCles"):
+    if header.endswith((":BURSt:NCYCles", ":COUNt")):
         return expected_number == actual_number
-    if header == "TRIGger1:DELay":
+    if header.startswith("TRIGger") and header.endswith(":DELay"):
         return math.isclose(expected_number, actual_number, rel_tol=0.0, abs_tol=1e-9)
     return math.isclose(
         expected_number, actual_number, rel_tol=1e-4, abs_tol=1e-12
@@ -8937,14 +9259,24 @@ def _verify_advanced_mode_configuration(
 ) -> None:
     """Independently compare active mode settings without changing output state."""
 
-    fields = _advanced_mode_readback_fields(commands)
+    fields = _advanced_mode_readback_fields(commands, channel=1)
+    _verify_configuration_readback(
+        session, context,
+        dict(zip(_channelize_commands(tuple(fields), selected_channel), fields.values())),
+        label="Advanced Mode",
+    )
+
+
+def _verify_configuration_readback(
+    session: VisaSession, context: IdentificationResult, fields: dict[str, str], *, label: str
+) -> None:
     for header, expected in fields.items():
-        query = _channelize_commands((f"{header}?",), selected_channel)[0]
+        query = f"{header}?"
         try:
             actual = session.query(query)
         except Exception as exc:
             raise WaveformVerificationError(
-                f"Advanced Mode readback failed for {query}: query error or timeout.",
+                f"{label} readback failed for {query}: query error or timeout.",
                 backend=context.backend,
                 transport=context.transport,
                 identity=context.identity,
@@ -8955,7 +9287,7 @@ def _verify_advanced_mode_configuration(
         ):
             actual_label = repr(actual)[:120]
             raise WaveformVerificationError(
-                f"Advanced Mode readback mismatch for {query}: "
+                f"{label} readback mismatch for {query}: "
                 f"expected {expected!r}, actual {actual_label}.",
                 backend=context.backend,
                 transport=context.transport,

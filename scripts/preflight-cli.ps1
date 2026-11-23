@@ -245,7 +245,7 @@ foreach ($targetProfile in $targets) {
                 $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence') -and
                     '--load-builtin' -notin $step.arguments) {
                     @('dry-run')
-                } elseif ($command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory', 'run-software-sequence')) {
+                } elseif ($recipe.family -eq 'basic-workflows' -or $command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory', 'run-software-sequence')) {
                     @('dry-run', 'simulate')
                 } else { @('simulate') }
                 foreach ($mode in $executionModes) {
@@ -266,10 +266,12 @@ foreach ($targetProfile in $targets) {
                         if ($usesChannel -and [int]$payload.channel -ne $recipe.channel) { throw 'Channel did not match the recipe.' }
                         if ($command -eq 'run-software-sequence') {
                             Assert-SoftwareSequenceResult -Payload $payload -Intent $step.sequence_intent -Channel $recipe.channel -DryRun:($mode -eq 'dry-run')
+                        } elseif ($recipe.family -eq 'basic-workflows') {
+                            Assert-BasicWorkflowResult -Payload $payload -Intent $step.workflow_intent -Channel $recipe.channel -DryRun:($mode -eq 'dry-run')
                         }
                         if ($mode -eq 'dry-run') {
                             if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or
-                                ($command -ne 'run-software-sequence' -and @($payload.commands).Count -eq 0)) { throw 'Invalid hardware-free plan.' }
+                                ($command -ne 'run-software-sequence' -and $recipe.family -ne 'basic-workflows' -and @($payload.commands).Count -eq 0)) { throw 'Invalid hardware-free plan.' }
                         } elseif ($payload.simulated -ne $true -or $payload.model -cne $capabilityModel) { throw 'Unexpected simulator identity or mode.' }
                         if ($command -in @('configure-sync', 'sync-output')) {
                             foreach ($key in $step.result.Keys) {
@@ -302,6 +304,22 @@ foreach ($targetProfile in $targets) {
                     Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $(if ($null -ne $invocation) { $invocation.Process } else { $null })
                 }
             }
+        }
+        if ('basic-workflows' -in $applicableModes) {
+            $name = "${modelId}/basic-workflows-worker-lifecycle"
+            $reasons = @()
+            $process = $null
+            try {
+                $artifactDirectory = Join-Path $targetDirectory (New-SafeCaseName $name)
+                $process = Invoke-CapturedCommand -Name $name -FilePath $Python `
+                    -Arguments @((Join-Path $PSScriptRoot '_check_basic_worker.py'), $modelId) `
+                    -StdOutPath (Join-Path $artifactDirectory 'stdout.jsonl') -StdErrPath (Join-Path $artifactDirectory 'stderr.txt') `
+                    -WorkingDirectory $repoRoot -CaptureInMemory:(-not $DebugArtifacts) -TimeoutSeconds 20
+                $process.Remove('stdout_text')
+                $process.Remove('stderr_text')
+                if ($process.exit_code -ne 0) { throw 'Simulator Worker CANCEL or STOP validation failed.' }
+            } catch { $reasons += $_.Exception.Message }
+            Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $process
         }
     }
 

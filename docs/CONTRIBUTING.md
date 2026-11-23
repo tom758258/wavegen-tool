@@ -165,13 +165,23 @@ contributor validation.
 
 Both runners accept `-Suite smoke|full`, defaulting to `smoke`.
 For Full only, `-Modes` selects any of `static`, `modulation`, `burst`,
-`sweep`, `list-sweep`, `output`, `arbitrary`, `sequence`, or `software-sequence`.
+`sweep`, `list-sweep`, `output`, `arbitrary`, `sequence`, `software-sequence`,
+or `basic-workflows`.
 Omitting it selects all applicable families; Smoke plus Modes fails closed.
 A subset PASS is not complete admission evidence. The same filtered recipes
 are used by Preflight, PlanOnly, Real Live and reporting. Core-admitted
 Arbitrary/Sequence validation remains contributor-only and needs separate
 physical authorization. Before an actual volatile Clear, the operator must
 type `CLEAR` after a new destructive-action warning.
+
+Select `-Suite full -Modes basic-workflows` to validate the six Basic
+Workflows independently. Preflight exercises their dry-run and simulator
+results, plus Worker CANCEL and STOP over loopback with a simulator.
+PlanOnly reports workflow output intent and keeps VISA closed. The live
+runner uses the Contributor route, with the existing preparation prompt,
+required observations, safe-off checks, and error queue. Amplitude Ramp
+remains excluded from Product Live and Worker Live.
+
  Smoke is a
 representative CLI Live sanity check: exact identity, stale-error drain,
 capability-driven per-channel Sine configuration/readback, output OFF before

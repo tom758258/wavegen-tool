@@ -525,6 +525,8 @@ function Invoke-FullLiveCases {
                     if ($command -eq 'run-software-sequence') {
                         $document = Get-Content -LiteralPath $step.arguments[2] -Raw -Encoding UTF8 | ConvertFrom-Json
                         $turningOn = (Get-SoftwareSequenceIntent $document).output_on
+                    } elseif ($recipe.family -eq 'basic-workflows') {
+                        $turningOn = $step.workflow_intent.output_on
                     }
                     if ($turningOn -and -not $observation -and $recipe.family -cne 'output-control') {
                         throw 'Output ON is restricted to output-control and confirmed observation cases.'
@@ -544,6 +546,8 @@ function Invoke-FullLiveCases {
                     }
                     if ($command -eq 'run-software-sequence' -and $turningOn) {
                         Write-Host "Observe CH$channel now. The software sequence will turn output OFF."
+                    } elseif ($recipe.family -eq 'basic-workflows' -and $turningOn) {
+                        Write-Host "Observe CH$channel now. The workflow will turn output OFF."
                     }
                     $syncOnInFlight = $turningSyncOn
                     $result = Invoke-FullCommand -Name $name -Arguments $step.arguments -Channel $commandChannel
@@ -553,6 +557,8 @@ function Invoke-FullLiveCases {
                     }
                     if ($command -eq 'run-software-sequence') {
                         Assert-SoftwareSequenceResult -Payload $result -Intent $step.sequence_intent -Channel $channel
+                    } elseif ($recipe.family -eq 'basic-workflows') {
+                        Assert-BasicWorkflowResult -Payload $result -Intent $step.workflow_intent -Channel $channel
                     }
                     Assert-FullReadback -Payload $result -Expected $step.result
                     if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
@@ -579,7 +585,7 @@ function Invoke-FullLiveCases {
                     }
                     Assert-FullErrorQueue -Name "$name-errors"
                 }
-                if ($observation -and $recipe.family -ne 'software-sequence') {
+                if ($observation -and $recipe.family -notin @('software-sequence', 'basic-workflows')) {
                     if ($externalInput) { Write-Host $observation.action }
                     Write-Host "Observe CH$channel for $($observation.seconds) seconds. Output will then turn off."
                     Start-Sleep -Seconds $observation.seconds
@@ -925,6 +931,10 @@ if ($Suite -eq 'full') {
     foreach ($recipe in @($fullInventory | Where-Object family -eq 'software-sequence')) {
         $intent = $recipe.steps[0].sequence_intent
         Write-Host "  $($recipe.name) intent - Output ON: $($intent.output_on), waveform uploads: $($intent.upload_count)"
+    }
+    foreach ($recipe in @($fullInventory | Where-Object family -eq 'basic-workflows')) {
+        $intent = $recipe.steps[0].workflow_intent
+        Write-Host "  $($recipe.name) intent - Output ON: $($intent.output_on), loops: $($intent.loop_count), wait: $($intent.wait_seconds) s"
     }
 }
 Write-Host ""

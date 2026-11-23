@@ -5,7 +5,7 @@ import pytest
 
 import wavegen_tool_cli.cli as cli_module
 from wavegen_tool_cli.cli import ExitCode, main
-from wavegen_tool_core import ErrorQueueQueryError, visa
+from wavegen_tool_core import ErrorQueueQueryError, SimulatedResource, visa
 
 
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
@@ -4924,3 +4924,135 @@ def test_software_sequence_ctrl_c_during_wait_returns_failure_and_confirms_off(t
     assert payload["sequence"]["completed_step_executions"] == 1
     assert payload["sequence"]["failed_step"]["error"]["code"] == "interrupted"
     assert payload["sequence"]["cleanup"]["confirmed_off_channels"] == [1]
+
+
+def test_timed_output_cli_reads_waveform_file_and_returns_json(tmp_path, capsys):
+    path = tmp_path / "waveform.json"
+    path.write_text(json.dumps({
+        "action": "configure-sine",
+        "arguments": {"frequency_hz": 2000, "amplitude_vpp": 0.2},
+    }), encoding="utf-8")
+    assert main(["run-timed-output", "--file", str(path), "--duration-s", ".01", "--dry-run", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["action"] == "run-timed-output" and result["executed"] is False
+    assert [step["action"] for step in result["steps"]] == ["configure-sine", "output", "wait", "output"]
+    assert result["steps"][0]["frequency_hz"] == 2000
+
+
+def test_amplitude_ramp_cli_validates_parameters_and_interrupts_safely(monkeypatch, capsys):
+    arguments = [
+        "run-amplitude-ramp", "--start-vpp", ".1", "--stop-vpp", ".2",
+        "--step-vpp", ".1", "--simulate", "--json",
+    ]
+    assert main(arguments + ["--dwell-s", "400"]) == 2
+    assert json.loads(capsys.readouterr().out)["success"] is False
+
+    def interrupt(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("wavegen_tool_core.software_sequence.time.sleep", interrupt)
+    assert main(arguments + ["--dwell-s", "1"]) == 130
+    result = json.loads(capsys.readouterr().out)
+    assert result["sequence"]["failed_step"]["error"]["code"] == "interrupted"
+    assert result["sequence"]["cleanup"]["confirmed_off_channels"] == [1]
+
+
+@pytest.mark.parametrize("when", ["before", "after"])
+def test_frequency_step_ctrl_c_during_cleanup_preserves_already_read_error(when, monkeypatch, capsys):
+    query, write = SimulatedResource.query, SimulatedResource.write
+    expected_error = "-211" if when == "before" else "-222"
+    state = None
+    interrupted = False
+
+    def query_error_queue(session, command):
+        nonlocal state, interrupted
+        channel = session.state.ch1
+        if command != "SYSTem:ERRor?" or not channel.list_runs:
+            return query(session, command)
+        if state is not None and not interrupted:
+            assert not channel.output_enabled
+            interrupted = True
+            raise KeyboardInterrupt
+        reply = query(session, command)
+        if channel.output_enabled and when == "before":
+            session.state.error_queue.append('-211,"Trigger ignored"')
+        if reply.startswith(f"{expected_error},"):
+            assert not channel.output_enabled
+            state = session.state
+        return reply
+
+    def restore_mode(session, command):
+        if when == "after" and command == "SOURce1:FREQuency:MODE CW" and session.state.ch1.list_runs:
+            assert not session.state.ch1.output_enabled
+            session.state.error_queue.append('-222,"Data out of range"')
+            return len(command)
+        return write(session, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", query_error_queue)
+    monkeypatch.setattr(SimulatedResource, "write", restore_mode)
+    assert main([
+        "run-frequency-step", "--start-frequency-hz", "1000", "--stop-frequency-hz", "3000",
+        "--frequency-step-hz", "1000", "--dwell-s", "0.001", "--simulate", "--json",
+    ]) == 130
+    assert interrupted and state is not None and not state.error_queue
+    capture = capsys.readouterr()
+    assert not capture.err
+    sequence = json.loads(capture.out)["sequence"]
+    assert sequence["cleanup"]["confirmed_off_channels"] == [1]
+    assert not state.ch1.output_enabled
+    error = sequence["failed_step"]["error"]
+    assert error["code"] == "interrupted"
+    if when == "before":
+        assert expected_error in error["message"]
+        assert state.ch1.frequency_mode == "CW" and state.ch1.continuous_trigger
+    else:
+        assert any(expected_error in message for message in error["cleanup_errors"])
+        assert state.ch1.frequency_mode == "LIST"
+    assert any(
+        "interrupted" in message and f"{when} trigger restoration" in message
+        for message in error["cleanup_errors"]
+    )
+
+
+@pytest.mark.parametrize("interrupt_at", ["write", "readback"])
+def test_frequency_step_ctrl_c_during_final_off_reports_interruption(interrupt_at, monkeypatch, capsys):
+    query, write = SimulatedResource.query, SimulatedResource.write
+    state = None
+    interrupted = False
+
+    def final_off(session, command):
+        nonlocal state, interrupted
+        channel = session.state.ch1
+        if command == "OUTPut1 OFF" and channel.list_runs and channel.frequency_mode == "CW":
+            state = session.state
+            if interrupt_at == "write" and not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt
+        return write(session, command)
+
+    def final_readback(session, command):
+        nonlocal interrupted
+        if state is not None and command == "OUTPut1?" and interrupt_at == "readback" and not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+        return query(session, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", final_off)
+    monkeypatch.setattr(SimulatedResource, "query", final_readback)
+    assert main([
+        "run-frequency-step", "--start-frequency-hz", "1000", "--stop-frequency-hz", "3000",
+        "--frequency-step-hz", "1000", "--dwell-s", "0.001", "--simulate", "--json",
+    ]) == ExitCode.INTERRUPTED
+    assert interrupted and state is not None and not state.ch1.output_enabled
+    capture = capsys.readouterr()
+    assert not capture.err
+    result = json.loads(capture.out)
+    assert result["success"] is False and result["error"].startswith("interrupted:")
+    sequence = result["sequence"]
+    assert sequence["completed_step_executions"] == sequence["completed_loops"] == 1
+    assert "failed_step" not in sequence
+    cleanup = sequence["cleanup"]
+    assert cleanup["attempted_channels"] == [1]
+    assert cleanup["confirmed_off_channels"] == ([1] if interrupt_at == "write" else [])
+    error, = cleanup["errors"]
+    assert error["channel"] == 1 and error["code"] == "visa_cleanup_error"

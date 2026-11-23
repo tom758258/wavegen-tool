@@ -10,6 +10,12 @@ import sys
 from enum import IntEnum
 from typing import Any, Sequence
 
+from wavegen_tool_core.basic_workflows import (
+    BASIC_WORKFLOW_COMMANDS,
+    QUICK_OUTPUT_PRESETS,
+    WORKFLOW_ARGUMENTS,
+    run_basic_workflow,
+)
 from wavegen_tool_core.software_sequence import (
     SOFTWARE_SEQUENCE_ACTION,
     SoftwareSequenceError,
@@ -826,6 +832,45 @@ def _add_arbitrary_parsers(subparsers: Any) -> None:
                                 help="Confirm removal of all volatile segments and sequences.")
 
 
+def _add_sequence_parsers(subparsers: Any) -> None:
+    descriptions = {
+        SOFTWARE_SEQUENCE_ACTION: "Run a finite software sequence.",
+        "run-timed-output": "Configure a waveform and enable output for a duration.",
+        "run-amplitude-ramp": "Step the amplitude of a sine waveform with output on.",
+        "run-output-cycle": "Repeat an output on/off cycle a finite number of times.",
+        "run-waveform-sequence": "Run a series of timed waveform configurations.",
+        "run-frequency-step": "Run a sine List Sweep with uniformly stepped frequencies.",
+        "apply-quick-output-preset": "Apply a built-in waveform setting with output off.",
+    }
+    for command, description in descriptions.items():
+        parser = subparsers.add_parser(command, help=description, allow_abbrev=False)
+        _add_simulate_argument(parser)
+        _add_validation_support_policy_argument(parser)
+        parser.add_argument("--resource", help="Explicit VISA resource or WAVEGEN_TOOL_RESOURCE.")
+        parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
+        parser.add_argument("--dry-run", action="store_true", help="Plan without using VISA.")
+        parser.add_argument("--model", choices=_REGISTERED_MODEL_IDS)
+        parser.add_argument("--json", action="store_true", dest="json_output")
+        if command == SOFTWARE_SEQUENCE_ACTION:
+            parser.add_argument("--file", required=True, help="Local software sequence JSON file.")
+            continue
+        _add_channel_argument(parser)
+        required, optional = WORKFLOW_ARGUMENTS[command]
+        for field in (*required, *optional):
+            flag = "--" + field.replace("_", "-")
+            if field in {"waveform", "waveforms"}:
+                parser.add_argument("--file", dest=field, required=True, help=f"Local {field} JSON file.")
+            elif field == "preset":
+                parser.add_argument(flag, choices=QUICK_OUTPUT_PRESETS, required=True)
+            elif field == "load":
+                parser.add_argument(flag, choices=("50", "high-z"), default=argparse.SUPPRESS)
+            else:
+                parser.add_argument(
+                    flag, type=int if field == "cycles" else float,
+                    required=field in required, default=argparse.SUPPRESS,
+                )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser without touching VISA."""
 
@@ -835,17 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_arbitrary_parsers(subparsers)
-    sequence_parser = subparsers.add_parser(
-        SOFTWARE_SEQUENCE_ACTION, help="Run a finite software sequence.", allow_abbrev=False,
-    )
-    _add_simulate_argument(sequence_parser)
-    _add_validation_support_policy_argument(sequence_parser)
-    sequence_parser.add_argument("--file", required=True, help="Local software sequence JSON file.")
-    sequence_parser.add_argument("--resource", help="Explicit VISA resource or WAVEGEN_TOOL_RESOURCE.")
-    sequence_parser.add_argument("--backend", default="system", help="VISA backend (default: system).")
-    sequence_parser.add_argument("--dry-run", action="store_true", help="Plan without using VISA.")
-    sequence_parser.add_argument("--model", choices=_REGISTERED_MODEL_IDS)
-    sequence_parser.add_argument("--json", action="store_true", dest="json_output")
+    _add_sequence_parsers(subparsers)
 
     identify_parser = subparsers.add_parser(
         "identify",
@@ -2153,7 +2188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "configure-prbs",
         "configure-output",
         "configure-sync",
-    } | ARBITRARY_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}
+    } | ARBITRARY_COMMANDS | BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}
     validation_only_live_commands = {
         "identify",
         "status",
@@ -2209,10 +2244,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(
                 "--model requires --validation-allow-pending-live-support"
             )
-    if args.command == SOFTWARE_SEQUENCE_ACTION:
+    if args.command in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         if args.validation_allow_pending_live_support:
             if args.dry_run or args.simulate or args.model is None:
-                parser.error("Software sequence validation policy requires an explicit --model in live mode")
+                label = "Software sequence" if args.command == SOFTWARE_SEQUENCE_ACTION else "Workflow"
+                parser.error(f"{label} validation policy requires an explicit --model in live mode")
         elif args.model is not None and not (args.dry_run or args.simulate):
             parser.error("--model requires --dry-run, --simulate, or --validation-allow-pending-live-support")
     if args.command == "configure-sync" and args.validation_allow_pending_live_support:
@@ -2251,7 +2287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         and args.resource is None
     ):
         parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
-    if args.command == SOFTWARE_SEQUENCE_ACTION:
+    if args.command in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         return _run_software_sequence(args)
     if args.command in ARBITRARY_COMMANDS:
         return _run_arbitrary(args)
@@ -3699,13 +3735,25 @@ def _run_prbs_dry_run(args: argparse.Namespace) -> int:
 def _run_software_sequence(args: argparse.Namespace) -> int:
     def operation() -> dict[str, object]:
         try:
-            document = read_software_sequence_file(args.file)
+            if args.command == SOFTWARE_SEQUENCE_ACTION:
+                execute = run_software_sequence
+                inputs = (read_software_sequence_file(args.file),)
+            else:
+                execute = run_basic_workflow
+                required, optional = WORKFLOW_ARGUMENTS[args.command]
+                arguments = {
+                    field: getattr(args, field)
+                    for field in (*required, *optional, "channel") if hasattr(args, field)
+                }
+                for field in arguments.keys() & {"waveform", "waveforms"}:
+                    arguments[field] = read_software_sequence_file(arguments[field])
+                inputs = (args.command, arguments)
             model = args.model or CANONICAL_MODEL_ID
             if args.dry_run:
-                return run_software_sequence(document, model=model)
+                return execute(*inputs, model=model)
             resource, factory = _simulated_target(model) if args.simulate else (args.resource, None)
-            return run_software_sequence(
-                document, resource=resource, backend=args.backend,
+            return execute(
+                *inputs, resource=resource, backend=args.backend,
                 **_validation_live_injection(args), **_factory_injection(args.simulate, factory),
             )
         except KeyboardInterrupt as exc:
@@ -4345,7 +4393,7 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
 
 
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
-    if action in ARBITRARY_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
+    if action in ARBITRARY_COMMANDS | BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         payload = dict(result, success=True, action=action, error=None)
         if not result["executed"]:
             payload["mode"] = "dry-run"
@@ -5458,9 +5506,10 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
 
 
 def _human_control_success(action: str, result: Any) -> str:
-    if action == SOFTWARE_SEQUENCE_ACTION:
+    if action in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
+        label = "Software sequence" if action == SOFTWARE_SEQUENCE_ACTION else action
         lines = [
-            f"Software sequence {result['status']} for {result['model']}.",
+            f"{label} {result['status']} for {result['model']}.",
             f"{result['step_count']} steps, {result['loop_count']} loops, "
             f"{result['completed_step_executions']} of {result['execution_units']} executions completed.",
             f"Total scheduled wait: {result['total_wait_seconds']:g} s.",

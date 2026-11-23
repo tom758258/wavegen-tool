@@ -34,10 +34,9 @@ The Worker has one active job slot. Orchestrators must handle `busy` and
 
 Manifest uses schema 2, declares Worker `v3-only` with `schema_versions=[3]`,
 `execution.model="multi_job"`, `execution.context_binding="per_command"`, and
-`common.async_jobs` contract version 1. The 31 domain commands are explicitly
+`common.async_jobs` and `common.job_cancel` contract version 1. Domain commands are explicitly
 `async_job` in the Worker contract; no Manifest commands table is duplicated.
-Runtime features are fixed and match this declaration. No cancellation or
-streaming is adopted.
+Runtime features are fixed and match this declaration.
 
 The four lifecycle clients keep outer JSON schema 2 and retain the complete
 Worker v3 HTTP object under `worker_response`. Outer client errors and request
@@ -141,6 +140,12 @@ include `arguments.confirm_output: true` after operator confirmation. Preview
 the total wait in a dry-run before submitting a long job. Use the terminal
 outcome to decide whether the next instrument operation can proceed.
 See [Software Sequences](wavegen-worker-contract.md#software-sequences).
+
+For a supported job, read `cancel_url` from the ready or HTTP status response
+and apply the Common loopback rules before sending
+`{"schema_version":3,"worker_job_id":"<accepted id>"}`. Keep observing the
+same job until it reports its actual terminal outcome and cleanup. Use STOP
+to drain the accepted job and shut the Worker down.
 
 ## Subprocess Example
 

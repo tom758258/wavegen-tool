@@ -496,7 +496,7 @@ function Get-AdvancedReadbackExpectation {
 }
 
 
-$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence', 'software-sequence')
+$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence', 'software-sequence', 'basic-workflows')
 
 function Resolve-SelectedValidationModes {
     param(
@@ -636,6 +636,121 @@ function Assert-SoftwareSequenceResult {
         if ($upload.sample_count -ne 16 -or $native.step_count -ne 1 -or
             $upload.name -notin $catalogNames -or $native.name -notin $catalogNames) {
             throw 'Software sequence upload and native sequence were not confirmed in the Arbitrary catalog.'
+        }
+    }
+}
+
+function Get-BasicWorkflowValidationRecipes {
+    param([int]$Channel, [string]$FixtureDirectory)
+
+    $sine = @{ action = 'configure-sine'; arguments = @{ frequency_hz = 1000; amplitude_vpp = 0.1 } }
+    $square = @{ action = 'configure-square'; arguments = @{ frequency_hz = 2000; amplitude_vpp = 0.1 } }
+    $sineFile = 'timed-output.json'
+    $waveformsFile = 'waveform-sequence.json'
+    if ($FixtureDirectory) {
+        [void][IO.Directory]::CreateDirectory($FixtureDirectory)
+        $sineFile = Join-Path $FixtureDirectory $sineFile
+        $waveformsFile = Join-Path $FixtureDirectory $waveformsFile
+        Write-Utf8NoBomText -LiteralPath $sineFile -Text (ConvertTo-Json -InputObject $sine -Depth 10 -Compress)
+        $waveforms = @(@{ waveform = $sine; duration_s = 1 }, @{ waveform = $square; duration_s = 1 })
+        Write-Utf8NoBomText -LiteralPath $waveformsFile -Text (ConvertTo-Json -InputObject $waveforms -Depth 10 -Compress)
+    }
+
+    function New-BasicRecipe {
+        param($Name, $Arguments, $Actions, $Wait, $Readback, $Observe = $null, [int]$Loops = 1, $Values = @{})
+        $observation = if ($Observe) { @{ expected = $Observe } }
+        [pscustomobject]@{
+            name = "ch$Channel/$Name"; family = 'basic-workflows'; channel = $Channel
+            required = $true; observation = $observation
+            steps = @([pscustomobject]@{
+                arguments = @($Arguments); readback = $Readback; result = @{}
+                workflow_intent = @{
+                    actions = @($Actions); wait_seconds = $Wait; loop_count = $Loops
+                    output_on = 'output' -in $Actions -or 'run-sine-list-sweep-once' -in $Actions; values = $Values
+                }
+            })
+        }
+    }
+
+    New-BasicRecipe 'timed-output' @('run-timed-output', '--file', $sineFile, '--duration-s', '2') `
+        @('configure-sine', 'output', 'wait', 'output') 2 @{ function = 'SIN' } `
+        'Observe a 1 kHz sine for about two seconds, followed by output OFF.'
+    New-BasicRecipe 'amplitude-ramp' @('run-amplitude-ramp', '--start-vpp', '0.1', '--stop-vpp', '0.25', '--step-vpp', '0.1', '--dwell-s', '1') `
+        @('configure-sine', 'output', 'wait', 'update-sine-amplitude', 'wait', 'update-sine-amplitude', 'wait', 'output') 3 `
+        @{ function = 'SIN'; amplitude = 0.25 } 'Observe the sine amplitude step from 0.1 to 0.2 to 0.25 Vpp, followed by output OFF.' `
+        -Values @{ ramp_points = @(0.1, 0.2, 0.25) }
+    New-BasicRecipe 'output-cycle' @('run-output-cycle', '--on-s', '1', '--off-s', '1', '--cycles', '2') `
+        @('output', 'wait', 'output', 'wait') 4 @{} 'Observe two one-second ON periods separated by a one-second OFF period.' -Loops 2
+    New-BasicRecipe 'waveform-sequence' @('run-waveform-sequence', '--file', $waveformsFile) `
+        @('configure-sine', 'output', 'wait', 'output', 'configure-square', 'output', 'wait', 'output') 2 @{ function = 'SQU'; frequency_hz = 2000 } `
+        'Observe a one-second sine followed by a one-second square and output OFF.'
+    New-BasicRecipe 'frequency-step' @('run-frequency-step', '--start-frequency-hz', '1000', '--stop-frequency-hz', '3000', '--frequency-step-hz', '1000', '--dwell-s', '1') `
+        @('run-sine-list-sweep-once') 3 @{ function = 'SIN'; frequency_hz = 1000 } `
+        'Use a scope to confirm a 1 kHz start, then 2 kHz and 3 kHz once each, with a full one-second dwell at each point and output OFF after 3 kHz. Check for any return to 1 kHz before OFF.' `
+        -Values @{ frequencies_hz = @(1000, 2000, 3000); dwell_s = 1; trigger_source = 'immediate' }
+    New-BasicRecipe 'quick-output-preset' @('apply-quick-output-preset', '--preset', 'square') `
+        @('configure-square') 0 @{ function = 'SQU'; frequency_hz = 1000; amplitude = 0.1; offset_v = 0; load = 'high-z' } `
+        -Values @{ frequency_hz = 1000; amplitude_vpp = 0.1; offset_v = 0; load = 'high-z'; duty_cycle_percent = 50 }
+}
+
+function Assert-BasicWorkflowResult {
+    param($Payload, $Intent, [int]$Channel, [switch]$DryRun)
+    $count = @($Intent.actions).Count
+    $total = $count * $Intent.loop_count
+    if ($Payload.step_count -ne $count -or $Payload.loop_count -ne $Intent.loop_count -or
+        $Payload.execution_units -ne $total -or $Payload.total_wait_seconds -ne $Intent.wait_seconds -or
+        (@($Payload.channels) -join ',') -cne [string]$Channel) {
+        throw 'Basic workflow did not report the expected steps, wait, cycles, or channel.'
+    }
+    if ($DryRun) {
+        if ($Payload.executed -ne $false -or $Payload.status -cne 'planned' -or $null -ne $Payload.cleanup) {
+            throw 'Invalid hardware-free basic workflow plan.'
+        }
+        $steps = @($Payload.steps)
+        $actions = $Intent.actions
+    } else {
+        if ($Payload.executed -ne $true -or $Payload.status -cne 'completed' -or
+            $Payload.completed_loops -ne $Intent.loop_count -or $Payload.completed_step_executions -ne $total -or
+            $null -eq $Payload.cleanup -or @($Payload.cleanup.errors).Count -ne 0 -or
+            (@($Payload.cleanup.confirmed_off_channels) -join ',') -cne [string]$Channel) {
+            throw 'Basic workflow did not complete with confirmed output OFF.'
+        }
+        $steps = @($Payload.results)
+        $actions = @($Intent.actions) * $Intent.loop_count
+    }
+    if (($steps.action -join ',') -cne ($actions -join ',')) { throw 'Unexpected workflow step order.' }
+
+    $index = 0
+    foreach ($outputStep in @($steps | Where-Object action -CEQ 'output')) {
+        $expectedOn = $index % 2 -eq 0
+        $index += 1
+        if (($DryRun -and $outputStep.enabled -ne $expectedOn) -or
+            (-not $DryRun -and $outputStep.output_state -cne $(if ($expectedOn) { 'on' } else { 'off' }))) {
+            throw 'Unexpected explicit output state.'
+        }
+    }
+    foreach ($key in $Intent.values.Keys) {
+        if ($key -eq 'ramp_points') {
+            $updates = @($steps | Where-Object action -CEQ 'update-sine-amplitude')
+            $actual = @($steps[0].amplitude_vpp) + @($updates.amplitude_vpp)
+            if (-not $DryRun -and @($updates | Where-Object output_state -CNE 'on').Count) {
+                throw 'Amplitude changed without output ON.'
+            }
+        } else {
+            $actual = $steps[0].$key
+        }
+        $expected = $Intent.values[$key]
+        if ($expected -is [string]) {
+            if ($actual -cne $expected) { throw "Unexpected basic workflow value $key." }
+            continue
+        }
+        $actualValues = @($actual)
+        $expectedValues = @($expected)
+        if ($actualValues.Count -ne $expectedValues.Count) { throw "Unexpected basic workflow value count for $key." }
+        for ($point = 0; $point -lt $expectedValues.Count; $point++) {
+            if ($null -eq $actualValues[$point] -or [double]$actualValues[$point] -ne [double]$expectedValues[$point]) {
+                throw "Unexpected basic workflow value $key."
+            }
         }
     }
 }
@@ -941,6 +1056,9 @@ function Get-FullValidationInventory {
         }
     }
     foreach ($channel in $Channels) {
+        if ($channel -eq 1 -and 'basic-workflows' -in $Modes) {
+            Get-BasicWorkflowValidationRecipes -Channel $channel -FixtureDirectory $SequenceFixtureDirectory
+        }
         if ('software-sequence' -in $Modes) {
             $sineStep = @{
                 action = 'configure-sine'
