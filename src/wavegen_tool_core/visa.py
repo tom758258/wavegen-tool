@@ -3107,7 +3107,7 @@ def _check_frequency_step_errors(session: VisaSession, phase: str) -> None:
 
 def _drain_frequency_step_errors(
     session: VisaSession, when: str
-) -> tuple[VisaWriteError | None, ErrorQueueQueryError | None]:
+) -> tuple[VisaWriteError | None, ErrorQueueQueryError | SoftwareSequenceInterrupted | None]:
     entries = []
     read_error = None
     # Allow the no-error response after the normal queue depth and bound reads
@@ -3117,6 +3117,11 @@ def _drain_frequency_step_errors(
             entry = _query_frequency_step_error(session, when)
         except ErrorQueueQueryError as exc:
             read_error = exc
+            break
+        except KeyboardInterrupt as exc:
+            # Previous reads have already removed their entries from the instrument.
+            read_error = SoftwareSequenceInterrupted(f"Frequency Step error queue read was interrupted {when}.")
+            read_error.__cause__ = exc
             break
         if entry.code == ERROR_QUEUE_NO_ERROR_CODE:
             break
@@ -3182,17 +3187,22 @@ def _run_sine_list_sweep_once(
         finally:
             cleanup_errors = []
             cleanup_cause = None
+            cleanup_interrupt = None
+            output_off = False
             cleanup_message = "Could not complete Frequency Step output OFF and trigger cleanup."
             try:
                 session.write(f"{output} OFF")
                 if _parse_status_output(session.query(f"{output}?")) != "off":
                     raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
+                output_off = True
                 # The queue is FIFO. Establish an empty queue before restoration
                 # so pending errors cannot be attributed to restoration writes.
                 pending_error, read_error = _drain_frequency_step_errors(session, "before trigger restoration")
                 if read_error is not None:
                     cleanup_errors.append(str(read_error))
                     cleanup_cause = read_error
+                    if isinstance(read_error, SoftwareSequenceInterrupted):
+                        cleanup_interrupt = read_error
                 if pending_error is not None:
                     # An instrument failure takes precedence over cooperative cancellation.
                     if primary_error is None or isinstance(primary_error, SoftwareSequenceCancelled):
@@ -3200,8 +3210,6 @@ def _run_sine_list_sweep_once(
                         primary_error = pending_error
                     else:
                         primary_error.args = (f"{primary_error} {pending_error}",)
-                if primary_error is not None:
-                    primary_error.attach_context(output_state="off")
                 session.write(f"SOURce{channel}:FREQuency:MODE CW")
                 session.write(f"{delay} {_format_scpi_number(saved_delay)}")
                 session.write(f"{count} {int(saved_count)}")
@@ -3213,9 +3221,26 @@ def _run_sine_list_sweep_once(
                     if error is not None:
                         cleanup_errors.append(str(error))
                         cleanup_cause = error
+                        if isinstance(error, SoftwareSequenceInterrupted):
+                            cleanup_interrupt = error
+            except KeyboardInterrupt as exc:
+                phase = "trigger restoration" if output_off else "output OFF confirmation"
+                cleanup_errors.append(f"Frequency Step {phase} was interrupted.")
+                cleanup_cause = cleanup_interrupt = exc
             except Exception as exc:
                 cleanup_errors.append(str(exc) if isinstance(exc, WavegenError) else cleanup_message)
                 cleanup_cause = exc
+            if cleanup_interrupt is not None and not isinstance(primary_error, SoftwareSequenceInterrupted):
+                message = "Software sequence interrupted."
+                if primary_error is not None:
+                    message += f" {primary_error}"
+                interrupted = SoftwareSequenceInterrupted(message)
+                if primary_error is not None:
+                    interrupted.attach_cleanup_errors(primary_error.cleanup_errors)
+                primary_cause = primary_error or cleanup_interrupt
+                primary_error = interrupted
+            if output_off and primary_error is not None:
+                primary_error.attach_context(output_state="off")
             if cleanup_errors:
                 if primary_error is None:
                     raise VisaCleanupError(cleanup_message).attach_cleanup_errors(tuple(cleanup_errors)) from cleanup_cause

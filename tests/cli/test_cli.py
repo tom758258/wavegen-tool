@@ -5,7 +5,7 @@ import pytest
 
 import wavegen_tool_cli.cli as cli_module
 from wavegen_tool_cli.cli import ExitCode, main
-from wavegen_tool_core import ErrorQueueQueryError, visa
+from wavegen_tool_core import ErrorQueueQueryError, SimulatedResource, visa
 
 
 USB_RESOURCE = "USB0::0x0000::0x0000::MY00000000::INSTR"
@@ -4955,3 +4955,60 @@ def test_amplitude_ramp_cli_validates_parameters_and_interrupts_safely(monkeypat
     result = json.loads(capsys.readouterr().out)
     assert result["sequence"]["failed_step"]["error"]["code"] == "interrupted"
     assert result["sequence"]["cleanup"]["confirmed_off_channels"] == [1]
+
+
+@pytest.mark.parametrize("when", ["before", "after"])
+def test_frequency_step_ctrl_c_during_cleanup_preserves_already_read_error(when, monkeypatch, capsys):
+    query, write = SimulatedResource.query, SimulatedResource.write
+    expected_error = "-211" if when == "before" else "-222"
+    state = None
+    interrupted = False
+
+    def query_error_queue(session, command):
+        nonlocal state, interrupted
+        channel = session.state.ch1
+        if command != "SYSTem:ERRor?" or not channel.list_runs:
+            return query(session, command)
+        if state is not None and not interrupted:
+            assert not channel.output_enabled
+            interrupted = True
+            raise KeyboardInterrupt
+        reply = query(session, command)
+        if channel.output_enabled and when == "before":
+            session.state.error_queue.append('-211,"Trigger ignored"')
+        if reply.startswith(f"{expected_error},"):
+            assert not channel.output_enabled
+            state = session.state
+        return reply
+
+    def restore_mode(session, command):
+        if when == "after" and command == "SOURce1:FREQuency:MODE CW" and session.state.ch1.list_runs:
+            assert not session.state.ch1.output_enabled
+            session.state.error_queue.append('-222,"Data out of range"')
+            return len(command)
+        return write(session, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", query_error_queue)
+    monkeypatch.setattr(SimulatedResource, "write", restore_mode)
+    assert main([
+        "run-frequency-step", "--start-frequency-hz", "1000", "--stop-frequency-hz", "3000",
+        "--frequency-step-hz", "1000", "--dwell-s", "0.001", "--simulate", "--json",
+    ]) == 130
+    assert interrupted and state is not None and not state.error_queue
+    capture = capsys.readouterr()
+    assert not capture.err
+    sequence = json.loads(capture.out)["sequence"]
+    assert sequence["cleanup"]["confirmed_off_channels"] == [1]
+    assert not state.ch1.output_enabled
+    error = sequence["failed_step"]["error"]
+    assert error["code"] == "interrupted"
+    if when == "before":
+        assert expected_error in error["message"]
+        assert state.ch1.frequency_mode == "CW" and state.ch1.continuous_trigger
+    else:
+        assert any(expected_error in message for message in error["cleanup_errors"])
+        assert state.ch1.frequency_mode == "LIST"
+    assert any(
+        "interrupted" in message and f"{when} trigger restoration" in message
+        for message in error["cleanup_errors"]
+    )
