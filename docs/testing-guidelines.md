@@ -167,8 +167,9 @@ Do not duplicate waveform parameter boundary permutations in runner tests.
 Admission evidence requires preflight Full PASS + PlanOnly Full PASS + Real
 Full PASS, all required cases PASS, cleanup PASS, outputs safe OFF, a clean
 bounded final error queue, and shareable evidence PASS. This covers the exact
-model and revision's exercised Direct CLI scope only under
-Windows PowerShell, project Python, explicit USB resource, and system VISA.
+model and revision's exercised Direct CLI scope under Windows PowerShell,
+project Python, and system VISA with a matching explicit USB or TCPIP (LAN)
+resource.
 Required FAIL/N/A, missing cases, cleanup errors, unconfirmed OFF, dirty or
 unbounded final queue, and shareable generation failure must fail the gate.
 Only output-control and operator-confirmed observation cases may enable output.

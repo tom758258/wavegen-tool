@@ -715,8 +715,8 @@ try {
             $backendName = "system"
         }
     }
-    if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop' -or $connectionName -cne 'usb' -or $backendName -cne 'system')) {
-        throw 'Full requires Windows PowerShell, Connection usb, and Backend system.'
+    if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop' -or $backendName -cne 'system')) {
+        throw 'Full requires Windows PowerShell and Backend system.'
     }
     if ($Suite -eq 'full' -and (Get-FullPath -Path $Python -BaseRoot $repoRoot) -ine (Join-Path $repoRoot '.venv\Scripts\python.exe')) {
         throw 'Full requires the project Python environment (.venv/Scripts/python.exe).'
@@ -744,7 +744,7 @@ $report = [pscustomobject][ordered]@{
     target = $expectedModel
     expected_model = $expectedModel
     target_capability_model = $targetCapabilityModel
-    reference_environment = if ($Suite -eq 'full') { 'Windows PowerShell; project Python; explicit USB resource; system VISA' } else { $null }
+    reference_environment = if ($Suite -eq 'full') { "Windows PowerShell; project Python; explicit $($connectionName.ToUpperInvariant()) resource; system VISA" } else { $null }
     connection = $connectionName
     backend = $backendName
     resource = $Resource

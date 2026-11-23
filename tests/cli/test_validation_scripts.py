@@ -15,7 +15,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT_SCRIPT = REPO_ROOT / "scripts" / "preflight-cli.ps1"
 LIVE_SCRIPT = REPO_ROOT / "scripts" / "live-cli-check.ps1"
 POWERSHELL = shutil.which("powershell")
-USB_RESOURCE = "USB0::0x0957::0x0000::SYNTHETIC123::INSTR"
+USB_SERIAL = "SYNTHETIC123"
+USB_RESOURCE = f"USB0::0x0957::0x0000::{USB_SERIAL}::INSTR"
+TCPIP_HOST = "synthetic.invalid"
+TCPIP_RESOURCE = f"TCPIP0::{TCPIP_HOST}::inst0::INSTR"
 
 
 @pytest.fixture
@@ -331,10 +334,12 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
             [
                 "-Target",
                 "keysight-33512b",
+                "-Suite",
+                "full",
                 "-Connection",
                 "usb",
                 "-Resource",
-                "TCPIP0::synthetic.invalid::inst0::INSTR",
+                TCPIP_RESOURCE,
                 "-PlanOnly",
             ],
             "does not match",
@@ -343,6 +348,8 @@ def test_live_redirected_stdin_cannot_authorize_hardware(
             [
                 "-Target",
                 "keysight-33512b",
+                "-Suite",
+                "full",
                 "-Connection",
                 "tcpip",
                 "-Resource",
@@ -402,10 +409,14 @@ def _preflight_diagnostics(artifact_root: Path) -> str:
     return " preflight failures=" + json.dumps(failures[:16], ensure_ascii=False)
 
 
-@pytest.mark.parametrize("model,channels", [
-    ("33521b", [1]), ("33512b", [1, 2]), ("33510b", [1, 2]),
+@pytest.mark.parametrize("model,channels,connection,resource,private_token", [
+    ("33521b", [1], "tcpip", TCPIP_RESOURCE, TCPIP_HOST),
+    ("33512b", [1, 2], "usb", USB_RESOURCE, USB_SERIAL),
+    ("33510b", [1, 2], "usb", USB_RESOURCE, USB_SERIAL),
 ])
-def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, model, channels):
+def test_full_plan_inventory_and_privacy(
+    artifact_root, monkeypatch, fake_git, model, channels, connection, resource, private_token,
+):
     # Any unexpected attempt to construct VISA fails the subprocess and leaves a marker.
     guard = artifact_root / "guard"
     guard.mkdir()
@@ -420,7 +431,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     monkeypatch.setenv("PYTHONPATH", str(guard))
     result = _run_script(
         LIVE_SCRIPT, artifact_root, "-Target", f"keysight-{model}", "-Suite", "full",
-        "-Connection", "usb", "-Backend", "system", "-Resource", USB_RESOURCE, "-PlanOnly",
+        "-Connection", connection, "-Backend", "system", "-Resource", resource, "-PlanOnly",
     )
     assert result.returncode == 0, result.stdout + result.stderr + _preflight_diagnostics(artifact_root)
     assert not marker.exists()
@@ -435,7 +446,12 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     assert report["visa_io_performed"] is False
     assert report["channels_planned"] == channels
     assert report["channels_tested"] == []
+    assert report["connection"] == connection
+    assert report["backend"] == "system"
+    assert report["resource"] == "<redacted-resource>"
     assert "Windows PowerShell" in report["reference_environment"]
+    assert f"explicit {connection.upper()} resource" in report["reference_environment"]
+    assert "system VISA" in report["reference_environment"]
     inventory = report["full_inventory"]
     expected_primary = {
         "status",
@@ -526,9 +542,10 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     } | ({"ch1/sequence-bus-functional", "ch1/sequence-external"} if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
-    for private in (USB_RESOURCE, "SYNTHETIC123", str(REPO_ROOT), str(run)):
+    for private in (resource, private_token, str(REPO_ROOT), str(run)):
         assert private not in text
-    assert USB_RESOURCE not in result.stdout
+    assert resource not in result.stdout
+    assert private_token not in result.stdout
     assert _read_report(run, "shareable")["promotes_live_support"] is False
     preflight = next((artifact_root / "_preflight").glob("run_*/shareable/report.json"))
     readiness = json.loads(preflight.read_text(encoding="utf-8"))
@@ -752,17 +769,17 @@ def test_single_unsupported_arbitrary_mode_is_refused(artifact_root, fake_git):
 
 
 
-@pytest.mark.parametrize("connection,backend,resource", [
-    ("tcpip", "system", "TCPIP0::synthetic.invalid::inst0::INSTR"),
-    ("usb", "@py", USB_RESOURCE),
+@pytest.mark.parametrize("connection,resource", [
+    ("tcpip", TCPIP_RESOURCE),
+    ("usb", USB_RESOURCE),
 ])
-def test_full_reference_environment_fails_closed(artifact_root, connection, backend, resource):
+def test_full_reference_environment_fails_closed(artifact_root, connection, resource):
     result = _run_script(
         LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b", "-Suite", "full",
-        "-Connection", connection, "-Backend", backend, "-Resource", resource, "-PlanOnly",
+        "-Connection", connection, "-Backend", "@py", "-Resource", resource, "-PlanOnly",
     )
     assert result.returncode == 2
-    assert "Full requires" in result.stderr
+    assert "Backend system" in result.stderr
     assert not list(artifact_root.iterdir())
 
 
