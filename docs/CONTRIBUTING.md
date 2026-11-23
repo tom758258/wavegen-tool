@@ -128,10 +128,11 @@ $env:WAVEGEN_TOOL_RESOURCE = "USB0::...::INSTR"
 ```
 
 `-Target`, `-Connection`, and `-Resource` are required. The target must be one
-exact model ID; `all` is not accepted. Connection is `usb` or `tcpip` and must
-match the explicit resource prefix. `-Backend` defaults to `system`.
-`-Python` and `-OutputRoot` are also supported; the live output root defaults
-to `.tmp_tests\cli_live`.
+exact model ID; `all` is not accepted. For LAN PlanOnly and Real Live, use
+`-Connection tcpip` and pass the selected `TCPIP...` resource. For USB, use
+`-Connection usb` and pass the selected `USB...` resource. `-Backend` defaults
+to `system`. The runner also accepts `-Python` and `-OutputRoot`. The live
+output root defaults to `.tmp_tests\cli_live`.
 
 PlanOnly does not create a VISA resource manager, open VISA, perform hardware
 I/O, or send live SCPI. The resource remains required so that the plan
@@ -196,12 +197,12 @@ requirement. Standalone Full preflight also requires Windows PowerShell Desktop
 on Windows and project Python; it has no connection/backend parameters.
 
 Full admission is limited to Windows PowerShell, the project's
-`.venv/Scripts/python.exe`, an explicit operator-supplied USB resource, and
-`-Backend system`. Other connection/backend combinations fail closed for Full;
-Smoke retains its existing connection/backend behavior. Detected `*IDN?` must
-exactly match `-Target`. Neither suite scans, guesses, recalls a setup, or
-changes coupling/tracking automatically. Smoke, Full Preflight, and Full PlanOnly
-never reset the instrument. Real Live Full alone performs a bounded `*RST`
+`.venv/Scripts/python.exe`, an explicit operator-supplied USB or TCPIP (LAN)
+resource with a matching `-Connection`, and `-Backend system`. Full rejects
+`@py` for either connection. Detected `*IDN?` must exactly match `-Target`.
+Neither suite scans, guesses, recalls a setup, or changes coupling/tracking
+automatically. Smoke, Full Preflight, and Full PlanOnly never reset the
+instrument. Real Live Full alone performs a bounded `*RST`
 before every independent case, after safe-off checks; it never resets between
 steps of the same case.
 

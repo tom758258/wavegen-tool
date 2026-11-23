@@ -1240,7 +1240,7 @@ requires the operator to type `CLEAR` separately at that exact step.
 | `-Suite` | Optional | Optional | `smoke`; other value `full` |
 | `-Modes` | Full only | Full only | All applicable families when omitted; comma-separated or array |
 | `-Target` | Optional | Required | Preflight `all`; Live one exact registered model |
-| `-Connection` | Not used | Required | `usb` or `tcpip`, matching Resource; Full requires `usb` |
+| `-Connection` | Not used | Required | `usb` or `tcpip` (LAN), matching the resource prefix |
 | `-Resource` | Not used | Required | Explicit operator-chosen VISA resource, including PlanOnly |
 | `-Backend` | Not used | Optional | `system`; Full requires System VISA |
 | `-PlanOnly` | Not used | Optional switch | No VISA manager, hardware I/O, reset or output |
@@ -1294,12 +1294,14 @@ are created, and records `git_head` and `git_clean=true`. Smoke has no clean-tre
 requirement. Full preflight also requires Windows PowerShell Desktop on Windows
 and the project Python environment.
 
-Full requires Windows PowerShell, the project `.venv/Scripts/python.exe`,
-`-Connection usb`, `-Backend system`, and an explicit resource whose detected
-identity exactly matches `-Target`. Add `-Suite full` to each command below for
-Full admission. Preflight Full, PlanOnly Full, and Real Full must all pass, with
-all required cases PASS, successful cleanup, outputs confirmed safe OFF, a clean
-final error queue, and successfully generated shareable evidence. For currently admitted Product Live families this is eligible evidence for a
+Full requires Windows PowerShell, the project `.venv/Scripts/python.exe`, and
+`-Backend system`. Use `-Connection usb` for an explicit `USB...` resource or
+`-Connection tcpip` for an explicit `TCPIP...` (LAN) resource. The identity
+detected during Real Live must exactly match `-Target`. Add `-Suite full` to
+each command below for Full admission. Preflight Full, PlanOnly Full, and
+Real Full must all pass, with all required cases PASS, successful cleanup,
+outputs confirmed safe OFF, a clean final error queue, and successfully
+generated shareable evidence. For currently admitted Product Live families this is eligible evidence for a
 separate model/revision review, not automatic promotion. Contributor-only
 Arbitrary/Sequence results do not open Product Live; 33510B remains validation-pending.
 See [the full inventory and acceptance rules](../CONTRIBUTING.md#real-live).
