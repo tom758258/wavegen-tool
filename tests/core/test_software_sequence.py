@@ -484,6 +484,8 @@ def test_frequency_step_uses_list_sweep_limits_and_dwell(fake_instrument, monkey
     assert [entry for entry in commands if entry in setup_to_start] == list(setup_to_start)
     start = commands.index("INITiate1:IMMediate")
     assert commands[start + 1 : start + 3] == ("SYSTem:ERRor?", "STATus:OPERation:CONDition?")
+    off = commands.index("OUTPut1 OFF", start)
+    assert commands[off + 1 : off + 4] == ("OUTPut1?", "SYSTem:ERRor?", "SOURce1:FREQuency:MODE CW")
     result = run_basic_workflow("run-frequency-step", arguments, resource=state.resource_name)
     assert result["results"][0]["frequencies_hz"] == (800, 600, 400, 250)
     assert result["results"][0]["dwell_s"] == 1.25
@@ -506,27 +508,49 @@ def test_frequency_step_uses_list_sweep_limits_and_dwell(fake_instrument, monkey
                 run_basic_workflow("run-frequency-step", request, model=MODEL)
 
 
-@pytest.mark.parametrize("failure", ["start_readback", "initiation", "startup_queue", "startup_queue_and_cleanup"])
+@pytest.mark.parametrize("failure", [
+    "start_readback", "initiation", "startup_queue", "startup_queue_and_cleanup",
+    "two_startup_errors", "two_startup_errors_and_restore", "two_startup_errors_and_queue_read",
+])
 def test_frequency_step_failure_keeps_output_safe_and_retains_cleanup_error(fake_instrument, monkeypatch, failure):
     from wavegen_tool_core import run_basic_workflow
 
     state, writes, _ = fake_instrument
+    state.ch1.trigger_count = 19
     write, query = SimulatedResource.write, SimulatedResource.query
+    two_errors = failure.startswith("two_startup_errors")
+    traffic = []
 
     def fail_write(session, command):
+        traffic.append(command)
+        if command == "SOURce1:FREQuency:MODE LIST" and two_errors:
+            state.error_queue.append('-221,"Settings conflict"')
+            return
         if command == "INITiate1:IMMediate":
             if failure == "initiation":
                 raise OSError("LIST initiation failed")
             assert state.ch1.output_enabled
-            state.error_queue.append('-221,"Settings conflict"')
+            entry = '-211,"Trigger ignored"' if two_errors else '-221,"Settings conflict"'
+            state.error_queue.append(entry)
             return
         if failure == "startup_queue_and_cleanup" and command == "OUTPut1 OFF" and state.ch1.output_enabled:
             raise OSError("Output OFF failed")
+        if failure == "two_startup_errors_and_restore" and command == "TRIGger1:COUNt 19":
+            state.error_queue.append('-222,"Data out of range"')
+            return
         return write(session, command)
 
     def fail_query(session, command):
+        traffic.append(command)
         if failure == "start_readback" and command == "SOURce1:FREQuency?":
             return "3000"
+        if (
+            failure == "two_startup_errors_and_queue_read"
+            and command == "SYSTem:ERRor?"
+            and "INITiate1:IMMediate" in traffic
+            and not state.ch1.output_enabled
+        ):
+            return "malformed response"
         return query(session, command)
 
     monkeypatch.setattr(SimulatedResource, "write", fail_write)
@@ -549,6 +573,25 @@ def test_frequency_step_failure_keeps_output_safe_and_retains_cleanup_error(fake
         assert "-221" in str(error.value)
         assert "Settings conflict" in str(error.value)
         assert not state.error_queue
+    if two_errors:
+        start = traffic.index("INITiate1:IMMediate")
+        assert traffic[start + 1 : start + 4] == ["SYSTem:ERRor?", "OUTPut1 OFF", "OUTPut1?"]
+        report = error.value.details["failed_step"]["error"]
+        assert "-221" in report["message"]
+        if failure == "two_startup_errors_and_queue_read":
+            assert "error queue" in report["message"]
+            assert state.ch1.trigger_count == 19
+            assert not error.value.cleanup_errors
+        else:
+            assert "-211" in report["message"] and "Trigger ignored" in report["message"]
+            assert not state.error_queue
+            if failure == "two_startup_errors_and_restore":
+                assert "-222" not in report["message"]
+                diagnostic, = report["cleanup_errors"]
+                assert "-222" in diagnostic and "-211" not in diagnostic
+            else:
+                assert not error.value.cleanup_errors
+                assert state.ch1.trigger_count == 19
     if failure == "startup_queue_and_cleanup":
         assert cleanup["errors"] and not cleanup["confirmed_off_channels"]
         assert error.value.cleanup_errors

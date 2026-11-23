@@ -3061,6 +3061,7 @@ def _plan_sine_list_sweep_once(model: str, arguments: dict[str, object]) -> dict
             _OPERATION_CONDITION_QUERY,
             f"OUTPut{channel} OFF",
             f"OUTPut{channel}?",
+            SYSTEM_ERROR_QUERY,
             f"SOURce{channel}:FREQuency:MODE CW",
             SYSTEM_ERROR_QUERY,
         ),
@@ -3089,13 +3090,37 @@ def _wait_for_counted_list(
         wait(0.02)
 
 
-def _check_frequency_step_errors(session: VisaSession, phase: str) -> None:
+def _query_frequency_step_error(session: VisaSession, when: str) -> SystemErrorEntry:
     try:
-        entry = _parse_error_queue_entry(session.query(SYSTEM_ERROR_QUERY))
+        return _parse_error_queue_entry(session.query(SYSTEM_ERROR_QUERY))
     except Exception as exc:
-        raise ErrorQueueQueryError(f"Could not read the Frequency Step error queue after {phase}.") from exc
+        raise ErrorQueueQueryError(f"Could not read the Frequency Step error queue {when}.") from exc
+
+
+def _check_frequency_step_errors(session: VisaSession, phase: str) -> None:
+    entry = _query_frequency_step_error(session, f"after {phase}")
     if entry.code != ERROR_QUEUE_NO_ERROR_CODE:
         raise VisaWriteError(f"Frequency Step {phase} instrument error ({entry.code}): {entry.message}")
+
+
+def _drain_frequency_step_errors(session: VisaSession, when: str) -> WavegenError | None:
+    entries = []
+    # Allow the no-error response after the normal queue depth and bound reads
+    # if the instrument keeps reporting errors.
+    for _ in range(DEFAULT_ERROR_QUEUE_MAX_READS + 1):
+        try:
+            entry = _query_frequency_step_error(session, when)
+        except ErrorQueueQueryError as exc:
+            problem = str(exc)
+            break
+        if entry.code == ERROR_QUEUE_NO_ERROR_CODE:
+            if not entries:
+                return None
+            return VisaWriteError(f"Frequency Step instrument errors {when}: " + " | ".join(entries))
+        entries.append(f"({entry.code}): {entry.message}")
+    else:
+        problem = f"Could not confirm an empty Frequency Step error queue {when} within the read limit."
+    return ErrorQueueQueryError(" ".join((problem, *entries)))
 
 
 def _run_sine_list_sweep_once(
@@ -3122,6 +3147,7 @@ def _run_sine_list_sweep_once(
             raise StatusQueryError("Invalid Frequency Step trigger settings.")
 
         primary_error = None
+        primary_cause = None
         try:
             for command in plan.setup():
                 session.write(command)
@@ -3139,22 +3165,32 @@ def _run_sine_list_sweep_once(
             check_cancel()
         except (WavegenError, KeyboardInterrupt) as exc:
             primary_error = exc
-            raise
         except Exception as exc:
             primary_error = VisaWriteError("Could not apply the Frequency Step command.")
-            raise primary_error from exc
+            primary_cause = exc
         finally:
             try:
                 session.write(f"{output} OFF")
                 if _parse_status_output(session.query(f"{output}?")) != "off":
                     raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
+                # The queue is FIFO. Establish an empty queue before restoration
+                # so pending errors cannot be attributed to restoration writes.
+                pending_error = _drain_frequency_step_errors(session, "before trigger restoration")
+                if primary_error is None:
+                    primary_error = pending_error
+                elif pending_error is not None and isinstance(primary_error, WavegenError):
+                    primary_error.args = (f"{primary_error} {pending_error}",)
                 if isinstance(primary_error, WavegenError):
                     primary_error.attach_context(output_state="off")
                 session.write(f"SOURce{channel}:FREQuency:MODE CW")
                 session.write(f"{delay} {_format_scpi_number(saved_delay)}")
                 session.write(f"{count} {int(saved_count)}")
                 session.write(f"{continuous} {saved_continuous.upper()}")
-                _check_frequency_step_errors(session, "cleanup")
+                # Without a confirmed empty queue, later entries have no reliable source.
+                if not isinstance(pending_error, ErrorQueueQueryError):
+                    restoration_error = _drain_frequency_step_errors(session, "after trigger restoration")
+                    if restoration_error is not None:
+                        raise restoration_error
             except Exception as exc:
                 message = "Could not complete Frequency Step output OFF and trigger cleanup."
                 if isinstance(exc, WavegenError):
@@ -3166,6 +3202,10 @@ def _run_sine_list_sweep_once(
                 else:
                     raise VisaCleanupError(message) from exc
 
+        if primary_error is not None:
+            if primary_cause is not None:
+                raise primary_error from primary_cause
+            raise primary_error
         return plan.summary()
 
     _, result = _run_on_supported_instrument(resource, backend, run, **options)
