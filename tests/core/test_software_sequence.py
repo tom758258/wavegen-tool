@@ -79,6 +79,7 @@ def test_plan_validates_the_maximum_without_expanding_or_touching_visa(monkeypat
         _document(*([WAIT] * 251)),
         _document(*([WAIT] * 101), loops=10_000),
         _document(_step("run-software-sequence")),
+        _document(_step("run-sine-list-sweep-once", frequencies_hz=[1000], dwell_s=1, amplitude_vpp=0.1)),
         _document(_step("configure-sync")),
         _document(_step("clear-arbitrary-memory", confirm_clear=True)),
         _document(_step("wait", seconds=True)),
@@ -444,15 +445,49 @@ def test_basic_workflows_schedule_existing_operations(fake_instrument, monkeypat
 def test_frequency_step_uses_list_sweep_limits_and_dwell(fake_instrument, monkeypatch):
     from wavegen_tool_core import run_basic_workflow
 
-    state, _, queries = fake_instrument
-    observed = []
-    monkeypatch.setattr("wavegen_tool_core.software_sequence.time.sleep", observed.append)
+    state, writes, _ = fake_instrument
+    state.ch1.trigger_count = 19
+    state.ch1.trigger_delay_s = 0.01
+    traffic = []
+    write, query = SimulatedResource.write, SimulatedResource.query
+    completion = iter(("8", "0"))
+
+    def record_write(session, command):
+        traffic.append(command)
+        return write(session, command)
+
+    def record_query(session, command):
+        traffic.append(command)
+        if command == "STATus:OPERation:CONDition?":
+            return next(completion)
+        return query(session, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record_write)
+    monkeypatch.setattr(SimulatedResource, "query", record_query)
+    monkeypatch.setattr("wavegen_tool_core.software_sequence.time.sleep", traffic.append)
     arguments = {"start_frequency_hz": 800, "stop_frequency_hz": 250, "frequency_step_hz": 200, "dwell_s": 1.25}
+    dry_run = run_basic_workflow("run-frequency-step", arguments, model=MODEL)
+    assert traffic == []
+    commands = dry_run["steps"][0]["commands"]
+    assert dry_run["total_wait_seconds"] == 5
+    setup_to_start = (
+        "SOURce1:FREQuency 800", "SOURce1:LIST:FREQuency 800,600,400,250", "SOURce1:LIST:DWELl 1.25",
+        "TRIGger1:SOURce IMMediate", "INITiate1:CONTinuous OFF", "TRIGger1:COUNt 4",
+        "SOURce1:FREQuency?", "SOURce1:LIST:FREQuency?", "SOURce1:LIST:DWELl?",
+        "TRIGger1:SOURce?", "OUTPut1 ON", "SOURce1:FREQuency:MODE LIST", "INITiate1:IMMediate",
+    )
+    assert [entry for entry in commands if entry in setup_to_start] == list(setup_to_start)
     result = run_basic_workflow("run-frequency-step", arguments, resource=state.resource_name)
     assert result["results"][0]["frequencies_hz"] == (800, 600, 400, 250)
     assert result["results"][0]["dwell_s"] == 1.25
-    assert "SOURce1:LIST:FREQuency?" in queries and "SOURce1:LIST:DWELl?" in queries
-    assert observed == [5]
+    assert [entry for entry in traffic if entry in setup_to_start] == list(setup_to_start)
+    start = traffic.index("INITiate1:IMMediate")
+    assert traffic[start + 1 : start + 6] == [
+        5, "STATus:OPERation:CONDition?", 0.02, "STATus:OPERation:CONDition?", "OUTPut1 OFF",
+    ]
+    assert writes.count("OUTPut1 ON") == state.ch1.list_runs == result["completed_loops"] == 1
+    assert state.ch1.frequency_mode == "CW" and not state.ch1.output_enabled
+    assert state.ch1.continuous_trigger and state.ch1.trigger_count == 19 and state.ch1.trigger_delay_s == 0.01
     assert result["cleanup"]["confirmed_off_channels"] == [1]
     for stop, valid in [(128, True), (129, False)]:
         request = arguments | {"start_frequency_hz": 1, "stop_frequency_hz": stop, "frequency_step_hz": 1}
@@ -462,6 +497,45 @@ def test_frequency_step_uses_list_sweep_limits_and_dwell(fake_instrument, monkey
         else:
             with pytest.raises(WavegenError):
                 run_basic_workflow("run-frequency-step", request, model=MODEL)
+
+
+@pytest.mark.parametrize("failure", ["start_readback", "initiation", "initiation_and_cleanup"])
+def test_frequency_step_failure_keeps_output_safe_and_retains_cleanup_error(fake_instrument, monkeypatch, failure):
+    from wavegen_tool_core import run_basic_workflow
+
+    state, writes, _ = fake_instrument
+    write, query = SimulatedResource.write, SimulatedResource.query
+
+    def fail_write(session, command):
+        if command == "INITiate1:IMMediate":
+            raise OSError("LIST initiation failed")
+        if failure == "initiation_and_cleanup" and command == "OUTPut1 OFF" and state.ch1.output_enabled:
+            raise OSError("Output OFF failed")
+        return write(session, command)
+
+    def fail_query(session, command):
+        if failure == "start_readback" and command == "SOURce1:FREQuency?":
+            return "3000"
+        return query(session, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", fail_write)
+    monkeypatch.setattr(SimulatedResource, "query", fail_query)
+    arguments = {"start_frequency_hz": 1000, "stop_frequency_hz": 3000, "frequency_step_hz": 1000, "dwell_s": 1}
+    with pytest.raises(SoftwareSequenceError) as error:
+        run_basic_workflow("run-frequency-step", arguments, resource=state.resource_name)
+    assert writes[-1] == "OUTPut1 OFF"
+    cleanup = error.value.details["cleanup"]
+    if failure == "start_readback":
+        assert "FREQuency?" in str(error.value)
+        assert "OUTPut1 ON" not in writes
+    else:
+        assert "OUTPut1 ON" in writes
+        assert error.value.code == "visa_write_error"
+    if failure == "initiation_and_cleanup":
+        assert cleanup["errors"] and not cleanup["confirmed_off_channels"]
+        assert error.value.cleanup_errors
+    else:
+        assert cleanup["confirmed_off_channels"] == [1] and not state.ch1.output_enabled
 
 
 @pytest.mark.parametrize("preset,function", [("sine", "SIN"), ("square", "SQUARE"), ("triangle", "TRIANGLE")])

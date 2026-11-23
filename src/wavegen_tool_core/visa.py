@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 from io import StringIO
 import math
+from time import monotonic
 from typing import Protocol
 
 from pyvisa.constants import RENLineOperation
@@ -2987,6 +2988,183 @@ def dry_run_sine_list_sweep(
         commands=_channelize_commands(commands, selected_channel),
         channel=selected_channel,
     )
+
+
+@dataclass(frozen=True)
+class _SingleListSweep:
+    sweep: SineListSweepDryRunResult
+
+    @property
+    def seconds(self) -> float:
+        return float(Decimal(str(self.sweep.dwell_s)) * len(self.sweep.frequencies_hz))
+
+    def trigger_settings(self) -> dict[str, str]:
+        channel = self.sweep.channel
+        # Counted Immediate triggers advance the list on the instrument's clock.
+        return {
+            f"INITiate{channel}:CONTinuous": "OFF",
+            f"TRIGger{channel}:COUNt": str(len(self.sweep.frequencies_hz)),
+            f"TRIGger{channel}:DELay": "0",
+        }
+
+    def readback(self) -> dict[str, str]:
+        channel = self.sweep.channel
+        return {
+            f"OUTPut{channel}": "OFF",
+            f"SOURce{channel}:FUNCtion": "SINusoid",
+            f"SOURce{channel}:FREQuency": _format_scpi_number(self.sweep.frequencies_hz[0]),
+            **_advanced_mode_readback_fields(self.sweep.commands, channel=channel),
+            f"SOURce{channel}:FREQuency:MODE": "CW",
+            **self.trigger_settings(),
+        }
+
+    def setup(self) -> tuple[str, ...]:
+        # Reuse List Sweep configuration, deferring its final transition into LIST.
+        return self.sweep.commands[:-1] + tuple(
+            f"{command} {value}" for command, value in self.trigger_settings().items()
+        )
+
+    def start(self) -> tuple[str, ...]:
+        channel = self.sweep.channel
+        return f"OUTPut{channel} ON", self.sweep.commands[-1], f"INITiate{channel}:IMMediate"
+
+    def summary(self) -> dict[str, object]:
+        return {
+            "channel": self.sweep.channel,
+            "frequencies_hz": self.sweep.frequencies_hz,
+            "dwell_s": self.sweep.dwell_s,
+            "trigger_source": self.sweep.trigger_source,
+            "amplitude_vpp": self.sweep.amplitude_vpp,
+            "offset_v": self.sweep.offset_v,
+            "phase_deg": self.sweep.phase_deg,
+            "load": self.sweep.load,
+            "seconds": self.seconds,
+            "output_state": "off",
+        }
+
+
+_OPERATION_CONDITION_QUERY = "STATus:OPERation:CONDition?"
+
+
+def _plan_sine_list_sweep_once(model: str, arguments: dict[str, object]) -> dict[str, object]:
+    plan = _SingleListSweep(dry_run_sine_list_sweep(model, **arguments))
+    channel = plan.sweep.channel
+    return {
+        **plan.summary(),
+        "commands": (
+            *(f"{header}?" for header in plan.trigger_settings()),
+            *plan.setup(),
+            *(f"{header}?" for header in plan.readback()),
+            SYSTEM_ERROR_QUERY,
+            *plan.start(),
+            _OPERATION_CONDITION_QUERY,
+            f"OUTPut{channel} OFF",
+            f"OUTPut{channel}?",
+            f"SOURce{channel}:FREQuency:MODE CW",
+            SYSTEM_ERROR_QUERY,
+        ),
+    }
+
+
+def _wait_for_counted_list(
+    session: VisaSession, channel: int, seconds: float, wait: Callable[[float], None]
+) -> None:
+    # Allow the last point its entire nominal dwell even if the trigger count
+    # reaches zero as that point is selected. The instrument may still be busy.
+    wait(seconds)
+    deadline = monotonic() + DEFAULT_TIMEOUT_MS / 1000
+    initiated = 1 << (channel + 2)
+    while True:
+        try:
+            condition = int(session.query(_OPERATION_CONDITION_QUERY))
+            if not 0 <= condition <= 65535:
+                raise ValueError("Invalid operation condition register.")
+        except Exception as exc:
+            raise StatusQueryError("Could not read Frequency Step completion state.") from exc
+        if not condition & initiated:
+            return
+        if monotonic() >= deadline:
+            raise WaveformVerificationError("Frequency Step did not complete within the instrument wait limit.")
+        wait(0.02)
+
+
+def _check_frequency_step_errors(session: VisaSession) -> None:
+    try:
+        entry = _parse_error_queue_entry(session.query(SYSTEM_ERROR_QUERY))
+    except Exception as exc:
+        raise ErrorQueueQueryError("Could not read the Frequency Step error queue.") from exc
+    if entry.code != ERROR_QUEUE_NO_ERROR_CODE:
+        raise VisaWriteError(f"Frequency Step instrument error ({entry.code}): {entry.message}", output_state="off")
+
+
+def _run_sine_list_sweep_once(
+    resource: str,
+    backend: str | None,
+    arguments: dict[str, object],
+    *,
+    wait: Callable[[float], None],
+    check_cancel: Callable[[], None],
+    **options,
+) -> dict[str, object]:
+    def run(session: VisaSession, context: IdentificationResult) -> dict[str, object]:
+        plan = _SingleListSweep(dry_run_sine_list_sweep(context.identity.canonical_model_id, **arguments))
+        channel = plan.sweep.channel
+        output = f"OUTPut{channel}"
+        _check_independent_channel_guard(session, _capabilities_for_identity(context.identity), context)
+        check_cancel()
+        # Restore these selected-channel trigger settings after the workflow.
+        continuous, count, delay = plan.trigger_settings()
+        saved_continuous = _parse_status_output(session.query(f"{continuous}?"))
+        saved_count = _parse_status_number(session.query(f"{count}?"), "trigger count")
+        saved_delay = _parse_status_number(session.query(f"{delay}?"), "trigger delay")
+        if not saved_count.is_integer() or not 1 <= saved_count <= 1_000_000 or not 0 <= saved_delay <= 1000:
+            raise StatusQueryError("Invalid Frequency Step trigger settings.")
+
+        primary_error = None
+        try:
+            for command in plan.setup():
+                session.write(command)
+            _verify_configuration_readback(session, context, plan.readback(), label="Frequency Step")
+            _check_frequency_step_errors(session)
+            check_cancel()
+            on, list_mode, initiate = plan.start()
+            session.write(on)
+            session.write(list_mode)
+            check_cancel()
+            session.write(initiate)
+            _wait_for_counted_list(session, channel, plan.seconds, wait)
+            check_cancel()
+        except (WavegenError, KeyboardInterrupt) as exc:
+            primary_error = exc
+            raise
+        except Exception as exc:
+            primary_error = VisaWriteError("Could not apply the Frequency Step command.")
+            raise primary_error from exc
+        finally:
+            try:
+                session.write(f"{output} OFF")
+                if _parse_status_output(session.query(f"{output}?")) != "off":
+                    raise WaveformVerificationError(f"Channel {channel} output must be confirmed OFF.")
+                session.write(f"SOURce{channel}:FREQuency:MODE CW")
+                session.write(f"{delay} {_format_scpi_number(saved_delay)}")
+                session.write(f"{count} {int(saved_count)}")
+                session.write(f"{continuous} {saved_continuous.upper()}")
+                _check_frequency_step_errors(session)
+            except Exception as exc:
+                message = "Could not complete Frequency Step output OFF and trigger cleanup."
+                if isinstance(exc, WavegenError):
+                    message = f"{message} {exc}"
+                if isinstance(primary_error, WavegenError):
+                    primary_error.attach_cleanup_errors((*primary_error.cleanup_errors, message))
+                elif isinstance(primary_error, KeyboardInterrupt):
+                    primary_error.cleanup_errors = (message,)
+                else:
+                    raise VisaCleanupError(message) from exc
+
+        return plan.summary()
+
+    _, result = _run_on_supported_instrument(resource, backend, run, **options)
+    return result
 
 
 def configure_square_list_sweep(
@@ -8974,9 +9152,9 @@ def _advanced_readback_matches(header: str, expected: str, response: str) -> boo
     if not math.isfinite(actual_number):
         return False
     # Burst cycle count is discrete; a one-cycle difference must not pass.
-    if header.endswith(":BURSt:NCYCles"):
+    if header.endswith((":BURSt:NCYCles", ":COUNt")):
         return expected_number == actual_number
-    if header == "TRIGger1:DELay":
+    if header.startswith("TRIGger") and header.endswith(":DELay"):
         return math.isclose(expected_number, actual_number, rel_tol=0.0, abs_tol=1e-9)
     return math.isclose(
         expected_number, actual_number, rel_tol=1e-4, abs_tol=1e-12
@@ -8992,14 +9170,24 @@ def _verify_advanced_mode_configuration(
 ) -> None:
     """Independently compare active mode settings without changing output state."""
 
-    fields = _advanced_mode_readback_fields(commands)
+    fields = _advanced_mode_readback_fields(commands, channel=1)
+    _verify_configuration_readback(
+        session, context,
+        dict(zip(_channelize_commands(tuple(fields), selected_channel), fields.values())),
+        label="Advanced Mode",
+    )
+
+
+def _verify_configuration_readback(
+    session: VisaSession, context: IdentificationResult, fields: dict[str, str], *, label: str
+) -> None:
     for header, expected in fields.items():
-        query = _channelize_commands((f"{header}?",), selected_channel)[0]
+        query = f"{header}?"
         try:
             actual = session.query(query)
         except Exception as exc:
             raise WaveformVerificationError(
-                f"Advanced Mode readback failed for {query}: query error or timeout.",
+                f"{label} readback failed for {query}: query error or timeout.",
                 backend=context.backend,
                 transport=context.transport,
                 identity=context.identity,
@@ -9010,7 +9198,7 @@ def _verify_advanced_mode_configuration(
         ):
             actual_label = repr(actual)[:120]
             raise WaveformVerificationError(
-                f"Advanced Mode readback mismatch for {query}: "
+                f"{label} readback mismatch for {query}: "
                 f"expected {expected!r}, actual {actual_label}.",
                 backend=context.backend,
                 transport=context.transport,

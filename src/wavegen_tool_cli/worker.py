@@ -456,7 +456,9 @@ class WorkerRuntime:
                     cancelled = isinstance(exc, SoftwareSequenceError) and isinstance(
                         exc.cause, SoftwareSequenceCancelled
                     )
-                    cleanup_failed = cancelled and bool((exc.details.get("cleanup") or {}).get("errors"))
+                    cleanup_failed = cancelled and bool(
+                        exc.cleanup_errors or (exc.details.get("cleanup") or {}).get("errors")
+                    )
                     error = common_error(
                         "execution",
                         "visa_cleanup_error" if cleanup_failed else exc.code,

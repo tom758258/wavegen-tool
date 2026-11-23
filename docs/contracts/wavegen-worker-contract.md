@@ -347,8 +347,8 @@ or `triangle`. The CLI guide documents limits and parameters for the
 Live workflows require `--allow-output-writes`. Workflows that turn output
 on also require `arguments.confirm_output: true`. The preset keeps the
 output OFF. Worker Live rejects Amplitude Ramp before execution. Simulation
-and dry-run accept it. Cancellation is supported for Amplitude Ramp and
-Software Sequence.
+and dry-run accept it. Cancellation is supported for Amplitude Ramp,
+Frequency Step, and Software Sequence.
 
 ## Live Write Safety
 
@@ -460,7 +460,7 @@ normal live shutdown.
 
 Wavegen exposes `POST /cancel` at the `cancel_url` in ready and HTTP status.
 It implements [Common Job Cancellation v1](common-worker-protocol.md#optional-job-cancellation)
-for `run-software-sequence` and `run-amplitude-ramp`. Submit schema version 3
+for `run-software-sequence`, `run-amplitude-ramp`, and `run-frequency-step`. Submit schema version 3
 and the `worker_job_id` from job admission, with an optional string `reason`.
 HTTP 202 acknowledges the request. HTTP 409 rejects a job that is absent,
 terminal, or non-cancellable. Cancellation wakes a sequence wait and takes

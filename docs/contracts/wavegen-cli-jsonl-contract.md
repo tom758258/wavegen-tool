@@ -142,6 +142,9 @@ The six [Basic Workflow commands](wavegen-worker-contract.md#basic-workflows)
 use the same result structure with their own `action` and a top-level
 `channel`. Successful executions include the selected channel's safe-off
 confirmation. A dry-run describes the expanded workflow and its waits.
+Frequency Step reports a single `run-sine-list-sweep-once` step whose `seconds`
+and the workflow's `total_wait_seconds` report the nominal list dwell in total.
+The dry-run `commands` show Output ON before LIST and Immediate initiation.
 
 ## Direct CLI Commands
 

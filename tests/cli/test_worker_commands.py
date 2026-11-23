@@ -992,3 +992,14 @@ def test_software_sequence_admits_explicit_live_output_confirmation():
     })
     validated = validate_worker_command_request(payload, worker_mode="live", allow_output_writes=True)
     assert validated.arguments == payload["arguments"]
+
+
+def test_frequency_step_requires_explicit_live_output_confirmation():
+    arguments = {"start_frequency_hz": 1000, "stop_frequency_hz": 3000, "frequency_step_hz": 1000, "dwell_s": 1}
+    payload = _payload("run-frequency-step", arguments)
+    with pytest.raises(WorkerRequestValidationError) as caught:
+        validate_worker_command_request(payload, worker_mode="live", allow_output_writes=True)
+    assert caught.value.code == "output_confirmation_required"
+    arguments["confirm_output"] = True
+    validated = validate_worker_command_request(payload, worker_mode="live", allow_output_writes=True)
+    assert validated.arguments == arguments

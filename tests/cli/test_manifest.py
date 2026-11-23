@@ -18,7 +18,7 @@ EXPECTED_MANIFEST = {
         "common.async_jobs": {"contract_version": 1},
         "common.job_cancel": {
             "contract_version": 1,
-            "commands": ["run-software-sequence", "run-amplitude-ramp"],
+            "commands": ["run-software-sequence", "run-amplitude-ramp", "run-frequency-step"],
         },
     },
 }

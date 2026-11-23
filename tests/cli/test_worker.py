@@ -1724,15 +1724,22 @@ def test_software_sequence_worker_preserves_nested_exact_decimal(capsys):
     assert terminal["error"] == failed["error"]
 
 
-def test_basic_workflow_cancel_targets_the_job_and_leaves_worker_running(capsys):
+@pytest.mark.parametrize(("command", "arguments"), [
+    ("run-amplitude-ramp", {"start_vpp": 0.1, "stop_vpp": 0.2, "step_vpp": 0.1, "dwell_s": 5}),
+    ("run-frequency-step", {
+        "start_frequency_hz": 1000, "stop_frequency_hz": 3000, "frequency_step_hz": 1000, "dwell_s": 5,
+    }),
+])
+def test_basic_workflow_cancel_targets_the_job_and_leaves_worker_running(capsys, command, arguments):
     runtime = WorkerRuntime(_worker_config())
     runtime.start()
     try:
-        arguments = {"start_vpp": 0.1, "stop_vpp": 0.2, "step_vpp": 0.1, "dwell_s": 5}
-        status, reply = _request(runtime, "POST", "/command", _payload("run-amplitude-ramp", arguments))
+        status, reply = _request(runtime, "POST", "/command", _payload(command, arguments))
         assert status == 202
         job_id = reply["worker_job_id"]
         assert _wait_until(lambda: runtime.simulator_state.ch1.output_enabled)
+        if command == "run-frequency-step":
+            assert _wait_until(lambda: runtime.simulator_state.ch1.list_runs == 1)
 
         def cancel(worker_job_id, version=3):
             return _request(runtime, "POST", "/cancel", {
@@ -1756,6 +1763,8 @@ def test_basic_workflow_cancel_targets_the_job_and_leaves_worker_running(capsys)
         details = finished["error"]["details"]["domain_error"]["sequence"]
         assert details["cleanup"]["confirmed_off_channels"] == [1]
         assert not runtime.simulator_state.ch1.output_enabled
+        if command == "run-frequency-step":
+            assert runtime.simulator_state.ch1.frequency_mode == "CW"
         assert cancel(job_id)[0] == 409
 
         status, reply = _request(runtime, "POST", "/command", _payload(

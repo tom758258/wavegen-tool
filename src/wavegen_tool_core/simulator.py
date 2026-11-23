@@ -46,6 +46,7 @@ class SimulatedChannelState:
     frequency_mode: str = "CW"
     list_frequencies_hz: tuple[float, ...] = ()
     list_dwell_s: float = 1.0
+    list_runs: int = 0
     sweep_start_frequency_hz: float = 1000.0
     sweep_stop_frequency_hz: float = 10000.0
     sweep_spacing: str = "linear"
@@ -55,6 +56,8 @@ class SimulatedChannelState:
     trigger_source: str = "immediate"
     trigger_timer_s: float = 1.0
     trigger_delay_s: float = 0.0
+    trigger_count: int = 1
+    continuous_trigger: bool = True
     burst_trigger_slope: str = "positive"
     phase_deg: float = 0.0
     amplitude_vpp: float = 0.1
@@ -642,6 +645,22 @@ class SimulatedResource:
         prefix_ch = f"{ch_num}"
 
         source = f"SOURce{prefix_ch}"
+        if command == f"INITiate{prefix_ch}:IMMediate":
+            if (
+                ch_state.frequency_mode != "LIST" or not ch_state.output_enabled
+                or ch_state.continuous_trigger or ch_state.trigger_source != "immediate"
+                or ch_state.trigger_count != len(ch_state.list_frequencies_hz)
+                or not ch_state.list_frequencies_hz or ch_state.trigger_delay_s != 0
+                or ch_state.frequency_hz != ch_state.list_frequencies_hz[0]
+            ):
+                raise ValueError("Invalid simulated single-pass frequency list.")
+            # The simulator records initiation without emulating analog timing.
+            ch_state.list_runs += 1
+            return
+        count_prefix = f"TRIGger{prefix_ch}:COUNt "
+        if command.startswith(count_prefix):
+            ch_state.trigger_count = int(command[len(count_prefix):])
+            return
         if command.startswith(f"MMEMory:LOAD:DATA{prefix_ch} "):
             path = command.split(" ", 1)[1].strip('"')
             if path not in BUILTIN_ARBITRARY_PATHS.values():
@@ -751,6 +770,8 @@ class SimulatedResource:
         exact_updates = {
             f"OUTPut{prefix_ch} OFF": ("output_enabled", False),
             f"OUTPut{prefix_ch} ON": ("output_enabled", True),
+            f"INITiate{prefix_ch}:CONTinuous OFF": ("continuous_trigger", False),
+            f"INITiate{prefix_ch}:CONTinuous ON": ("continuous_trigger", True),
             f"OUTPut{prefix_ch}:SYNC:MODE NORMal": ("sync_mode", "NORM"),
             f"OUTPut{prefix_ch}:SYNC:MODE CARRier": ("sync_mode", "CARR"),
             f"OUTPut{prefix_ch}:SYNC:POLarity NORMal": ("sync_polarity", "NORM"),
@@ -1021,6 +1042,8 @@ class SimulatedResource:
 
         if command == "*OPC?":
             return "1"
+        if command == "STATus:OPERation:CONDition?":
+            return "0"
         if command == "FORMat:BORDer?":
             return "NORM"
 
@@ -1093,6 +1116,8 @@ class SimulatedResource:
             f"TRIGger{prefix_ch}:SLOPe?": ch_state.burst_trigger_slope,
             f"TRIGger{prefix_ch}:TIMer?": _format_number(ch_state.trigger_timer_s),
             f"TRIGger{prefix_ch}:DELay?": _format_number(ch_state.trigger_delay_s),
+            f"TRIGger{prefix_ch}:COUNt?": str(ch_state.trigger_count),
+            f"INITiate{prefix_ch}:CONTinuous?": "1" if ch_state.continuous_trigger else "0",
             f"SOURce{prefix_ch}:PHASe?": _format_number(ch_state.phase_deg),
             f"SOURce{prefix_ch}:FUNCtion:PULSe:TRANsition? MAXimum": "1e-6",
             f"SOURce{prefix_ch}:FUNCtion:PULSe:TRANsition:LEADing? MAXimum": "1e-6",

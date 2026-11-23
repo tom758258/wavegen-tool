@@ -3,7 +3,7 @@
 WORKER_SCHEMA_VERSION = 3
 WORKER_SERVICE_NAME = "wavegen-tool"
 WORKER_COMPATIBILITY_POLICY = "v3-only"
-CANCELLABLE_COMMANDS = ("run-software-sequence", "run-amplitude-ramp")
+CANCELLABLE_COMMANDS = ("run-software-sequence", "run-amplitude-ramp", "run-frequency-step")
 
 
 def worker_features() -> dict[str, object]:

@@ -825,12 +825,17 @@ updates. The instrument retains its current autorange setting and may
 produce transients when its hardware changes range. The ramp is available
 in dry-run, simulation, and the explicit Direct CLI Contributor route.
 
-Frequency Step controls a native Immediate List Sweep. It generates the
-ordered frequency list from the start, stop, and positive interval, includes
-the exact stop frequency, and uses the existing 128-point and dwell limits.
-The output is enabled for one nominal list period. The instrument controls
-point timing and the host output window is independent of the list phase.
-`--amplitude-vpp`, `--offset-v`, and `--load` select the sine voltage settings.
+Frequency Step configures the sine at the first frequency with output OFF,
+then reads back the starting frequency and Immediate List Sweep settings.
+It enables output before starting a counted native list for one pass. The
+instrument advances each point using the configured dwell. The workflow
+allows the final dwell to finish, switches output OFF, and returns to CW.
+The documented scheduled duration covers the list itself. Enabling and
+disabling output also take instrument communication time.
+
+The generated list includes the exact stop frequency and uses the existing
+128-point and dwell limits. `--amplitude-vpp`, `--offset-v`, and `--load`
+select the sine voltage settings.
 
 Quick Output Preset supports `sine`, `square`, and `triangle`, each
 configured at 1 kHz, 0.1 Vpp, zero offset, and high impedance. The square

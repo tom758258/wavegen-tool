@@ -13,6 +13,7 @@ from .simulator import SimulatedResourceManagerFactory
 from .software_sequence import (
     SoftwareSequence,
     _AMPLITUDE_UPDATE,
+    _FREQUENCY_LIST_ONCE,
     run_software_sequence,
     validate_software_sequence,
 )
@@ -155,12 +156,10 @@ def basic_workflow_document(action: str, arguments: Mapping[str, object]) -> dic
         dwell = _positive(arguments["dwell_s"], "dwell_s")
         steps = [
             _step(
-                "configure-sine-list-sweep", channel=channel, frequencies_hz=points,
+                _FREQUENCY_LIST_ONCE, channel=channel, frequencies_hz=points,
                 dwell_s=dwell, amplitude_vpp=arguments.get("amplitude_vpp", 0.1),
                 offset_v=arguments.get("offset_v", 0), load=arguments.get("load", "50"),
-                verify_readback=True,
             ),
-            on, _step("wait", seconds=len(points) * dwell), off,
         ]
     else:
         preset = arguments["preset"]
@@ -181,7 +180,7 @@ def validate_basic_workflow(
         raise UnsupportedInstrumentError("Amplitude Ramp is outside Product Live feature scope.")
     return validate_software_sequence(
         basic_workflow_document(action, arguments), product_live=product_live,
-        _allow_amplitude_updates=action == AMPLITUDE_RAMP,
+        _workflow_action=action,
     )
 
 

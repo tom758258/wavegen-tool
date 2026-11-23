@@ -666,7 +666,7 @@ function Get-BasicWorkflowValidationRecipes {
                 arguments = @($Arguments); readback = $Readback; result = @{}
                 workflow_intent = @{
                     actions = @($Actions); wait_seconds = $Wait; loop_count = $Loops
-                    output_on = 'output' -in $Actions; values = $Values
+                    output_on = 'output' -in $Actions -or 'run-sine-list-sweep-once' -in $Actions; values = $Values
                 }
             })
         }
@@ -685,9 +685,9 @@ function Get-BasicWorkflowValidationRecipes {
         @('configure-sine', 'output', 'wait', 'output', 'configure-square', 'output', 'wait', 'output') 2 @{ function = 'SQU'; frequency_hz = 2000 } `
         'Observe a one-second sine followed by a one-second square and output OFF.'
     New-BasicRecipe 'frequency-step' @('run-frequency-step', '--start-frequency-hz', '1000', '--stop-frequency-hz', '3000', '--frequency-step-hz', '1000', '--dwell-s', '1') `
-        @('configure-sine-list-sweep', 'output', 'wait', 'output') 3 @{ function = 'SIN' } `
-        'Observe the instrument cycle through the 1, 2, and 3 kHz list at one-second intervals, followed by output OFF.' `
-        -Values @{ frequencies_hz = @(1000, 2000, 3000); dwell_s = 1 }
+        @('run-sine-list-sweep-once') 3 @{ function = 'SIN'; frequency_hz = 1000 } `
+        'Use a scope to confirm a 1 kHz start, then 2 kHz and 3 kHz once each, with a full one-second dwell at each point and output OFF after 3 kHz. Check for any return to 1 kHz before OFF.' `
+        -Values @{ frequencies_hz = @(1000, 2000, 3000); dwell_s = 1; trigger_source = 'immediate' }
     New-BasicRecipe 'quick-output-preset' @('apply-quick-output-preset', '--preset', 'square') `
         @('configure-square') 0 @{ function = 'SQU'; frequency_hz = 1000; amplitude = 0.1; offset_v = 0; load = 'high-z' } `
         -Values @{ frequency_hz = 1000; amplitude_vpp = 0.1; offset_v = 0; load = 'high-z'; duty_cycle_percent = 50 }

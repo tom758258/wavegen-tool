@@ -136,6 +136,10 @@ continuity during amplitude updates, List Sweep settings, presets, and
 confirmed cleanup. Its Preflight also exercises CANCEL and graceful STOP
 on a local simulated Worker. Real Live observations apply to workflow output
 and use the existing Contributor safeguards.
+For Frequency Step, verify the configured start frequency while output is OFF
+and confirm Output ON precedes LIST initiation. Use a scope in the authorized
+Real Live case to check the frequency order, first and last dwell, absence of
+a repeated pass, and final OFF.
 
 Smoke remains a representative Sine sanity check and never enables output:
 `smoke PASS != all implemented features validated`.
