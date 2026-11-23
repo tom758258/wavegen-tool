@@ -1680,6 +1680,26 @@ def test_software_sequence_worker_drains_busy_job_before_stopping(monkeypatch, c
     assert terminal["result"]["cleanup"]["confirmed_off_channels"] == [1]
 
 
+def test_software_sequence_admission_error_includes_invalid_step_location():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        document = {
+            "version": 1,
+            "steps": [{"action": "status"}, {"action": "status", "arguments": []}],
+        }
+        code, response = _request(
+            runtime, "POST", "/command", _payload("run-software-sequence", {"document": document})
+        )
+        assert code == 400
+        assert response["error"]["code"] == "invalid_arguments"
+        failed = response["error"]["details"]["domain_error"]["sequence"]["failed_step"]
+        assert (failed["loop"], failed["step"], failed["action"]) == (1, 2, "status")
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(5)
+
+
 def test_software_sequence_worker_preserves_nested_exact_decimal(capsys):
     runtime = WorkerRuntime(_worker_config())
     runtime.start()

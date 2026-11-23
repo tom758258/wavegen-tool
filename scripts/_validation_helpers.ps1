@@ -946,6 +946,13 @@ function Get-FullValidationInventory {
                 action = 'configure-sine'
                 arguments = @{ channel = $channel; frequency_hz = 1000; amplitude_vpp = 0.1; load = '50' }
             }
+            $sweepStep = @{
+                action = 'configure-sine-sweep'
+                arguments = @{
+                    channel = $channel; start_frequency_hz = 2; stop_frequency_hz = 8
+                    spacing = 'linear'; sweep_time_s = 1; amplitude_vpp = 0.1; verify_readback = $true
+                }
+            }
             if ($channel -eq 1) {
                 New-SequenceCase $channel 'basic' @(
                     $sineStep,
@@ -963,10 +970,7 @@ function Get-FullValidationInventory {
                 $modulated.arguments.verify_readback = $true
                 New-SequenceCase $channel 'advanced' @(
                     $modulated,
-                    @{ action = 'configure-sine-sweep'; arguments = @{
-                        channel = $channel; start_frequency_hz = 2; stop_frequency_hz = 8
-                        spacing = 'linear'; sweep_time_s = 1; amplitude_vpp = 0.1; verify_readback = $true
-                    } }
+                    $sweepStep
                 ) @{ function = 'SIN'; output_state = 'off' }
                 if ($null -ne $ArbitraryFixtures) {
                     $playback = @{
@@ -990,8 +994,8 @@ function Get-FullValidationInventory {
                     ) @{ function = 'ARB'; output_state = 'off' }
                 }
             } else {
-                New-SequenceCase $channel 'basic' @(
-                    $sineStep,
+                New-SequenceCase $channel 'advanced' @(
+                    $sweepStep,
                     @{ action = 'status'; arguments = @{ channel = $channel } }
                 ) @{ function = 'SIN'; output_state = 'off' }
             }

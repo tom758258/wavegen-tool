@@ -4886,6 +4886,22 @@ def test_software_sequence_file_has_single_json_result_and_uses_working_director
         assert "wave.csv" not in capture.out
 
 
+def test_software_sequence_json_error_includes_invalid_step_location(tmp_path, capsys):
+    path = tmp_path / "sequence.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "steps": [{"action": "status"}, {"action": "unknown-command"}],
+    }), encoding="utf-8")
+
+    assert main(["run-software-sequence", "--file", str(path), "--dry-run", "--json"]) == ExitCode.CLI_USAGE
+    capture = capsys.readouterr()
+    assert capture.err == ""
+    payload = json.loads(capture.out)
+    assert payload["success"] is False
+    failed = payload["sequence"]["failed_step"]
+    assert (failed["loop"], failed["step"], failed["action"]) == (1, 2, "unknown-command")
+
+
 def test_software_sequence_ctrl_c_during_wait_returns_failure_and_confirms_off(tmp_path, monkeypatch, capsys):
     from wavegen_tool_core.software_sequence import time as sequence_time
 

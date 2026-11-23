@@ -131,9 +131,12 @@ raw instrument identity, local CSV paths, and waveform samples.
 Executed runs report `cleanup.attempted_channels`, `confirmed_off_channels`,
 and `errors`. Cleanup errors fail the command. Failure can include a
 `sequence` object with completed counts, cleanup details, and a `failed_step`
-with one-based `loop`, `step`, `action`, and the Core `error`. A controllable
-interruption exits with code 130 after attempting output cleanup. Step
-failures use the underlying Core error's normal exit-code mapping.
+with one-based `loop` and `step`, the `action`, and the Core `error`. For a
+step rejected before execution, `loop` is 1 and the completed counts are zero.
+`action` is null when the step has no well-formed command identifier.
+Document-level validation errors have no step location. A controllable
+interruption exits with code 130 after attempting output cleanup. Step failures
+use the underlying Core error's normal exit-code mapping.
 
 ## Direct CLI Commands
 
@@ -149,6 +152,7 @@ The public Direct CLI machine surface includes:
 - `configure-sync` and `sync-output`;
 - `upload-arbitrary`, `configure-arbitrary`, `configure-arbitrary-sequence`,
   `list-arbitrary-memory`, and `clear-arbitrary-memory`;
+- `run-software-sequence`;
 - `worker`, `send-command`, `worker-status`, `wait-ready`, and `worker-stop`.
 
 Direct command availability does not imply that the Worker accepts the same

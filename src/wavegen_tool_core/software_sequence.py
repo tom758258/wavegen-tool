@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
@@ -212,8 +213,12 @@ def _validate_json_types(arguments: Mapping[str, object]) -> None:
 
 
 def _step_failure(
-    details: dict[str, object], step: _Step, index: int, loop: int, cause: WavegenError
+    details: dict[str, object], action: object, index: int, loop: int, cause: WavegenError
 ) -> SoftwareSequenceError:
+    # Keep command identifiers without reflecting arbitrary input such as local paths.
+    action_name = (
+        action if isinstance(action, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", action) else None
+    )
     return SoftwareSequenceError(
         cause,
         dict(
@@ -221,7 +226,7 @@ def _step_failure(
             failed_step={
                 "loop": loop,
                 "step": index,
-                "action": step.action,
+                "action": action_name,
                 "error": _error_summary(cause),
             },
         ),
@@ -260,23 +265,22 @@ def validate_software_sequence(
     normalized = []
     created_names = set()
     for index, entry in enumerate(steps, 1):
-        if not isinstance(entry, Mapping) or entry.keys() - {"action", "arguments"}:
-            raise WaveformParameterError(
-                f"Software sequence step {index} has invalid or unknown fields."
-            )
-        action = entry.get("action")
-        if not isinstance(action, str) or action not in _ACTIONS:
-            raise WaveformParameterError(
-                f"Software sequence step {index} has an unsupported action."
-            )
-        raw_arguments = entry.get("arguments", {})
-        if not isinstance(raw_arguments, Mapping):
-            raise WaveformParameterError(
-                f"Software sequence step {index} arguments must be an object."
-            )
-        arguments = dict(raw_arguments)
-        step = _Step(action, arguments)
+        action = entry.get("action") if isinstance(entry, Mapping) else None
         try:
+            if not isinstance(entry, Mapping) or entry.keys() - {"action", "arguments"}:
+                raise WaveformParameterError(
+                    f"Software sequence step {index} has invalid or unknown fields."
+                )
+            if not isinstance(action, str) or action not in _ACTIONS:
+                raise WaveformParameterError(
+                    f"Software sequence step {index} has an unsupported action."
+                )
+            raw_arguments = entry.get("arguments", {})
+            if not isinstance(raw_arguments, Mapping):
+                raise WaveformParameterError(
+                    f"Software sequence step {index} arguments must be an object."
+                )
+            arguments = dict(raw_arguments)
             if product_live and action in _ARBITRARY_ACTIONS:
                 raise UnsupportedInstrumentError(
                     "Arbitrary operations are outside Product Live feature scope."
@@ -323,8 +327,8 @@ def validate_software_sequence(
                         )
                     created_names.add(item)
         except WavegenError as exc:
-            raise _step_failure(details, step, index, 1, exc) from exc
-        normalized.append(step)
+            raise _step_failure(details, action, index, 1, exc) from exc
+        normalized.append(_Step(action, arguments))
     return SoftwareSequence(loop_count, tuple(normalized))
 
 
@@ -379,7 +383,7 @@ def _plan_step(step: _Step, model: str, *, product_live: bool) -> dict[str, obje
                     f"{feature} is outside Product Live feature scope."
                 )
         if step.arguments.get("verify_readback"):
-            visa._advanced_mode_readback_fields(result.commands)
+            visa._advanced_mode_readback_fields(result.commands, channel=step.arguments["channel"])
         return asdict(result)
     return dict(step.arguments)
 
@@ -539,7 +543,7 @@ def run_software_sequence(
                 )
             plan = _plan_step(step, model, product_live=product_live)
         except WavegenError as exc:
-            raise _step_failure(details, step, index, 1, exc) from exc
+            raise _step_failure(details, step.action, index, 1, exc) from exc
         if resource is None:
             plans.append(
                 {"step": index, "action": step.action, **_step_summary(plan, preview=True)}
@@ -592,7 +596,7 @@ def run_software_sequence(
             cause = exc
         else:
             cause = WavegenError("Unexpected software sequence step failure.")
-        failure = (step, index, loop, cause)
+        failure = (step.action, index, loop, cause)
     finally:
         details["cleanup"] = _cleanup(resource, backend, options, attempted)
     details["results"] = results

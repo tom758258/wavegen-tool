@@ -99,6 +99,69 @@ def test_rejects_invalid_document(document):
         run_software_sequence(document, model=MODEL)
 
 
+@pytest.mark.parametrize(
+    ("entry", "action"),
+    [
+        ([], None),
+        ({"action": "status", "unknown": True}, "status"),
+        ({"action": "unknown-command"}, "unknown-command"),
+        ({"action": "private/sequence.json"}, None),
+        ({"action": "status", "arguments": []}, "status"),
+    ],
+)
+def test_malformed_step_reports_location_without_execution(entry, action):
+    with pytest.raises(SoftwareSequenceError) as caught:
+        run_software_sequence(_document(ON, entry, loops=2), model=MODEL)
+    details = caught.value.details
+    assert details["completed_loops"] == details["completed_step_executions"] == 0
+    assert details["cleanup"] is None
+    failed = details["failed_step"]
+    assert (failed["loop"], failed["step"], failed["action"]) == (1, 2, action)
+    assert failed["error"]["code"] == "waveform_parameter_error"
+
+
+@pytest.mark.parametrize(
+    ("action", "arguments", "mode", "field", "expected"),
+    [
+        (
+            "configure-sine",
+            {"frequency_hz": 1000, "am": {"modulation_frequency_hz": 100, "depth_percent": 50}},
+            "AM", "depth_percent", 50,
+        ),
+        (
+            "configure-sine-sweep",
+            {"start_frequency_hz": 2, "stop_frequency_hz": 8, "spacing": "linear", "sweep_time_s": 1},
+            "SWEEP", "stop_frequency_hz", 8,
+        ),
+        (
+            "configure-sine-list-sweep",
+            {"frequencies_hz": [2, 4, 8], "dwell_s": 1},
+            "LIST", "frequencies_hz", [2, 4, 8],
+        ),
+    ],
+)
+def test_channel_two_advanced_readback_is_planned_and_executed(
+    action, arguments, mode, field, expected
+):
+    document = _document(
+        _step(action, channel=2, amplitude_vpp=0.1, verify_readback=True, **arguments),
+        _step("readback-advanced", channel=2),
+    )
+    plan = run_software_sequence(document, model=MODEL)
+    assert plan["status"] == "planned"
+    assert plan["channels"] == [2]
+
+    factory = SimulatedResourceManagerFactory(Simulated33521BState(model_id=MODEL))
+    result = run_software_sequence(
+        document, resource=factory.resource_name, resource_manager_factory=factory
+    )
+    assert result["completed_step_executions"] == 2
+    readback = result["results"][1]
+    assert readback["channel"] == 2
+    assert readback["advanced_mode"] == mode
+    assert readback["settings"][field] == expected
+
+
 def test_simulator_keeps_arbitrary_memory_and_channel_context(tmp_path):
     path = tmp_path / "wave.csv"
     path.write_text("0\n" * 8, encoding="utf-8")

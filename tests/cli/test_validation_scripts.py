@@ -455,7 +455,7 @@ def test_full_plan_inventory_and_privacy(artifact_root, monkeypatch, fake_git, m
     expected_parity = {
         "status", "static-sine", "modulation-am", "burst-immediate",
         "sweep-sine-linear", "list-transition-cw-recovery", "configure-output", "output-control",
-        "sync-configuration", "software-sequence-basic",
+        "sync-configuration", "software-sequence-advanced",
     }
     if model != "33510b":
         expected_primary |= {
