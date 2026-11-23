@@ -480,7 +480,7 @@ def test_lifecycle_clients_complete_simulate_worker_subprocess(capsys):
             "common.async_jobs": {"contract_version": 1},
             "common.job_cancel": {
                 "contract_version": 1,
-                "commands": ["run-software-sequence", "run-amplitude-ramp"],
+                "commands": ["run-software-sequence", "run-amplitude-ramp", "run-frequency-step"],
             },
         }
         assert ready["cancel_url"].endswith("/cancel")
