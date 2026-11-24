@@ -143,6 +143,7 @@ def _check_independent_channel_guard(
     session: VisaSession,
     capabilities: WavegenCapabilities,
     context: IdentificationResult,
+    *, recover_modulation_receiver: int | None = None,
 ) -> None:
     if capabilities.channel_count <= 1:
         return
@@ -200,8 +201,38 @@ def _check_independent_channel_guard(
             )
 
 
+    _check_cross_channel_dependencies(session, recover_modulation_receiver)
+
+
+def _check_cross_channel_dependencies(session, recover_modulation_receiver=None):
+    # A normal independent write must never change a dependent output on the
+    # other connector. Only explicit contributor receiver reconfiguration may
+    # remove an existing other-channel modulation route with both outputs OFF.
+    from .dual_channel import _query, _state, _require_off
+    for ch in (1, 2):
+        combine = _query(session, f"SOURce{ch}:COMBine:FEED?")
+        if combine != "NONE":
+            raise WaveformVerificationError("Independent channel operation rejected: combine is active or unknown.")
+        for mode in ("AM", "FM", "PM", "PWM", "SUM"):
+            prefix = f"SOURce{ch}:{mode}"
+            if not _state(session, prefix + ":STATe?"):
+                continue
+            source = _query(session, prefix + ":SOURce?")
+            if source not in {"INT", "INTERNAL", "EXT", "EXTERNAL", f"CH{3-ch}"}:
+                raise WaveformVerificationError("Independent channel operation rejected: unknown modulation source.")
+            if source == f"CH{3-ch}":
+                if recover_modulation_receiver != ch:
+                    raise WaveformVerificationError("Independent channel operation rejected: other-channel modulation is active.")
+                _require_off(session, (1, 2))
+
+
 def _channelize_commands(commands: tuple[str, ...], channel: int) -> tuple[str, ...]:
     """Apply the selected channel to channel-specific commands."""
+    for command in commands:
+        if command.endswith(f":SOURce CH{channel}") and any(
+            f":{mode}:SOURce " in command for mode in ("AM", "FM", "PM", "PWM", "SUM")
+        ):
+            raise WaveformParameterError("A channel cannot be its own modulation source.")
 
     if channel == 1:
         return commands
@@ -312,28 +343,31 @@ class ArbitraryStatusResult(StatusResult):
 class AMConfig:
     """Internal amplitude-modulation settings."""
 
-    modulation_frequency_hz: object
-    depth_percent: object
+    modulation_frequency_hz: object = None
+    depth_percent: object = None
     am_type: object = "normal"
     shape: object = "sine"
+    source: object = "internal"
 
 
 @dataclass(frozen=True)
 class FMConfig:
     """Internal frequency-modulation settings."""
 
-    modulation_frequency_hz: object
-    deviation_hz: object
+    modulation_frequency_hz: object = None
+    deviation_hz: object = None
     shape: object = "sine"
+    source: object = "internal"
 
 
 @dataclass(frozen=True)
 class PMConfig:
     """Internal phase-modulation settings."""
 
-    modulation_frequency_hz: object
-    deviation_deg: object
+    modulation_frequency_hz: object = None
+    deviation_deg: object = None
     shape: object = "sine"
+    source: object = "internal"
 
 
 @dataclass(frozen=True)
@@ -356,18 +390,20 @@ class BPSKConfig:
 class PWMConfig:
     """Internal pulse-width-modulation settings."""
 
-    modulation_frequency_hz: object
-    deviation_s: object
+    modulation_frequency_hz: object = None
+    deviation_s: object = None
     shape: object = "sine"
+    source: object = "internal"
 
 
 @dataclass(frozen=True)
 class SumConfig:
     """Internal summing-waveform settings."""
 
-    modulation_frequency_hz: object
-    amplitude_percent: object
+    modulation_frequency_hz: object = None
+    amplitude_percent: object = None
     shape: object = "sine"
+    source: object = "internal"
 
 
 @dataclass(frozen=True)
@@ -4035,7 +4071,7 @@ def _preflight_capabilities_for_configuration(
         ).max_sine_square_pulse_noise_frequency_hz
         for model_id in registered_model_ids()
     )
-    return WavegenCapabilities(maximum_frequency_hz)
+    return WavegenCapabilities(maximum_frequency_hz, channel_count=2)
 
 
 def _capabilities_for_identity(
@@ -4943,6 +4979,9 @@ def _normalize_modulation_shape_and_frequency(
 
 
 def _advanced_mode_validation_only_feature(configs: tuple[object, ...]) -> str | None:
+    if any(isinstance(config, (AMConfig, FMConfig, PMConfig, PWMConfig, SumConfig))
+           and config.source != "internal" for config in configs):
+        return "Other channel modulation"
     if any(
         isinstance(config, CountedBurstConfig) and config.trigger_delay_s is not None
         for config in configs
@@ -5173,6 +5212,35 @@ def _prepare_counted_burst(
     return normalized, commands
 
 
+def _modulation_inputs(config, mode, capabilities):
+    source = config.source
+    if not isinstance(source, str) or source not in {"internal", "ch1", "ch2"}:
+        raise WaveformParameterError(f"{mode} source must be internal, ch1 or ch2.")
+    if source == "internal":
+        shape, frequency = _normalize_modulation_shape_and_frequency(
+            config.shape, config.modulation_frequency_hz, modulation=mode, capabilities=capabilities
+        )
+        return source, shape, frequency
+    if capabilities.channel_count != 2:
+        raise WaveformParameterError("Other channel modulation requires a two-channel model.")
+    if config.modulation_frequency_hz is not None or config.shape not in (None, "sine"):
+        raise WaveformParameterError("Omit internal modulation frequency and shape for other-channel source.")
+    return source, None, None
+
+
+def _modulation_source_token(source):
+    return "INTernal" if source == "internal" else source.upper()
+
+
+def _modulation_internal_commands(mode, source, shape, frequency):
+    if source != "internal":
+        return ()
+    return (
+        f"SOURce1:{mode}:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
+        f"SOURce1:{mode}:INTernal:FREQuency {_format_scpi_number(frequency)}",
+    )
+
+
 def _prepare_am(
     carrier: str,
     config: AMConfig | None,
@@ -5188,12 +5256,7 @@ def _prepare_am(
             f"{carrier.upper()} carrier is not supported for AM configuration."
         )
 
-    shape, frequency = _normalize_modulation_shape_and_frequency(
-        config.shape,
-        config.modulation_frequency_hz,
-        modulation="AM",
-        capabilities=capabilities,
-    )
+    source, shape, frequency = _modulation_inputs(config, "AM", capabilities)
     depth = _normalize_finite_number(
         config.depth_percent,
         "depth",
@@ -5211,15 +5274,14 @@ def _prepare_am(
     normalized = AMConfig(
         modulation_frequency_hz=frequency,
         shape=shape,
+        source=source,
         depth_percent=depth,
         am_type=am_type,
     )
     commands = (
-        "SOURce1:AM:SOURce INTernal",
+        f"SOURce1:AM:SOURce {_modulation_source_token(source)}",
         f"SOURce1:AM:DSSC {'ON' if am_type == 'dssc' else 'OFF'}",
-        f"SOURce1:AM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
-        "SOURce1:AM:INTernal:FREQuency "
-        f"{_format_scpi_number(frequency)}",
+        *_modulation_internal_commands("AM", source, shape, frequency),
         f"SOURce1:AM:DEPTh {_format_scpi_number(depth)}",
         "SOURce1:AM:STATe ON",
     )
@@ -5247,12 +5309,7 @@ def _prepare_fm(
         "carrier frequency",
         waveform="FM",
     )
-    shape, modulation_frequency = _normalize_modulation_shape_and_frequency(
-        config.shape,
-        config.modulation_frequency_hz,
-        modulation="FM",
-        capabilities=capabilities,
-    )
+    source, shape, modulation_frequency = _modulation_inputs(config, "FM", capabilities)
     deviation = _normalize_finite_number(
         config.deviation_hz,
         "deviation",
@@ -5278,13 +5335,12 @@ def _prepare_fm(
     normalized = FMConfig(
         modulation_frequency_hz=modulation_frequency,
         shape=shape,
+        source=source,
         deviation_hz=deviation,
     )
     commands = (
-        "SOURce1:FM:SOURce INTernal",
-        f"SOURce1:FM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
-        "SOURce1:FM:INTernal:FREQuency "
-        f"{_format_scpi_number(modulation_frequency)}",
+        f"SOURce1:FM:SOURce {_modulation_source_token(source)}",
+        *_modulation_internal_commands("FM", source, shape, modulation_frequency),
         f"SOURce1:FM:DEViation {_format_scpi_number(deviation)}",
         "SOURce1:FM:STATe ON",
     )
@@ -5312,12 +5368,7 @@ def _prepare_pm(
         "carrier frequency",
         waveform="PM",
     )
-    shape, modulation_frequency = _normalize_modulation_shape_and_frequency(
-        config.shape,
-        config.modulation_frequency_hz,
-        modulation="PM",
-        capabilities=capabilities,
-    )
+    source, shape, modulation_frequency = _modulation_inputs(config, "PM", capabilities)
     deviation = _normalize_finite_number(
         config.deviation_deg,
         "deviation",
@@ -5327,7 +5378,7 @@ def _prepare_pm(
         raise WaveformParameterError(
             "PM deviation must be between 0 and 360 degrees."
         )
-    if carrier_frequency <= 20 * modulation_frequency:
+    if modulation_frequency is not None and carrier_frequency <= 20 * modulation_frequency:
         raise WaveformParameterError(
             "PM carrier frequency must be greater than 20 times the modulation frequency."
         )
@@ -5335,13 +5386,12 @@ def _prepare_pm(
     normalized = PMConfig(
         modulation_frequency_hz=modulation_frequency,
         shape=shape,
+        source=source,
         deviation_deg=deviation,
     )
     commands = (
-        "SOURce1:PM:SOURce INTernal",
-        f"SOURce1:PM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
-        "SOURce1:PM:INTernal:FREQuency "
-        f"{_format_scpi_number(modulation_frequency)}",
+        f"SOURce1:PM:SOURce {_modulation_source_token(source)}",
+        *_modulation_internal_commands("PM", source, shape, modulation_frequency),
         f"SOURce1:PM:DEViation {_format_scpi_number(deviation)}",
         "SOURce1:PM:STATe ON",
     )
@@ -5446,12 +5496,7 @@ def _prepare_pwm(
     if not isinstance(config, PWMConfig):
         raise WaveformParameterError("PWM configuration must use PWMConfig.")
 
-    shape, modulation_frequency = _normalize_modulation_shape_and_frequency(
-        config.shape,
-        config.modulation_frequency_hz,
-        modulation="PWM",
-        capabilities=capabilities,
-    )
+    source, shape, modulation_frequency = _modulation_inputs(config, "PWM", capabilities)
     deviation = _normalize_finite_number(
         config.deviation_s,
         "width deviation",
@@ -5479,13 +5524,12 @@ def _prepare_pwm(
     normalized = PWMConfig(
         modulation_frequency_hz=modulation_frequency,
         shape=shape,
+        source=source,
         deviation_s=deviation,
     )
     commands = (
-        "SOURce1:PWM:SOURce INTernal",
-        f"SOURce1:PWM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
-        "SOURce1:PWM:INTernal:FREQuency "
-        f"{_format_scpi_number(modulation_frequency)}",
+        f"SOURce1:PWM:SOURce {_modulation_source_token(source)}",
+        *_modulation_internal_commands("PWM", source, shape, modulation_frequency),
         f"SOURce1:PWM:DEViation {_format_scpi_number(deviation)}",
         "SOURce1:PWM:STATe ON",
     )
@@ -5510,12 +5554,7 @@ def _prepare_sum(
             f"{carrier.upper()} carrier is not supported for Sum configuration."
         )
 
-    shape, frequency = _normalize_modulation_shape_and_frequency(
-        config.shape,
-        config.modulation_frequency_hz,
-        modulation="Sum",
-        capabilities=capabilities,
-    )
+    source, shape, frequency = _modulation_inputs(config, "Sum", capabilities)
     amplitude_percent = _normalize_finite_number(
         config.amplitude_percent,
         "amplitude percent",
@@ -5532,13 +5571,12 @@ def _prepare_sum(
     normalized = SumConfig(
         modulation_frequency_hz=frequency,
         shape=shape,
+        source=source,
         amplitude_percent=amplitude_percent,
     )
     commands = (
-        "SOURce1:SUM:SOURce INTernal",
-        f"SOURce1:SUM:INTernal:FUNCtion {MODULATION_SHAPE_SCPI[shape]}",
-        "SOURce1:SUM:INTernal:FREQuency "
-        f"{_format_scpi_number(frequency)}",
+        f"SOURce1:SUM:SOURce {_modulation_source_token(source)}",
+        *_modulation_internal_commands("SUM", source, shape, frequency),
         "SOURce1:SUM:AMPLitude "
         f"{_format_scpi_number(amplitude_percent)}",
         "SOURce1:SUM:STATe ON",
@@ -6799,7 +6837,11 @@ def configure_pulse(
             capabilities,
             context.identity.model,
         )
-        _check_independent_channel_guard(session, capabilities, context)
+        recover = selected_channel if (
+            support_policy_mode == SUPPORT_POLICY_MODE_VALIDATION
+            or isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
+        ) else None
+        _check_independent_channel_guard(session, capabilities, context, recover_modulation_receiver=recover)
         (
             frequency,
             amplitude,
@@ -6822,6 +6864,8 @@ def configure_pulse(
         ) = prepare_configuration(capabilities)
         commands = _channelize_commands(commands, selected_channel)
         advanced_commands = (*am_commands, *pwm_commands, *sum_commands, *burst_commands)
+        channel_advanced = _channelize_commands(advanced_commands, selected_channel)
+        other = _other_channel_modulation_precheck(session, (*commands, *channel_advanced), selected_channel)
         source_prefix = f"SOURce{selected_channel}"
         output_prefix = f"OUTPut{selected_channel}"
 
@@ -7004,10 +7048,12 @@ def configure_pulse(
             abs_tolerance=0.0,
             context=context,
         )
-        for command in _channelize_commands(advanced_commands, selected_channel):
+        for command in channel_advanced:
             write_pulse_command(command, "off")
         _check_trigger_delay_configuration(session, advanced_commands, before_writes=False)
-        if verify_readback:
+        if other:
+            _verify_other_channel_modulation(session, context, advanced_commands, selected_channel)
+        elif verify_readback:
             _verify_advanced_mode_configuration(
                 session,
                 context,
@@ -9434,6 +9480,57 @@ def _write_to_supported_instrument(
     return context
 
 
+def _other_channel_modulation_precheck(session, commands, channel):
+    """Check a requested cross-channel source before any configuration write."""
+    sources = [(cmd.split(":")[1], cmd[-1]) for cmd in commands
+               if cmd.endswith((":SOURce CH1", ":SOURce CH2"))]
+    if not sources:
+        return False
+    from .dual_channel import _require_off, _active_other_source, _numeric, _query, _check_levels
+    _require_off(session, (1, 2))
+    if len(sources) != 1 or int(sources[0][1]) != 3-channel:
+        raise WaveformParameterError("Invalid other-channel modulation source.")
+    mode, source = sources[0]
+    source = int(source)
+    if _active_other_source(session, source):
+        raise WaveformParameterError("Circular other-channel modulation is not allowed.")
+    source_function = _query(session, f"SOURce{source}:FUNCtion?")
+    if source_function not in {"SIN", "SINUSOID", "SQU", "SQUARE", "RAMP", "TRI", "TRIANGLE",
+                               "PULS", "PULSE", "DC", "NOIS", "NOISE", "PRBS", "ARB"}:
+        raise WaveformVerificationError("Unknown modulation source waveform.")
+    settings = dict(cmd.split(" ", 1) for cmd in commands if " " in cmd)
+    prefix = f"SOURce{channel}:"
+    if mode == "PM":
+        if source_function == "DC":
+            mod_frequency = 0
+        elif source_function in {"NOIS", "NOISE"}:
+            mod_frequency = _numeric(session, f"SOURce{source}:FUNCtion:NOISe:BANDwidth?")
+        elif source_function == "PRBS":
+            mod_frequency = _numeric(session, f"SOURce{source}:FUNCtion:PRBS:BRATe?")
+        elif source_function == "ARB":
+            mod_frequency = _numeric(session, f"SOURce{source}:FUNCtion:ARBitrary:FREQuency?")
+        else:
+            mod_frequency = _numeric(session, f"SOURce{source}:FREQuency?")
+        if float(settings[prefix + "FREQuency"]) <= 20 * mod_frequency:
+            raise WaveformParameterError("PM carrier frequency must be greater than 20 times the source frequency.")
+    if mode in {"AM", "SUM"}:
+        amp = float(settings[prefix + "VOLTage"])
+        offset = float(settings[prefix + "VOLTage:OFFSet"])
+        fraction = float(settings[prefix + ("AM:DEPTh" if mode == "AM" else "SUM:AMPLitude")]) / 100
+        effective = amp * (fraction if settings.get(prefix + "AM:DSSC") == "ON" else 1 + fraction)
+        load = settings[f"OUTPut{channel}:LOAD"]
+        _check_levels(session, channel, offset-effective/2, offset+effective/2,
+                      load="high-z" if load == "INF" else load)
+    return True
+
+
+def _verify_other_channel_modulation(session, context, commands, selected_channel):
+    from .dual_channel import _error_free, _require_off
+    _error_free(session)
+    _verify_advanced_mode_configuration(session, context, commands, selected_channel=selected_channel)
+    _require_off(session, (1, 2))
+
+
 def _prepare_and_write_to_supported_instrument(
     resource: str,
     backend: str | None,
@@ -9468,13 +9565,21 @@ def _prepare_and_write_to_supported_instrument(
             context.identity.model,
         )
         if independent_channel_guard:
-            _check_independent_channel_guard(session, capabilities, context)
+            recover = selected_channel if (
+                support_policy_mode == SUPPORT_POLICY_MODE_VALIDATION
+                or isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
+            ) and any(cmd == "SOURce1:AM:STATe OFF" for cmd in preflight[1]) else None
+            _check_independent_channel_guard(session, capabilities, context, recover_modulation_receiver=recover)
         values, commands = prepare_configuration(capabilities)
+        channel_commands = _channelize_commands(commands, selected_channel)
+        other = _other_channel_modulation_precheck(session, channel_commands, selected_channel)
         _check_trigger_delay_configuration(session, commands, before_writes=True)
-        for command in _channelize_commands(commands, selected_channel):
+        for command in channel_commands:
             session.write(command)
         _check_trigger_delay_configuration(session, commands, before_writes=False)
-        if verify_readback:
+        if other:
+            _verify_other_channel_modulation(session, context, commands, selected_channel)
+        elif verify_readback:
             _verify_advanced_mode_configuration(
                 session, context, commands, selected_channel=selected_channel
             )

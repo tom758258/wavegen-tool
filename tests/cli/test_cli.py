@@ -318,6 +318,10 @@ class FakeSession:
             return "0"
         if "TRACK?" in cmd_upper:
             return "OFF"
+        if cmd_upper.endswith(":COMBINE:FEED?"):
+            return "NONE"
+        if cmd_upper.endswith(":STATE?"):
+            return "0"
         return self.response
 
     def close(self):
@@ -4351,6 +4355,8 @@ def test_configure_sine_product_live_accepts_matching_33512b(
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
+        *[query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))],
     ]
     assert session.writes[0] == "OUTPut1 OFF"
     assert "OUTPut1 ON" not in session.writes
@@ -4424,6 +4430,8 @@ def test_configure_sine_validation_live_uses_detected_33512b_capability(
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
+        *[query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))],
     ]
     assert session.writes == []
 

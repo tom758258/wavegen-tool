@@ -211,13 +211,16 @@ _WAVEFORM_READBACK_ACTIONS = (
 _ADVANCED_OPTION_FIELDS = (
     "am_frequency",
     "am_shape",
+    "am_source",
     "am_depth",
     "am_type",
     "fm_frequency",
     "fm_shape",
+    "fm_source",
     "fm_deviation",
     "pm_frequency",
     "pm_shape",
+    "pm_source",
     "pm_deviation_deg",
     "fsk_hop_frequency",
     "fsk_rate",
@@ -225,9 +228,11 @@ _ADVANCED_OPTION_FIELDS = (
     "bpsk_rate",
     "pwm_frequency",
     "pwm_shape",
+    "pwm_source",
     "pwm_deviation_s",
     "sum_frequency",
     "sum_shape",
+    "sum_source",
     "sum_amplitude_percent",
     "burst_count",
     "burst_period_s",
@@ -338,17 +343,21 @@ def _add_am_arguments(parser: argparse.ArgumentParser) -> None:
         help="AM type (default: normal when AM is configured).",
     )
     _add_modulation_shape_argument(parser, "am")
+    parser.add_argument("--am-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _am_config_from_args(args: argparse.Namespace) -> AMConfig | None:
-    values = (args.am_frequency, args.am_depth, args.am_type, args.am_shape)
+    values = (args.am_frequency, args.am_depth, args.am_type, args.am_shape, args.am_source)
     if all(value is None for value in values):
         return None
+    if args.am_source in {"ch1", "ch2"} and (args.am_frequency is not None or args.am_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return AMConfig(
         modulation_frequency_hz=args.am_frequency,
         depth_percent=args.am_depth,
         am_type="normal" if args.am_type is None else args.am_type,
         shape=args.am_shape or "sine",
+        source=args.am_source or "internal",
     )
 
 
@@ -364,16 +373,20 @@ def _add_fm_arguments(parser: argparse.ArgumentParser) -> None:
         help="FM peak frequency deviation in Hz.",
     )
     _add_modulation_shape_argument(parser, "fm")
+    parser.add_argument("--fm-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _fm_config_from_args(args: argparse.Namespace) -> FMConfig | None:
-    values = (args.fm_frequency, args.fm_deviation, args.fm_shape)
+    values = (args.fm_frequency, args.fm_deviation, args.fm_shape, args.fm_source)
     if all(value is None for value in values):
         return None
+    if args.fm_source in {"ch1", "ch2"} and (args.fm_frequency is not None or args.fm_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return FMConfig(
         modulation_frequency_hz=args.fm_frequency,
         deviation_hz=args.fm_deviation,
         shape=args.fm_shape or "sine",
+        source=args.fm_source or "internal",
     )
 
 
@@ -389,16 +402,20 @@ def _add_pm_arguments(parser: argparse.ArgumentParser) -> None:
         help="PM peak phase deviation in degrees.",
     )
     _add_modulation_shape_argument(parser, "pm")
+    parser.add_argument("--pm-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _pm_config_from_args(args: argparse.Namespace) -> PMConfig | None:
-    values = (args.pm_frequency, args.pm_deviation_deg, args.pm_shape)
+    values = (args.pm_frequency, args.pm_deviation_deg, args.pm_shape, args.pm_source)
     if all(value is None for value in values):
         return None
+    if args.pm_source in {"ch1", "ch2"} and (args.pm_frequency is not None or args.pm_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return PMConfig(
         modulation_frequency_hz=args.pm_frequency,
         deviation_deg=args.pm_deviation_deg,
         shape=args.pm_shape or "sine",
+        source=args.pm_source or "internal",
     )
 
 
@@ -460,16 +477,20 @@ def _add_pwm_arguments(parser: argparse.ArgumentParser) -> None:
         help="PWM pulse-width deviation in seconds.",
     )
     _add_modulation_shape_argument(parser, "pwm")
+    parser.add_argument("--pwm-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _pwm_config_from_args(args: argparse.Namespace) -> PWMConfig | None:
-    values = (args.pwm_frequency, args.pwm_deviation_s, args.pwm_shape)
+    values = (args.pwm_frequency, args.pwm_deviation_s, args.pwm_shape, args.pwm_source)
     if all(value is None for value in values):
         return None
+    if args.pwm_source in {"ch1", "ch2"} and (args.pwm_frequency is not None or args.pwm_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return PWMConfig(
         modulation_frequency_hz=args.pwm_frequency,
         deviation_s=args.pwm_deviation_s,
         shape=args.pwm_shape or "sine",
+        source=args.pwm_source or "internal",
     )
 
 
@@ -605,16 +626,20 @@ def _add_sum_arguments(parser: argparse.ArgumentParser) -> None:
         help="Internal Sum amplitude relative to carrier amplitude (percent).",
     )
     _add_modulation_shape_argument(parser, "sum")
+    parser.add_argument("--sum-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _sum_config_from_args(args: argparse.Namespace) -> SumConfig | None:
-    values = (args.sum_frequency, args.sum_amplitude_percent, args.sum_shape)
+    values = (args.sum_frequency, args.sum_amplitude_percent, args.sum_shape, args.sum_source)
     if all(value is None for value in values):
         return None
+    if args.sum_source in {"ch1", "ch2"} and (args.sum_frequency is not None or args.sum_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return SumConfig(
         modulation_frequency_hz=args.sum_frequency,
         amplitude_percent=args.sum_amplitude_percent,
         shape=args.sum_shape or "sine",
+        source=args.sum_source or "internal",
     )
 
 
@@ -4392,6 +4417,7 @@ def _am_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "am_enabled": True,
+        **({ "am_source": am.source } if am.source != "internal" else {}),
         "am_frequency_hz": am.modulation_frequency_hz,
         "am_shape": am.shape,
         "am_depth_percent": am.depth_percent,
@@ -4405,6 +4431,7 @@ def _fm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "fm_enabled": True,
+        **({ "fm_source": fm.source } if fm.source != "internal" else {}),
         "fm_frequency_hz": fm.modulation_frequency_hz,
         "fm_shape": fm.shape,
         "fm_deviation_hz": fm.deviation_hz,
@@ -4417,6 +4444,7 @@ def _pm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "pm_enabled": True,
+        **({ "pm_source": pm.source } if pm.source != "internal" else {}),
         "pm_frequency_hz": pm.modulation_frequency_hz,
         "pm_shape": pm.shape,
         "pm_deviation_deg": pm.deviation_deg,
@@ -4451,6 +4479,7 @@ def _pwm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "pwm_enabled": True,
+        **({ "pwm_source": pwm.source } if pwm.source != "internal" else {}),
         "pwm_frequency_hz": pwm.modulation_frequency_hz,
         "pwm_shape": pwm.shape,
         "pwm_deviation_s": pwm.deviation_s,
@@ -4463,6 +4492,7 @@ def _sum_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "sum_enabled": True,
+        **({ "sum_source": sum_config.source } if sum_config.source != "internal" else {}),
         "sum_frequency_hz": sum_config.modulation_frequency_hz,
         "sum_shape": sum_config.shape,
         "sum_amplitude_percent": sum_config.amplitude_percent,

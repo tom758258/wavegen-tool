@@ -536,6 +536,14 @@ def configuration_options(
                 else:
                     raise TypeError
             else:
+                if field in {"am", "fm", "pm", "pwm", "sum"}:
+                    source = values.get("source", "internal")
+                    if source in ("ch1", "ch2") and ("shape" in values or "modulation_frequency_hz" in values):
+                        raise ActionArgumentError("Omit internal frequency and shape for other-channel modulation.")
+                    required = {"am": "depth_percent", "fm": "deviation_hz", "pm": "deviation_deg",
+                                "pwm": "deviation_s", "sum": "amplitude_percent"}[field]
+                    if required not in values or (source == "internal" and "modulation_frequency_hz" not in values):
+                        raise ActionArgumentError(f"Missing modulation parameters for {field}.")
                 options[field] = _MODULATION_CONFIGS[field](**values)
         except TypeError as exc:
             raise ActionArgumentError(f"Invalid {field} object for {command}.") from exc
