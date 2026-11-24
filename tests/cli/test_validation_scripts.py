@@ -575,6 +575,105 @@ def test_full_plan_inventory_and_privacy(
     assert readiness["visa_io_performed"] is False
     assert readiness["git_head"] == report["git_head"]
     assert readiness["git_clean"] is True
+    assert report["complete_mode_selection"] is True
+    assert readiness["complete_mode_selection"] is True
+    assert readiness["selected_modes"] == report["selected_modes"]
+    if model == "33521b":
+        _assert_full_recipe_details(report, readiness)
+
+
+def _assert_full_recipe_details(report, readiness):
+    # Reuse the complete single-channel run for recipe-level assertions. Subset
+    # selection itself is covered by the inventory helper and representative runners.
+    recipes = {recipe["name"]: recipe for recipe in report["full_inventory"]}
+    for name, phase in (
+        ("ch1/burst-immediate", 0),
+        ("ch1/burst-counted-start-phase", 90),
+        ("ch1/burst-gated-start-phase", 45.1),
+    ):
+        recipe = recipes[name]
+        configure, = recipe["steps"]
+        assert recipe["observation"] is None
+        assert configure["result"]["burst_start_phase_deg"] == phase
+        assert configure["advanced_expected"]["settings"]["phase_deg"] == phase
+        assert "--verify-readback" in configure["arguments"]
+
+    cases = {case["name"].split("/", 1)[1]: case["status"] for case in readiness["cases"]}
+    assert cases["ch1/burst-invalid-start-phase-dry-run"] == "PASS"
+    for name in ("ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"):
+        assert cases[f"{name}/step1-dry-run"] == "PASS"
+        assert cases[f"{name}/step1-simulate"] == "PASS"
+
+    assert {"sync/initial-safe-off", "sync/final-safe-off"} <= set(report["planned_cases"])
+    control = next(x for x in report["full_inventory"] if x["name"] == "ch1/sync-control")
+    assert [step["arguments"] for step in control["steps"]] == [
+        ["sync-output", "--state", "on"], ["sync-output", "--state", "off"],
+    ]
+
+    sync_stages = {
+        case["name"].split("/", 1)[1]: case["status"]
+        for case in readiness["cases"] if "/ch1/sync-" in case["name"]
+    }
+    assert sync_stages == {
+        **{
+            f"ch1/sync-configuration/step{step}-{execution}": "PASS"
+            for step in (1, 2, 3) for execution in ("dry-run", "simulate")
+        },
+        "ch1/sync-control/step1-simulate": "PASS",
+        "ch1/sync-control/step2-simulate": "PASS",
+    }
+
+    for slope, idle in (("positive", "low"), ("negative", "high")):
+        name = f"ch1/sweep-external-{slope}"
+        recipe = next(case for case in report["full_inventory"] if case["name"] == name)
+        configure, output = recipe["steps"]
+        assert recipe["required"] is True
+        assert recipe["observation"]["input"] == "external-trigger"
+        assert recipe["observation"]["idle"] == idle
+        assert configure["arguments"][0] == "configure-sine-sweep"
+        assert configure["advanced_expected"]["settings"]["trigger_slope"] == slope
+        assert output["arguments"] == ["output", "--state", "on"]
+        assert {
+            case["name"].split("/", 1)[1]: case["status"]
+            for case in readiness["cases"] if f"/{name}/" in case["name"]
+        } == {
+            f"{name}/step1-dry-run": "PASS",
+            f"{name}/step1-simulate": "PASS",
+            f"{name}/step2-simulate": "PASS",
+        }
+
+    recipes = {
+        recipe["name"]: recipe for recipe in report["full_inventory"]
+        if recipe["family"] == "software-sequence"
+    }
+    assert set(recipes) == {
+        "ch1/software-sequence-basic", "ch1/software-sequence-advanced",
+        "ch1/software-sequence-arbitrary",
+    }
+    for recipe in recipes.values():
+        step, = recipe["steps"]
+        assert step["arguments"][:2] == ["run-software-sequence", "--file"]
+    basic, = recipes["ch1/software-sequence-basic"]["steps"]
+    assert basic["sequence_intent"]["output_on"] is True
+    assert recipes["ch1/software-sequence-basic"]["observation"]
+    arbitrary, = recipes["ch1/software-sequence-arbitrary"]["steps"]
+    assert arbitrary["sequence_intent"]["upload_count"] == 1
+    assert arbitrary["sequence_intent"]["output_on"] is False
+
+    cases = {case["name"]: case["status"] for case in readiness["cases"]}
+    for name in recipes:
+        for execution_mode in ("dry-run", "simulate"):
+            assert cases[f"keysight-33521b/{name}/step1-{execution_mode}"] == "PASS"
+
+    negative = next(
+        case for case in report["full_inventory"] if case["name"] == "ch1/sequence-external-negative"
+    )
+    assert negative["observation"]["input"] == "external-trigger"
+    assert negative["observation"]["idle"] == "high"
+    assert negative["steps"][2]["result"]["trigger_slope"] == "negative"
+    clear = next(x for x in report["full_inventory"] if x["name"] == "ch1/arbitrary-clear")
+    assert any(step["arguments"][0] == "clear-arbitrary-memory" and
+               "--confirm-clear" in step["arguments"] for step in clear["steps"])
 
 
 
@@ -589,34 +688,29 @@ def test_smoke_rejects_modes_before_artifacts(artifact_root):
         assert not list(artifact_root.iterdir())
 
 
-def test_full_preflight_arbitrary_direct_without_hardware(
+def test_full_preflight_static_direct_without_hardware(
     artifact_root: Path, fake_git,
 ) -> None:
     result = _run_script(
         PREFLIGHT_SCRIPT, artifact_root, "-Target", "keysight-33521b",
-        "-Suite", "full", "-Modes", "arbitrary",
+        "-Suite", "full", "-Modes", "static",
     )
     assert result.returncode == 0, result.stdout + result.stderr
     report = _read_report(_only_run(artifact_root))
     assert report["status"] == "PASS"
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
-    assert report["selected_modes"] in ("arbitrary", ["arbitrary"])
+    assert report["selected_modes"] in ("static", ["static"])
+    assert report["complete_mode_selection"] is False
     cases = {case["name"]: case["status"] for case in report["cases"]}
-    for step in (1, 3):
-        for mode in ("dry-run", "simulate"):
-            assert cases[f"keysight-33521b/ch1/arbitrary-builtin-select/step{step}-{mode}"] == "PASS"
+    for mode in ("dry-run", "simulate"):
+        assert cases[f"keysight-33521b/ch1/static-sine/step1-{mode}"] == "PASS"
+    assert not any("/ch1/arbitrary-" in name for name in cases)
 
 
 @pytest.mark.parametrize("mode,expected,unexpected", [
-    ("static", "ch1/static-sine", "ch1/burst-bus"),
-    ("output", "ch1/sync-control", "ch1/static-sine"),
     ("burst,output", "ch1/burst-bus", "ch1/static-sine"),
-    ("burst", "ch1/burst-counted-start-phase", "ch1/static-sine"),
-    ("sweep", "ch1/sweep-external-positive", "ch1/list-bus-trigger"),
     ("arbitrary", "ch1/arbitrary-builtin-select", "ch1/sequence-bus"),
-    ("arbitrary,sequence", "ch1/arbitrary-clear", "ch1/static-sine"),
-    ("software-sequence", "ch1/software-sequence-basic", "ch1/sequence-bus"),
     ("basic-workflows", "ch1/amplitude-ramp", "ch1/software-sequence-basic"),
 ])
 def test_full_plan_filters_modes_and_propagates_to_preflight(
@@ -632,33 +726,16 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     report = _read_report(_only_run(artifact_root))
     assert expected in report["planned_cases"]
     assert unexpected not in report["planned_cases"]
+    assert report["complete_mode_selection"] is False
+    assert report["selected_modes"] in (mode, mode.split(","))
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
     if mode == "burst,output":
-        assert {"ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"} <= set(
-            report["planned_cases"]
-        )
-    if mode == "burst":
-        assert report["complete_mode_selection"] is False
-        recipes = {recipe["name"]: recipe for recipe in report["full_inventory"]}
-        for name, phase in (
-            ("ch1/burst-immediate", 0),
-            ("ch1/burst-counted-start-phase", 90),
-            ("ch1/burst-gated-start-phase", 45.1),
-        ):
-            recipe = recipes[name]
-            configure, = recipe["steps"]
-            assert recipe["observation"] is None
-            assert configure["result"]["burst_start_phase_deg"] == phase
-            assert configure["advanced_expected"]["settings"]["phase_deg"] == phase
-            assert "--verify-readback" in configure["arguments"]
-    if mode == "output":
-        assert {"sync/initial-safe-off", "sync/final-safe-off", "ch1/sync-configuration",
-                "ch1/configure-output", "ch1/output-control"} <= set(report["planned_cases"])
-        control = next(x for x in report["full_inventory"] if x["name"] == "ch1/sync-control")
-        assert [step["arguments"] for step in control["steps"]] == [
-            ["sync-output", "--state", "on"], ["sync-output", "--state", "off"],
-        ]
+        assert {
+            "ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase",
+            "ch1/sync-control", "ch1/sync-configuration", "ch1/output-control",
+            "ch1/configure-output",
+        } <= set(report["planned_cases"])
     if mode == "arbitrary":
         assert {"ch1/arbitrary-upload-configure", "ch1/arbitrary-clear"} <= set(report["planned_cases"])
         private_report = _read_report(_only_run(artifact_root), "private")
@@ -677,46 +754,9 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
             name = select["result"]["name"]
             assert select["readback"]["output_state"] == "off"
             assert catalog["result"]["names"] == [rf"INT:\BUILTIN\{name}.ARB"]
-    if mode == "software-sequence":
-        assert report["complete_mode_selection"] is False
-        recipes = {
-            recipe["name"]: recipe for recipe in report["full_inventory"]
-            if recipe["family"] != "inspection"
-        }
-        assert set(recipes) == {
-            "ch1/software-sequence-basic", "ch1/software-sequence-advanced",
-            "ch1/software-sequence-arbitrary",
-        }
-        for recipe in recipes.values():
-            step, = recipe["steps"]
-            assert step["arguments"][:2] == ["run-software-sequence", "--file"]
-        basic, = recipes["ch1/software-sequence-basic"]["steps"]
-        assert basic["sequence_intent"]["output_on"] is True
-        assert recipes["ch1/software-sequence-basic"]["observation"]
-        arbitrary, = recipes["ch1/software-sequence-arbitrary"]["steps"]
-        assert arbitrary["sequence_intent"]["upload_count"] == 1
-        assert arbitrary["sequence_intent"]["output_on"] is False
-    if mode == "arbitrary,sequence":
-        assert "ch1/sequence-bus" in report["planned_cases"]
-        assert "ch1/sequence-bus-functional" in report["planned_cases"]
-        assert "ch1/sequence-external" in report["planned_cases"]
-        negative = next(
-            case for case in report["full_inventory"] if case["name"] == "ch1/sequence-external-negative"
-        )
-        assert negative["observation"]["input"] == "external-trigger"
-        assert negative["observation"]["idle"] == "high"
-        assert negative["steps"][2]["result"]["trigger_slope"] == "negative"
-        clear = next(x for x in report["full_inventory"] if x["name"] == "ch1/arbitrary-clear")
-        assert any(step["arguments"][0] == "clear-arbitrary-memory" and
-                   "--confirm-clear" in step["arguments"] for step in clear["steps"])
     preflight = next((artifact_root / "_preflight").glob("run_*/shareable/report.json"))
     readiness = json.loads(preflight.read_text(encoding="utf-8"))
     assert readiness["status"] == "PASS"
-    if mode == "software-sequence":
-        cases = {case["name"]: case["status"] for case in readiness["cases"]}
-        for name in recipes:
-            for execution_mode in ("dry-run", "simulate"):
-                assert cases[f"keysight-33521b/{name}/step1-{execution_mode}"] == "PASS"
     if mode == "basic-workflows":
         recipes = {
             recipe["name"]: recipe for recipe in report["full_inventory"]
@@ -740,45 +780,18 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         assert cases["keysight-33521b/basic-workflows-worker-lifecycle"] == "PASS"
     assert readiness["hardware_touched"] is False
     assert readiness["selected_modes"] == report["selected_modes"]
-    if mode == "burst":
-        cases = {case["name"].split("/", 1)[1]: case["status"] for case in readiness["cases"]}
-        assert cases["ch1/burst-invalid-start-phase-dry-run"] == "PASS"
-        for name in ("ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"):
-            assert cases[f"{name}/step1-dry-run"] == "PASS"
-            assert cases[f"{name}/step1-simulate"] == "PASS"
-    if mode == "output":
-        sync_stages = {
-            case["name"].split("/", 1)[1]: case["status"]
-            for case in readiness["cases"] if "/ch1/sync-" in case["name"]
-        }
-        assert sync_stages == {
-            **{
-                f"ch1/sync-configuration/step{step}-{execution}": "PASS"
-                for step in (1, 2, 3) for execution in ("dry-run", "simulate")
-            },
-            "ch1/sync-control/step1-simulate": "PASS",
-            "ch1/sync-control/step2-simulate": "PASS",
-        }
-    if mode == "sweep":
-        assert report["complete_mode_selection"] is False
-        for slope, idle in (("positive", "low"), ("negative", "high")):
-            name = f"ch1/sweep-external-{slope}"
-            recipe = next(case for case in report["full_inventory"] if case["name"] == name)
-            configure, output = recipe["steps"]
-            assert recipe["required"] is True
-            assert recipe["observation"]["input"] == "external-trigger"
-            assert recipe["observation"]["idle"] == idle
-            assert configure["arguments"][0] == "configure-sine-sweep"
-            assert configure["advanced_expected"]["settings"]["trigger_slope"] == slope
-            assert output["arguments"] == ["output", "--state", "on"]
-            assert {
-                case["name"].split("/", 1)[1]: case["status"]
-                for case in readiness["cases"] if f"/{name}/" in case["name"]
-            } == {
-                f"{name}/step1-dry-run": "PASS",
-                f"{name}/step1-simulate": "PASS",
-                f"{name}/step2-simulate": "PASS",
-            }
+    assert readiness["complete_mode_selection"] is False
+    assert readiness["visa_io_performed"] is False
+    case_names = {case["name"] for case in readiness["cases"]}
+    assert any(name.startswith(f"keysight-33521b/{expected}/") for name in case_names)
+    assert not any(name.startswith(f"keysight-33521b/{unexpected}/") for name in case_names)
+    if mode == "burst,output":
+        assert "keysight-33521b/ch1/sync-control/step2-simulate" in case_names
+    if mode == "arbitrary":
+        cases = {case["name"]: case["status"] for case in readiness["cases"]}
+        for step in (1, 3):
+            for execution in ("dry-run", "simulate"):
+                assert cases[f"keysight-33521b/ch1/arbitrary-builtin-select/step{step}-{execution}"] == "PASS"
 
 
 def test_invalid_full_modes_fail_without_artifacts(artifact_root, fake_git):
@@ -892,6 +905,7 @@ def _run_powershell_test(artifact_root, body):
 
 def test_full_publish_provenance_failure_retains_shareable_evidence(artifact_root, fake_git):
     # Main and child preflight start clean; only the final publication sees dirty Git.
+    # One Full mode exercises the same publication gate without replaying all recipes.
     harness = artifact_root / "publish-provenance.ps1"
     script_path = str(LIVE_SCRIPT).replace("'", "''")
     harness.write_text(
@@ -903,7 +917,7 @@ def test_full_publish_provenance_failure_retains_shareable_evidence(artifact_roo
         "        ' M tracked-source.py'\n"
         "    }\n"
         "}\n"
-        f"& '{script_path}' -Target keysight-33521b -Suite full -Connection usb "
+        f"& '{script_path}' -Target keysight-33521b -Suite full -Modes static -Connection usb "
         f"-Backend system -Resource '{USB_RESOURCE}' -PlanOnly -DebugArtifacts -Python $Python -OutputRoot $OutputRoot\n"
         "exit $LASTEXITCODE\n",
         encoding="utf-8",

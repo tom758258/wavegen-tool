@@ -67,20 +67,17 @@ def artifact_root() -> Path:
         shutil.rmtree(root, ignore_errors=True)
 
 
-def test_validation_helpers_dot_source() -> None:
+def test_target_profiles_and_resolution_match_core_registry() -> None:
     result = _run_powershell(
-        _dot_source(HELPERS_PATH, PRIVACY_PATH) + "Write-Output 'loaded'"
+        _dot_source(HELPERS_PATH, PRIVACY_PATH)
+        + "@{ loaded = 'loaded'; profiles = @($script:ValidationTargetProfiles); "
+        + "known = (Resolve-ValidationTarget -Target 'keysight-33521b'); "
+        + "all_targets = @(Resolve-ValidationTargets -Target 'all') "
+        + "} | ConvertTo-Json -Depth 5 -Compress"
     )
-
-    assert result.stdout.strip() == "loaded"
-
-
-def test_target_profile_mirror_matches_core_registry() -> None:
-    result = _run_powershell(
-        _dot_source(HELPERS_PATH)
-        + "$script:ValidationTargetProfiles | ConvertTo-Json -Compress"
-    )
-    profiles = json.loads(result.stdout)
+    data = json.loads(result.stdout)
+    assert data["loaded"] == "loaded"
+    profiles = data["profiles"]
     expected_ids = registered_model_ids()
 
     assert tuple(profile["model_id"] for profile in profiles) == expected_ids
@@ -90,25 +87,11 @@ def test_target_profile_mirror_matches_core_registry() -> None:
         model_id: model_info_for_model_id(model_id).canonical_model
         for model_id in expected_ids
     }
-
-
-def test_target_resolution_known_and_all() -> None:
-    known = _run_powershell(
-        _dot_source(HELPERS_PATH)
-        + "Resolve-ValidationTarget -Target 'keysight-33521b' | ConvertTo-Json -Compress"
-    )
-    all_targets = _run_powershell(
-        _dot_source(HELPERS_PATH)
-        + "Resolve-ValidationTargets -Target 'all' | ConvertTo-Json -Compress"
-    )
-
-    assert json.loads(known.stdout) == {
+    assert data["known"] == {
         "model_id": "keysight-33521b",
         "model": "33521B",
     }
-    assert [item["model_id"] for item in json.loads(all_targets.stdout)] == list(
-        registered_model_ids()
-    )
+    assert [item["model_id"] for item in data["all_targets"]] == list(expected_ids)
 
 
 def test_target_resolution_unknown_fails_closed() -> None:
@@ -122,16 +105,26 @@ def test_target_resolution_unknown_fails_closed() -> None:
     assert "Unsupported target" in result.stderr
 
 
-def test_path_safety_allows_tmp_tests_and_rejects_outside(artifact_root: Path) -> None:
-    allowed = artifact_root / "inside"
-    outside = REPO_ROOT / "outside-validation-artifacts"
-    script = (
+def test_run_directory_layout_is_created_under_tmp_tests(artifact_root: Path) -> None:
+    result = _run_powershell(
         _dot_source(HELPERS_PATH)
         + f"Assert-PathUnderRoot -RootPath {_ps_quote(REPO_ROOT / '.tmp_tests')} "
-        + f"-Path {_ps_quote(allowed)}; Write-Output 'allowed'"
+        + f"-Path {_ps_quote(artifact_root / 'inside')}; "
+        + f"New-ValidationRunDirectory -RepoRoot {_ps_quote(REPO_ROOT)} "
+        + f"-BaseRoot {_ps_quote(artifact_root)} | ConvertTo-Json -Compress"
     )
-    assert _run_powershell(script).stdout.strip() == "allowed"
+    paths = json.loads(result.stdout)
+    run_root = Path(paths["Root"])
 
+    assert run_root.name.startswith("run_")
+    assert run_root.parent == artifact_root
+    assert Path(paths["Private"]).is_dir()
+    assert Path(paths["Shareable"]).is_dir()
+    assert REPO_ROOT / ".tmp_tests" in run_root.parents
+
+
+def test_path_safety_rejects_outside() -> None:
+    outside = REPO_ROOT / "outside-validation-artifacts"
     rejected = _run_powershell(
         _dot_source(HELPERS_PATH)
         + f"New-ValidationRunDirectory -RepoRoot {_ps_quote(REPO_ROOT)} "
@@ -158,45 +151,38 @@ def test_case_status_formats_pass_fail_and_na() -> None:
     assert "N/A   [live][cli] example" in result.stdout
 
 
-def test_process_capture_success_writes_stdout(artifact_root: Path) -> None:
-    stdout_path = artifact_root / "process" / "stdout.txt"
-    stderr_path = artifact_root / "process" / "stderr.txt"
+def test_process_capture_success_and_failure(artifact_root: Path) -> None:
+    success_stdout = artifact_root / "process" / "stdout.txt"
+    success_stderr = artifact_root / "process" / "stderr.txt"
+    failure_stdout = artifact_root / "failure" / "stdout.txt"
+    failure_stderr = artifact_root / "failure" / "stderr.txt"
     result = _run_powershell(
         _dot_source(HELPERS_PATH)
-        + "$result = Invoke-CapturedCommand -Name 'success' "
+        + "$success = Invoke-CapturedCommand -Name 'success' "
         + f"-FilePath {_ps_quote(sys.executable)} "
         + "-Arguments @('-c', 'print(\"captured stdout\")') "
-        + f"-StdOutPath {_ps_quote(stdout_path)} -StdErrPath {_ps_quote(stderr_path)} "
+        + f"-StdOutPath {_ps_quote(success_stdout)} -StdErrPath {_ps_quote(success_stderr)} "
         + f"-WorkingDirectory {_ps_quote(REPO_ROOT)}; "
-        + "$result | ConvertTo-Json -Compress"
-    )
-    payload = json.loads(result.stdout)
-
-    assert payload["exit_code"] == 0
-    assert payload["success"] is True
-    assert Path(payload["stdout"]) == stdout_path
-    assert stdout_path.read_text(encoding="utf-8").strip() == "captured stdout"
-    assert stderr_path.read_text(encoding="utf-8") == ""
-
-
-def test_process_capture_failure_writes_stderr(artifact_root: Path) -> None:
-    stdout_path = artifact_root / "failure" / "stdout.txt"
-    stderr_path = artifact_root / "failure" / "stderr.txt"
-    result = _run_powershell(
-        _dot_source(HELPERS_PATH)
-        + "$result = Invoke-CapturedCommand -Name 'failure' "
+        + "$failure = Invoke-CapturedCommand -Name 'failure' "
         + f"-FilePath {_ps_quote(sys.executable)} "
         + "-Arguments @('-c', 'import sys; print(\"captured stderr\", file=sys.stderr); sys.exit(7)') "
-        + f"-StdOutPath {_ps_quote(stdout_path)} -StdErrPath {_ps_quote(stderr_path)} "
+        + f"-StdOutPath {_ps_quote(failure_stdout)} -StdErrPath {_ps_quote(failure_stderr)} "
         + f"-WorkingDirectory {_ps_quote(REPO_ROOT)}; "
-        + "$result | ConvertTo-Json -Compress"
+        + "@{ success = $success; failure = $failure } | ConvertTo-Json -Depth 5 -Compress"
     )
     payload = json.loads(result.stdout)
+    success = payload["success"]
+    failure = payload["failure"]
 
-    assert payload["exit_code"] == 7
-    assert payload["success"] is False
-    assert Path(payload["stderr"]) == stderr_path
-    assert stderr_path.read_text(encoding="utf-8").strip() == "captured stderr"
+    assert success["exit_code"] == 0
+    assert success["success"] is True
+    assert Path(success["stdout"]) == success_stdout
+    assert success_stdout.read_text(encoding="utf-8").strip() == "captured stdout"
+    assert success_stderr.read_text(encoding="utf-8") == ""
+    assert failure["exit_code"] == 7
+    assert failure["success"] is False
+    assert Path(failure["stderr"]) == failure_stderr
+    assert failure_stderr.read_text(encoding="utf-8").strip() == "captured stderr"
 
 
 @pytest.mark.parametrize("mode", ["process", "tree", "pipes"])
@@ -302,6 +288,7 @@ def test_structured_json_is_sanitized_and_safe_metadata_is_retained(
         "connection": "usb",
         "backend": "ivi",
         "ordinary": "retained",
+        "channels": [1, 2],
         "nested": {
             "resource": resource,
             "serial_number": "SYNTH876543",
@@ -312,6 +299,15 @@ def test_structured_json_is_sanitized_and_safe_metadata_is_retained(
     (private_root / "nested.json").write_text(
         json.dumps(private_payload), encoding="utf-8"
     )
+    sensitive_marker = "SYNTH_PRIVATE_SECRET_123456"
+    malformed = (
+        '{"resource":"USB0::0x0957::0x2C07::'
+        f'{sensitive_marker}::INSTR"'
+    )
+    broken_private_path = private_root / "broken.json"
+    broken_private_path.write_text(malformed, encoding="utf-8")
+    unknown = private_root / "raw.bin"
+    unknown.write_bytes(b"synthetic private bytes")
     summary_path = private_root / "summary.md"
     summary_path.write_text(f"Firmware: 9.99\nResource: {resource}\n", encoding="utf-8")
     report_literal = json.dumps(private_payload).replace("'", "''")
@@ -333,6 +329,8 @@ def test_structured_json_is_sanitized_and_safe_metadata_is_retained(
     assert report["connection"] == "usb"
     assert report["backend"] == "ivi"
     assert report["ordinary"] == "retained"
+    assert report["channels"] == [1, 2]
+    assert all(type(channel) is int for channel in report["channels"])
     assert report["artifact_visibility"] == "shareable"
     assert report["candidate_evidence_only"] is True
     assert report["promotes_live_support"] is False
@@ -346,29 +344,16 @@ def test_structured_json_is_sanitized_and_safe_metadata_is_retained(
     assert nested["model_id"] == "keysight-33521b"
     assert resource not in (shareable_root / "summary.md").read_text(encoding="utf-8")
 
-
-def test_shareable_json_retains_numeric_array_values(artifact_root: Path) -> None:
-    private_root = artifact_root / "private"
-    shareable_root = artifact_root / "shareable"
-    private_root.mkdir()
-    shareable_root.mkdir()
-    summary_path = private_root / "summary.md"
-    summary_path.write_text("Synthetic summary", encoding="utf-8")
-    script = (
-        _dot_source(HELPERS_PATH, PRIVACY_PATH)
-        + "$report = [pscustomobject][ordered]@{ channels = @(1, 2) }; "
-        + "$null = New-ShareableArtifactSet -PrivateReport $report "
-        + f"-PrivateSummaryPath {_ps_quote(summary_path)} "
-        + f"-RunRoot {_ps_quote(artifact_root)} "
-        + f"-PrivateRoot {_ps_quote(private_root)} "
-        + f"-ShareableRoot {_ps_quote(shareable_root)} "
-        + f"-RepoRoot {_ps_quote(REPO_ROOT)}"
-    )
-
-    _run_powershell(script)
-
-    report = json.loads((shareable_root / "report.json").read_text(encoding="utf-8"))
-    assert report["channels"] == [1, 2]
+    shareable_content = (shareable_root / "broken.json").read_text(encoding="utf-8")
+    placeholder = json.loads(shareable_content)
+    assert broken_private_path.exists()
+    assert placeholder["artifact_available"] is False
+    assert placeholder["parse_status"] == "failed"
+    assert placeholder["private_raw_artifact_retained"] is True
+    assert sensitive_marker not in shareable_content
+    assert shareable_content != malformed
+    assert unknown.exists()
+    assert not (shareable_root / "raw.bin").exists()
 
 
 def test_extra_detected_serial_is_removed_from_tcpip_shareable_artifacts(
@@ -421,80 +406,6 @@ def test_extra_detected_serial_is_removed_from_tcpip_shareable_artifacts(
     )
     assert serial not in shareable_text
     assert firmware in shareable_text
-
-
-def test_malformed_json_does_not_raw_copy_to_shareable(artifact_root: Path) -> None:
-    private_root = artifact_root / "private"
-    shareable_root = artifact_root / "shareable"
-    private_root.mkdir()
-    shareable_root.mkdir()
-    sensitive_marker = "SYNTH_PRIVATE_SECRET_123456"
-    malformed = (
-        '{"resource":"USB0::0x0957::0x2C07::'
-        f'{sensitive_marker}::INSTR"'
-    )
-    broken_private_path = private_root / "broken.json"
-    broken_private_path.write_text(malformed, encoding="utf-8")
-    summary_path = private_root / "summary.md"
-    summary_path.write_text("Synthetic summary", encoding="utf-8")
-    script = (
-        _dot_source(HELPERS_PATH, PRIVACY_PATH)
-        + "$report = [ordered]@{ status = 'PASS' }; "
-        + "$null = New-ShareableArtifactSet -PrivateReport $report "
-        + f"-PrivateSummaryPath {_ps_quote(summary_path)} -RunRoot {_ps_quote(artifact_root)} "
-        + f"-PrivateRoot {_ps_quote(private_root)} -ShareableRoot {_ps_quote(shareable_root)} "
-        + f"-RepoRoot {_ps_quote(REPO_ROOT)}"
-    )
-    _run_powershell(script)
-
-    broken_shareable_path = shareable_root / "broken.json"
-    shareable_content = broken_shareable_path.read_text(encoding="utf-8")
-    placeholder = json.loads(shareable_content)
-    assert broken_private_path.exists()
-    assert placeholder["artifact_available"] is False
-    assert placeholder["parse_status"] == "failed"
-    assert placeholder["private_raw_artifact_retained"] is True
-    assert sensitive_marker not in shareable_content
-    assert shareable_content != malformed
-
-
-def test_unknown_artifact_is_not_copied_to_shareable(artifact_root: Path) -> None:
-    private_root = artifact_root / "private"
-    shareable_root = artifact_root / "shareable"
-    private_root.mkdir()
-    shareable_root.mkdir()
-    unknown = private_root / "raw.bin"
-    unknown.write_bytes(b"synthetic private bytes")
-    summary_path = private_root / "summary.md"
-    summary_path.write_text("Synthetic summary", encoding="utf-8")
-    script = (
-        _dot_source(HELPERS_PATH, PRIVACY_PATH)
-        + "$report = [ordered]@{ status = 'PASS' }; "
-        + "$null = New-ShareableArtifactSet -PrivateReport $report "
-        + f"-PrivateSummaryPath {_ps_quote(summary_path)} -RunRoot {_ps_quote(artifact_root)} "
-        + f"-PrivateRoot {_ps_quote(private_root)} -ShareableRoot {_ps_quote(shareable_root)} "
-        + f"-RepoRoot {_ps_quote(REPO_ROOT)}"
-    )
-    _run_powershell(script)
-
-    assert unknown.exists()
-    assert not (shareable_root / "raw.bin").exists()
-
-
-def test_run_directory_layout_is_created_under_tmp_tests(artifact_root: Path) -> None:
-    result = _run_powershell(
-        _dot_source(HELPERS_PATH)
-        + f"New-ValidationRunDirectory -RepoRoot {_ps_quote(REPO_ROOT)} "
-        + f"-BaseRoot {_ps_quote(artifact_root)} | ConvertTo-Json -Compress"
-    )
-    paths = json.loads(result.stdout)
-    run_root = Path(paths["Root"])
-
-    assert run_root.name.startswith("run_")
-    assert run_root.parent == artifact_root
-    assert Path(paths["Private"]).is_dir()
-    assert Path(paths["Shareable"]).is_dir()
-    assert REPO_ROOT / ".tmp_tests" in run_root.parents
 
 
 def test_minimal_publication_removes_nested_private_arbitrary_fixtures(
@@ -609,27 +520,68 @@ def test_full_mode_resolution_and_family_filtering() -> None:
     }
 
 
-def test_modes_reject_smoke_and_unsupported_capability() -> None:
-    result = _run_powershell(
-        _dot_source(HELPERS_PATH)
-        + "$smoke = $false; $missing = $false; "
-        + "try { @(Resolve-SelectedValidationModes -Suite smoke -Modes @('static') -Specified $true) | Out-Null } catch { $smoke = $true }; "
-        + "try { @(Get-ApplicableValidationModes -Modes @('arbitrary') -Capabilities @{ max_arbitrary_sample_rate_hz = $null } -RejectUnsupportedArbitrary $true) | Out-Null } catch { $missing = $true }; "
-        + "@{ smoke_rejected = $smoke; unsupported_rejected = $missing } | ConvertTo-Json -Compress"
-    )
-    assert json.loads(result.stdout) == {
-        "smoke_rejected": True, "unsupported_rejected": True,
+def test_full_mode_subsets_and_sequence_fixtures(artifact_root: Path) -> None:
+    # Batch inventory-only checks in one PowerShell process. The runner tests
+    # cover real CLI subprocess integration; no preflight replay is needed here.
+    selections = {
+        "static": ("ch1/static-sine", "ch1/burst-bus"),
+        "modulation": ("ch1/modulation-am", "ch1/static-sine"),
+        "burst": ("ch1/burst-counted-start-phase", "ch1/static-sine"),
+        "sweep": ("ch1/sweep-external-positive", "ch1/list-bus-trigger"),
+        "list-sweep": ("ch1/list-bus-trigger", "ch1/sweep-sine-linear"),
+        "output": ("ch1/sync-control", "ch1/static-sine"),
+        "burst,output": ("ch1/burst-bus", "ch1/static-sine"),
+        "arbitrary": ("ch1/arbitrary-builtin-select", "ch1/sequence-bus"),
+        "arbitrary,sequence": ("ch1/arbitrary-clear", "ch1/static-sine"),
+        "software-sequence": ("ch1/software-sequence-basic", "ch1/sequence-bus"),
+        "basic-workflows": ("ch1/amplitude-ramp", "ch1/software-sequence-basic"),
     }
-
-
-def test_triggered_sequence_fixtures_wait_before_playback(artifact_root: Path) -> None:
+    requested = ", ".join(_ps_quote(selection) for selection in selections)
     fixtures_dir = artifact_root / "fixtures"
+    directory = _ps_quote(fixtures_dir)
     result = _run_powershell(
         _dot_source(HELPERS_PATH)
-        + f"$null = New-ArbitraryValidationFixtures -Directory {_ps_quote(fixtures_dir)}; "
-        + "Write-Output 'fixtures-ready'"
+        + f"$directory = {directory}; "
+        + "$fixtures = New-ArbitraryValidationFixtures -Directory $directory; "
+        + "function Get-InventorySummary($modes) { "
+        + "  @(Get-FullValidationInventory -Channels @(1) -Modes $modes "
+        + "    -ArbitraryFixtures $fixtures -SequenceFixtureDirectory $directory) "
+        + "    | Select-Object name, family "
+        + "}; "
+        + "$all = @(Get-InventorySummary $script:FullValidationModes); "
+        + "$subsets = @{}; "
+        + f"foreach ($selection in @({requested})) {{ "
+        + "  $modes = @(Resolve-SelectedValidationModes -Suite full -Modes @($selection) -Specified $true); "
+        + "  $subsets[$selection] = @{ modes = $modes; recipes = @(Get-InventorySummary $modes) } "
+        + "}; "
+        + "$smoke = $false; $missing = $false; "
+        + "try { @(Resolve-SelectedValidationModes -Suite smoke -Modes @('static') -Specified $true) | Out-Null } "
+        + "catch { if ($_.Exception.Message -notlike '*-Modes requires -Suite full*') { throw }; $smoke = $true }; "
+        + "try { @(Get-ApplicableValidationModes -Modes @('arbitrary') -Capabilities @{ max_arbitrary_sample_rate_hz = $null } -RejectUnsupportedArbitrary $true) | Out-Null } "
+        + "catch { if ($_.Exception.Message -notlike '*does not support Arbitrary or Sequence validation*') { throw }; $missing = $true }; "
+        + "@{ all = $all; subsets = $subsets; smoke_rejected = $smoke; "
+        + "unsupported_rejected = $missing } | ConvertTo-Json -Depth 6 -Compress"
     )
-    assert result.stdout.strip() == "fixtures-ready"
+    data = json.loads(result.stdout)
+    assert data["smoke_rejected"] is True
+    assert data["unsupported_rejected"] is True
+    assert set(data["subsets"]) == set(selections)
+    output_families = {"output-config", "output-control", "sync-configuration", "sync-control"}
+    for selection, (expected, unexpected) in selections.items():
+        modes = selection.split(",")
+        subset = data["subsets"][selection]
+        assert subset["modes"] == modes, selection
+        allowed = {"inspection", *modes}
+        if "output" in modes:
+            allowed = (allowed - {"output"}) | output_families
+        names = {recipe["name"] for recipe in subset["recipes"]}
+        assert {recipe["family"] for recipe in subset["recipes"]} == allowed, selection
+        assert names == {
+            recipe["name"] for recipe in data["all"] if recipe["family"] in allowed
+        }, selection
+        assert len(names) == len(subset["recipes"]), selection
+        assert expected in names and unexpected not in names, selection
+
 
     idle_samples = (fixtures_dir / "idle.csv").read_text(encoding="utf-8").splitlines()
     signal_samples = (fixtures_dir / "wave.csv").read_text(encoding="utf-8").splitlines()
