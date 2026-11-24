@@ -609,6 +609,60 @@ def test_full_mode_resolution_and_family_filtering() -> None:
     }
 
 
+def test_full_mode_subsets_filter_canonical_inventory(artifact_root: Path) -> None:
+    # Batch inventory-only checks in one PowerShell process. The runner tests
+    # cover real CLI subprocess integration; no preflight replay is needed here.
+    selections = {
+        "static": ("ch1/static-sine", "ch1/burst-bus"),
+        "modulation": ("ch1/modulation-am", "ch1/static-sine"),
+        "burst": ("ch1/burst-counted-start-phase", "ch1/static-sine"),
+        "sweep": ("ch1/sweep-external-positive", "ch1/list-bus-trigger"),
+        "list-sweep": ("ch1/list-bus-trigger", "ch1/sweep-sine-linear"),
+        "output": ("ch1/sync-control", "ch1/static-sine"),
+        "burst,output": ("ch1/burst-bus", "ch1/static-sine"),
+        "arbitrary": ("ch1/arbitrary-builtin-select", "ch1/sequence-bus"),
+        "arbitrary,sequence": ("ch1/arbitrary-clear", "ch1/static-sine"),
+        "software-sequence": ("ch1/software-sequence-basic", "ch1/sequence-bus"),
+        "basic-workflows": ("ch1/amplitude-ramp", "ch1/software-sequence-basic"),
+    }
+    requested = ", ".join(_ps_quote(selection) for selection in selections)
+    directory = _ps_quote(artifact_root / "fixtures")
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + f"$directory = {directory}; "
+        + "$fixtures = New-ArbitraryValidationFixtures -Directory $directory; "
+        + "function Get-InventorySummary($modes) { "
+        + "  @(Get-FullValidationInventory -Channels @(1) -Modes $modes "
+        + "    -ArbitraryFixtures $fixtures -SequenceFixtureDirectory $directory) "
+        + "    | Select-Object name, family "
+        + "}; "
+        + "$all = @(Get-InventorySummary $script:FullValidationModes); "
+        + "$subsets = @{}; "
+        + f"foreach ($selection in @({requested})) {{ "
+        + "  $modes = @(Resolve-SelectedValidationModes -Suite full -Modes @($selection) -Specified $true); "
+        + "  $subsets[$selection] = @{ modes = $modes; recipes = @(Get-InventorySummary $modes) } "
+        + "}; "
+        + "@{ all = $all; subsets = $subsets } | ConvertTo-Json -Depth 6 -Compress"
+    )
+    data = json.loads(result.stdout)
+    assert set(data["subsets"]) == set(selections)
+    output_families = {"output-config", "output-control", "sync-configuration", "sync-control"}
+    for selection, (expected, unexpected) in selections.items():
+        modes = selection.split(",")
+        subset = data["subsets"][selection]
+        assert subset["modes"] == modes, selection
+        allowed = {"inspection", *modes}
+        if "output" in modes:
+            allowed = (allowed - {"output"}) | output_families
+        names = {recipe["name"] for recipe in subset["recipes"]}
+        assert {recipe["family"] for recipe in subset["recipes"]} == allowed, selection
+        assert names == {
+            recipe["name"] for recipe in data["all"] if recipe["family"] in allowed
+        }, selection
+        assert len(names) == len(subset["recipes"]), selection
+        assert expected in names and unexpected not in names, selection
+
+
 def test_modes_reject_smoke_and_unsupported_capability() -> None:
     result = _run_powershell(
         _dot_source(HELPERS_PATH)
