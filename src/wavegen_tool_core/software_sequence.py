@@ -11,7 +11,7 @@ from decimal import Decimal
 from threading import TIMEOUT_MAX, Event
 
 from . import visa
-from .dual_channel import DUAL_CHANNEL_COMMANDS, DUAL_CHANNEL_WRITE_COMMANDS, is_dual_action, run_dual_channel
+from .dual_channel import DUAL_CHANNEL_COMMANDS, DUAL_CHANNEL_WRITE_COMMANDS, is_dual_action, run_dual_channel, uses_other_channel_modulation
 from .action_arguments import (
     MODULATION_FIELDS,
     canonicalize_voltage_arguments,
@@ -293,7 +293,7 @@ def validate_software_sequence(
                     f"Software sequence step {index} arguments must be an object."
                 )
             arguments = dict(raw_arguments)
-            if product_live and is_dual_action(action, arguments):
+            if product_live and (is_dual_action(action, arguments) or uses_other_channel_modulation(arguments)):
                 raise UnsupportedInstrumentError("Dual channel operations are outside Product Live feature scope.")
             if product_live and action in _ARBITRARY_ACTIONS:
                 raise UnsupportedInstrumentError(
@@ -516,7 +516,8 @@ def _cleanup(
         except (Exception, KeyboardInterrupt) as exc:
             interrupted = isinstance(exc, KeyboardInterrupt)
             cause = exc if isinstance(exc, WavegenError) else VisaCleanupError("Group OFF did not complete.")
-            cleanup["errors"].append({"channels": [1, 2], **_error_summary(cause)})
+            for channel in cleanup["attempted_channels"]:
+                cleanup["errors"].append({"channel": channel, **_error_summary(cause)})
     for channel in cleanup["attempted_channels"]:
         try:
             if not group:
@@ -602,7 +603,7 @@ def run_software_sequence(
         model = options["expected_model_id"] = identity.canonical_model_id
     model_info, capabilities = visa._require_hardware_free_model(model, "software sequence")
     all_channels = set(range(1, capabilities.channel_count + 1))
-    dual_steps = [step for step in sequence.steps if is_dual_action(step.action, step.arguments)]
+    dual_steps = [step for step in sequence.steps if is_dual_action(step.action, step.arguments) or uses_other_channel_modulation(step.arguments)]
     dual_writes = any(step.action != "dual-channel-status" for step in dual_steps)
     channels = {step.arguments["channel"] for step in sequence.steps
                 if type(step.arguments.get("channel")) is int}

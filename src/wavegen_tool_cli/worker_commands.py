@@ -15,7 +15,7 @@ from wavegen_tool_core.action_arguments import (
     validate_action_arguments,
 )
 from wavegen_tool_core.errors import WavegenError, WaveformParameterError
-from wavegen_tool_core.dual_channel import DUAL_CHANNEL_WRITE_COMMANDS, is_dual_action, plan_dual_channel
+from wavegen_tool_core.dual_channel import is_dual_action, plan_dual_channel, uses_other_channel_modulation
 from wavegen_tool_core.basic_workflows import BASIC_WORKFLOW_COMMANDS, validate_basic_workflow
 from wavegen_tool_core.software_sequence import (
     SOFTWARE_SEQUENCE_ACTION,
@@ -171,6 +171,8 @@ def validate_worker_command_request(
             request_mode, command, arguments, allow_output_writes=allow_output_writes
         )
 
+    if request_mode == "live" and (is_dual_action(command, arguments) or uses_other_channel_modulation(arguments)):
+        raise WorkerRequestValidationError("unsupported_command", "Dual channel operations are outside Product Live feature scope.")
     if is_dual_action(command, arguments):
         model_id = context.get("planning_model_id") or context.get("expected_model_id")
         if model_id is not None:

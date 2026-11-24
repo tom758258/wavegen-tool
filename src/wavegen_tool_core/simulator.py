@@ -718,7 +718,7 @@ class SimulatedResource:
         if command == "*TRG":
             for channel in self.state.channels.values():
                 if channel.output_enabled and channel.trigger_source == "bus" and (
-                    channel.burst_enabled or channel.frequency_mode in {"LIST", "SWEep"}
+                    channel.burst_enabled or channel.frequency_mode in {"LIST", "SWE", "SWEEP", "SWEep"}
                 ):
                     channel.bus_triggers += 1
                 if (
@@ -1172,6 +1172,8 @@ class SimulatedResource:
             "VOLTage:COUPle?",
         }:
             return "1" if self.state.voltage_coupling else "0"
+        if command == "UNIT:ANGLe?":
+            return "DEG"
         if command == "RATE:COUPle:STATe?":
             return "0"  # Simulated Arbitrary sample rates are independent.
         if command in {
@@ -1215,6 +1217,11 @@ class SimulatedResource:
         if command.startswith(f"{source}:DATA:ATTRibute:POINts? "):
             name = command.split(" ", 1)[1].strip('"')
             return str(ch_state.arbitrary_points[name])
+        if command == f"{source}:FUNCtion:ARBitrary:FREQuency?":
+            points = ch_state.arbitrary_points.get(ch_state.selected_arbitrary)
+            if not points:
+                raise ValueError("No selected arbitrary waveform.")
+            return _format_number(ch_state.arbitrary_sample_rate_hz / points)
         if command == f"{source}:FUNCtion:ARBitrary:SRATe? MAXimum":
             capabilities = capabilities_for_model_id(self.state.model_id)
             return str(capabilities.max_arbitrary_sample_rate_hz)

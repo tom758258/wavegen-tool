@@ -7829,11 +7829,11 @@ def set_output(
     state: str,
     backend: str | None = None,
     *,
-    channel: int = 1,
+    channel: int | str = 1,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
-) -> OutputResult:
+) -> OutputResult | dict[str, object]:
     """Explicitly set a policy-admitted instrument's selected or joint output state."""
 
     if channel == "all":
@@ -9529,6 +9529,8 @@ def _verify_other_channel_modulation(session, context, commands, selected_channe
     _error_free(session)
     _verify_advanced_mode_configuration(session, context, commands, selected_channel=selected_channel)
     _require_off(session, (1, 2))
+    from .dual_channel import _signal_levels, _check_levels
+    _check_levels(session, selected_channel, *_signal_levels(session, selected_channel))
 
 
 def _prepare_and_write_to_supported_instrument(

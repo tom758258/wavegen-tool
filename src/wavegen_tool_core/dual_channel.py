@@ -31,6 +31,12 @@ def is_dual_action(action: str, arguments: Mapping) -> bool:
     )
 
 
+def uses_other_channel_modulation(arguments: Mapping) -> bool:
+    return any(isinstance(arguments.get(key), Mapping) and
+               arguments[key].get("source") in ("ch1", "ch2")
+               for key in ("am", "fm", "pm", "pwm", "sum"))
+
+
 def _fields(arguments: Mapping, required=(), optional=()) -> None:
     if not isinstance(arguments, Mapping):
         raise WaveformParameterError("Dual channel arguments must be an object.")
@@ -157,7 +163,8 @@ def plan_dual_channel(action: str, arguments: Mapping, model: str) -> dict:
         _fields(args, ("amplitude_vpp", "offset_v"), ("channel",))
         ch = visa._validate_channel(args.get("channel", 1), caps)
         amp, offset = (_number(args[k], k) for k in ("amplitude_vpp", "offset_v"))
-        visa._validate_vpp_levels(amp, offset, "high-z", "Coupled voltage")
+        if not 0.001 <= amp <= 20 or abs(offset) + amp / 2 > 10:
+            raise WaveformParameterError("Coupled voltage exceeds supported amplitude or offset limits.")
         commands = [f"{_source(ch)}:VOLTage:UNIT VPP",
                     f"{_source(ch)}:VOLTage:OFFSet 0",
                     f"{_source(ch)}:VOLTage {_fmt(amp)}",
@@ -197,7 +204,7 @@ def _state(session, command):
 
 def _equal(actual, expected, label):
     if isinstance(expected, (float, int)) and not isinstance(expected, bool):
-        matches = math.isclose(actual, expected, rel_tol=1e-5, abs_tol=1e-9)
+        matches = isinstance(actual, (float, int)) and math.isclose(actual, expected, rel_tol=1e-5, abs_tol=1e-9)
     else:
         matches = actual == expected
     if not matches:
@@ -275,18 +282,36 @@ def _check_levels(session, ch, low, high, load=None):
             raise WaveformParameterError(f"Voltage exceeds Channel {ch} programmed limits.")
 
 
+def _signal_levels(session, ch, levels=None):
+    low, high = _levels(session, ch) if levels is None else levels
+    offset = (low + high) / 2
+    prefix = _source(ch)
+    factor = 1.0
+    if _state(session, f"{prefix}:AM:STATe?"):
+        depth = _numeric(session, f"{prefix}:AM:DEPTh?") / 100
+        factor = depth if _state(session, f"{prefix}:AM:DSSC?") else 1 + depth
+    if _state(session, f"{prefix}:SUM:STATe?"):
+        factor = 1 + _numeric(session, f"{prefix}:SUM:AMPLitude?") / 100
+    half = (high - low) / 2 * factor
+    return offset - half, offset + half
+
+
 def _check_combine(session, receiver, source):
     for ch in (receiver, source):
         if _query(session, f"SOURce{ch}:FUNCtion?") == "DC":
             raise WaveformParameterError("DC cannot be combined.")
-    low, high = _levels(session, receiver)
-    other_low, other_high = _levels(session, source)
+    low, high = _signal_levels(session, receiver)
+    other_low, other_high = _signal_levels(session, source)
     offset = _numeric(session, f"SOURce{source}:VOLTage:OFFSet?")
     _check_levels(session, receiver, low + other_low - offset, high + other_high - offset)
 
 
 def _status(session):
     frequency, voltage, tracking, combine = _topology(session)
+    angle_unit = _query(session, "UNIT:ANGLe?")
+    if angle_unit not in {"DEG", "DEGREE", "RAD", "RADIAN"}:
+        raise WaveformVerificationError("Unknown phase angle unit.")
+    phase_factor = 180 / math.pi if angle_unit.startswith("RAD") else 1
     mode = _query(session, f"SOURce1:{_FREQ}:MODE?")
     if mode not in {"RAT", "RATIO", "OFFS", "OFFSET"}:
         raise WaveformVerificationError("Unknown frequency coupling mode.")
@@ -303,8 +328,10 @@ def _status(session):
             "amplitude_vpp": high - low,
             "offset_v": _numeric(session, prefix + ":VOLTage:OFFSet?"),
             "phase_deg": (None if function in {"DC", "NOIS", "NOISE", "PRBS", "ARB"}
-                          else _numeric(session, prefix + ":PHASe?")),
+                          else phase_factor * _numeric(session, prefix + ":PHASe?")),
             "load": visa._parse_status_load(session.query(f"OUTPut{ch}:LOAD?")),
+            "amplitude_unit": visa._parse_status_unit(session.query(prefix + ":VOLTage:UNIT?")),
+            "autorange_enabled": _state(session, prefix + ":VOLTage:RANGe:AUTO?"),
             "polarity": _query(session, f"OUTPut{ch}:POLarity?"),
             "combine_source": combine[ch-1].lower(),
             "tracking": tracking[ch-1].lower(),
@@ -315,6 +342,14 @@ def _status(session):
                                "offset_hz": _numeric(session, f"SOURce1:{_FREQ}:OFFSet?")},
         "voltage_coupling": voltage, "channel_status": channels,
     }
+
+
+def _verify_tracking_pair(result, inverted):
+    first, second = (result["channel_status"][str(ch)] for ch in (1, 2))
+    for field in ("function", "frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load", "amplitude_unit", "autorange_enabled"):
+        _equal(first[field], second[field], "Tracked " + field)
+    if (first["polarity"] == second["polarity"]) == inverted:
+        raise WaveformVerificationError("Tracked output polarity did not match mode.")
 
 
 def _off_all(session):
@@ -347,7 +382,7 @@ def _apply(session, plan, arguments, context):
         _require_off(session, channels)
         _, _, _, combined = _topology(session)
         for ch in (1, 2):
-            _check_levels(session, ch, *_levels(session, ch))
+            _check_levels(session, ch, *_signal_levels(session, ch))
             if combined[ch-1] != "NONE":
                 _check_combine(session, ch, 3-ch)
         try:
@@ -410,19 +445,31 @@ def _apply(session, plan, arguments, context):
         for ref in (1, 2):
             load = visa._parse_status_load(session.query(f"OUTPut{ref}:LOAD?"))
             for ch in (1, 2):
-                _check_levels(session, ch, *_levels(session, ref), load=load)
-        if combine != ["NONE", "NONE"]:
-            raise WaveformParameterError("Disable combine before enabling voltage coupling.")
+                _check_levels(session, ch, *_signal_levels(session, ch, _levels(session, ref)), load=load)
+            if combine != ["NONE", "NONE"]:
+                receiver = 1 if combine[0] != "NONE" else 2
+                low, high = _levels(session, ref)
+                lo1, hi1 = _signal_levels(session, receiver, (low, high))
+                lo2, hi2 = _signal_levels(session, 3-receiver, (low, high))
+                center = (low + high) / 2
+                _check_levels(session, receiver, lo1+lo2-center, hi1+hi2-center, load=load)
     elif action == "update-coupled-voltage":
         if not voltage or tracked:
             raise WaveformParameterError("Voltage coupling must be active without tracking.")
         amp, offset = plan["amplitude_vpp"], plan["offset_v"]
-        for ch in (1, 2):
-            for center in (0, offset):
-                _check_levels(session, ch, center-amp/2, center+amp/2)
-        if combine != ["NONE", "NONE"]:
-            receiver = 1 if combine[0] != "NONE" else 2
-            _check_levels(session, receiver, offset-amp, offset+amp)
+        old_low, old_high = _levels(session, plan["channel"])
+        old_half = (old_high - old_low) / 2
+        for center, half in ((0, old_half), (0, amp/2), (offset, amp/2)):
+            for ch in (1, 2):
+                load = visa._parse_status_load(session.query(f"OUTPut{ch}:LOAD?"))
+                if half == amp/2:
+                    visa._validate_vpp_levels(amp, center, load, "Coupled voltage")
+                _check_levels(session, ch, *_signal_levels(session, ch, (center-half, center+half)))
+            if combine != ["NONE", "NONE"]:
+                receiver = 1 if combine[0] != "NONE" else 2
+                lo1, hi1 = _signal_levels(session, receiver, (center-half, center+half))
+                lo2, hi2 = _signal_levels(session, 3-receiver, (center-half, center+half))
+                _check_levels(session, receiver, lo1+lo2-center, hi1+hi2-center)
     elif action == "configure-tracking" and plan["tracking"] != "off":
         if frequency or voltage or combine != ["NONE", "NONE"] or _state(session, "RATE:COUPle:STATe?"):
             raise WaveformParameterError("Explicitly disable conflicting coupling and combine first.")
@@ -432,7 +479,7 @@ def _apply(session, plan, arguments, context):
         if _state(session, "OUTPut:SYNC?"):
             raise WaveformParameterError("Sync output must be OFF before changing its source by tracking.")
         load = visa._parse_status_load(session.query(f"OUTPut{ref}:LOAD?"))
-        _check_levels(session, 3-ref, *_levels(session, ref), load=load)
+        _check_levels(session, 3-ref, *_signal_levels(session, ref), load=load)
     elif action == "configure-combine" and plan["source"] != "none":
         ch = plan["channel"]
         if tracked or combine[2-ch] != "NONE":
@@ -454,6 +501,14 @@ def _apply(session, plan, arguments, context):
     for ch, value in expected_frequency.items():
         _frequency_limit(session, ch, value)
     for command in commands:
+        if action == "configure-tracked-waveform" and ":FUNCtion:PULSe:TRANsition:" in command:
+            header, _, value = command.partition(" ")
+            if value != "MINimum":
+                edge = "BOTH" if header.endswith(":BOTH") else ("LEADING" if header.endswith(":LEADing") else "TRAILING")
+                for ch in (1, 2):
+                    query = header.replace(f"SOURce{plan['channel']}", f"SOURce{ch}")
+                    maximum = _numeric(session, query + "? MAXimum")
+                    visa._validate_pulse_edge_maximum(float(value), maximum, edge, context)
         session.write(command)
     _error_free(session)
     _require_off(session, channels)
@@ -467,10 +522,15 @@ def _apply(session, plan, arguments, context):
             _equal(_numeric(session, f"SOURce{plan['reference_channel']}:{_FREQ}:{key}?"), value, "Coupling setting")
     elif action == "configure-voltage-coupling":
         _equal(result["voltage_coupling"], plan["state"] == "on", "Voltage coupling")
+        if plan["state"] == "on":
+            for field in ("amplitude_vpp", "offset_v", "load", "amplitude_unit", "autorange_enabled"):
+                _equal(result["channel_status"]["1"][field], result["channel_status"]["2"][field], field)
     elif action == "configure-tracking":
         actual = [_query(session, f"SOURce{ch}:TRACk?") for ch in (1, 2)]
         wanted = {"off": "OFF", "on": "ON", "invert": "INV"}[plan["tracking"]]
         _equal([v.replace("INVERTED", "INV") for v in actual], [wanted, wanted], "Tracking")
+        if wanted != "OFF":
+            _verify_tracking_pair(result, wanted == "INV")
     elif action == "configure-combine":
         _equal(result["channel_status"][str(plan["channel"])]["combine_source"], plan["source"], "Combine")
     elif action == "update-coupled-voltage":
@@ -478,6 +538,30 @@ def _apply(session, plan, arguments, context):
             state = result["channel_status"][str(ch)]
             _equal(state["amplitude_vpp"], plan["amplitude_vpp"], "Coupled amplitude")
             _equal(state["offset_v"], plan["offset_v"], "Coupled offset")
+    elif action == "configure-tracked-waveform":
+        _verify_tracking_pair(result, tracking[0] in {"INV", "INVERTED"})
+        wave = _tracked_plan(context.identity.canonical_model_id, arguments)
+        for ch in (1, 2):
+            actual = result["channel_status"][str(ch)]
+            for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load"):
+                expected = getattr(wave, field, None)
+                if expected is not None:
+                    _equal(actual[field], expected, f"CH{ch} tracked {field}")
+            if hasattr(wave, "voltage_v"):
+                _equal(actual["offset_v"], wave.voltage_v, f"CH{ch} tracked DC voltage")
+        # Check waveform-specific programmed values using the existing readback
+        # comparison, independent of the tracking state flag.
+        selected = plan["channel"]
+        fields = {}
+        for command in commands:
+            header, sep, value = command.partition(" ")
+            if sep and header.startswith(f"SOURce{selected}:FUNCtion:") and value not in {"MINimum", "MAXimum"}:
+                if header.endswith((":DUTY", ":SYMMetry", ":WIDTh", ":BANDwidth", ":BITRate", ":PATTern", ":TRANsition:BOTH", ":TRANsition:LEADing", ":TRANsition:TRAiling")):
+                    fields[header] = value
+        for ch in (1, 2):
+            visa._verify_configuration_readback(session, context,
+                {key.replace(f"SOURce{selected}:", f"SOURce{ch}:"): value for key, value in fields.items()},
+                label="Tracked waveform")
     for ch, value in expected_frequency.items():
         _equal(result["channel_status"][str(ch)]["frequency_hz"], value, f"Channel {ch} frequency")
     return dict(result, output_state="off", readback_verified=True)
