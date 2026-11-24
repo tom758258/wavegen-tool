@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 from dataclasses import dataclass, field as dataclass_field
 import re
 import math
@@ -31,6 +32,8 @@ SIMULATED_33521B_IDN = "KEYSIGHT TECHNOLOGIES,33521B,SIM000001,1.0"
 class SimulatedChannelState:
     """Channel-specific waveform state for simulated instruments."""
 
+    bus_triggers: int = 0
+    combine_source: str = "NONE"
     output_enabled: bool = False
     output_load: str = "50"
     output_polarity: str = "normal"
@@ -208,6 +211,10 @@ class Simulated33521BState:
             2: SimulatedChannelState(),
         }
         self.frequency_coupling = frequency_coupling
+        self.frequency_coupling_mode = "RAT"
+        self.frequency_coupling_ratio = 1.0
+        self.frequency_coupling_offset = 0.0
+        self.phase_sync_count = 0
         self.voltage_coupling = voltage_coupling
         self.tracking = tracking
         self.error_queue = error_queue if error_queue is not None else []
@@ -601,6 +608,105 @@ class SimulatedResource:
         return ch, self.state.channels[ch]
 
     def _apply_write(self, command: str) -> None:
+        if command == "PHASe:SYNChronize":
+            self.state.phase_sync_count += 1
+            return
+        caps = capabilities_for_model_id(self.state.model_id)
+        if caps.channel_count == 2:
+            if self._apply_dual_write(command):
+                return
+        self._apply_channel_write(command)
+        if caps.channel_count != 2 or command == "*TRG":
+            return
+        # Tracking and coupling are native persistent instrument settings. Only
+        # propagate channel-specific writes, not independent connector control.
+        if not command.startswith(("SOURce1:", "SOURce2:", "OUTPut1:LOAD ", "OUTPut2:LOAD ")):
+            return
+        ch, _ = self._target_channel_and_state(command)
+        if self.state.tracking != "OFF":
+            self._copy_tracking(ch)
+        elif self.state.frequency_coupling and command.startswith(f"SOURce{ch}:FREQuency "):
+            self._couple_frequency(ch)
+        if self.state.voltage_coupling and (
+            command.startswith(f"SOURce{ch}:VOLTage ") or
+            command.startswith(f"SOURce{ch}:VOLTage:OFFSet ") or
+            command.startswith(f"SOURce{ch}:VOLTage:UNIT ") or
+            command.startswith(f"SOURce{ch}:VOLTage:RANGe:AUTO ") or
+            command.startswith(f"OUTPut{ch}:LOAD ")
+        ):
+            self._couple_voltage(ch)
+
+    def _couple_frequency(self, ch):
+        state = self.state
+        f = state.channels[ch].frequency_hz
+        if state.frequency_coupling_mode == "RAT":
+            other = f * state.frequency_coupling_ratio if ch == 1 else f / state.frequency_coupling_ratio
+        else:
+            other = f + state.frequency_coupling_offset if ch == 1 else f - state.frequency_coupling_offset
+        state.channels[3-ch].frequency_hz = other
+
+    def _couple_voltage(self, ch):
+        source, other = self.state.channels[ch], self.state.channels[3-ch]
+        for key in ("amplitude_vpp", "offset_v", "output_load", "voltage_unit", "autorange_enabled"):
+            setattr(other, key, getattr(source, key))
+
+    def _copy_tracking(self, ch):
+        source, other = self.state.channels[ch], self.state.channels[3-ch]
+        # Programmed safety limits and connector enable remain explicit.
+        for key in source.__dataclass_fields__:
+            if key in {"output_enabled", "voltage_limit_low", "voltage_limit_high",
+                       "voltage_limit_enabled", "combine_source", "bus_triggers",
+                       "arbitrary_bus_triggers"}:
+                continue
+            setattr(other, key, deepcopy(getattr(source, key)))
+        if self.state.tracking == "INV":
+            other.output_polarity = "inverted" if source.output_polarity == "normal" else "normal"
+
+    def _apply_dual_write(self, command: str) -> bool:
+        match = re.fullmatch(r"SOURce([12]):(FREQuency:COUPle:(?:STATe|MODE|RATio|OFFSet)|VOLTage:COUPle:STATe|TRACk|COMBine:FEED) (.+)", command)
+        if not match:
+            match = re.fullmatch(r"SOURce([12]):(AM|FM|PM|PWM|SUM):SOURce (CH[12])", command)
+            if match:
+                ch, mode, source = match.groups()
+                setattr(self.state.channels[int(ch)], mode.lower() + "_source", source.lower())
+                return True
+            return False
+        ch, header, value = match.groups()
+        ch = int(ch)
+        state = self.state
+        if header == "FREQuency:COUPle:STATe":
+            state.frequency_coupling = value == "ON"
+            if state.frequency_coupling:
+                self._couple_frequency(ch)
+        elif header == "FREQuency:COUPle:MODE":
+            state.frequency_coupling_mode = "RAT" if value == "RATio" else "OFFS"
+        elif header == "FREQuency:COUPle:RATio":
+            ratio = _parse_finite_number(value)
+            state.frequency_coupling_ratio = ratio if ch == 1 else 1 / ratio
+            if state.frequency_coupling:
+                self._couple_frequency(ch)
+        elif header == "FREQuency:COUPle:OFFSet":
+            offset = _parse_finite_number(value)
+            state.frequency_coupling_offset = offset if ch == 1 else -offset
+            if state.frequency_coupling:
+                self._couple_frequency(ch)
+        elif header == "VOLTage:COUPle:STATe":
+            state.voltage_coupling = value == "ON"
+            if state.voltage_coupling:
+                self._couple_voltage(1)
+        elif header == "TRACk":
+            state.tracking = "INV" if value == "INVerted" else value
+            if state.tracking != "OFF":
+                state.sync_source_channel = ch
+                state.frequency_coupling = state.voltage_coupling = False
+                for channel in state.channels.values():
+                    channel.combine_source = "NONE"
+                self._copy_tracking(ch)
+        elif header == "COMBine:FEED":
+            state.channels[ch].combine_source = value
+        return True
+
+    def _apply_channel_write(self, command: str) -> None:
         if command in {"OUTPut:SYNC ON", "OUTPut:SYNC OFF"}:
             self.state.sync_enabled = command.endswith(" ON")
             return
@@ -611,6 +717,10 @@ class SimulatedResource:
             return
         if command == "*TRG":
             for channel in self.state.channels.values():
+                if channel.output_enabled and channel.trigger_source == "bus" and (
+                    channel.burst_enabled or channel.frequency_mode in {"LIST", "SWEep"}
+                ):
+                    channel.bus_triggers += 1
                 if (
                     channel.output_enabled and channel.active_function == "ARB"
                     and channel.trigger_source == "bus"
@@ -1077,6 +1187,26 @@ class SimulatedResource:
         prefix_ch = f"{ch_num}"
 
         source = f"SOURce{prefix_ch}"
+        if command == f"{source}:FREQuency:COUPle:MODE?":
+            return self.state.frequency_coupling_mode
+        if command == f"{source}:FREQuency:COUPle:RATio?":
+            ratio = self.state.frequency_coupling_ratio
+            return _format_number(ratio if ch_num == 1 else 1 / ratio)
+        if command == f"{source}:FREQuency:COUPle:OFFSet?":
+            offset = self.state.frequency_coupling_offset
+            return _format_number(offset if ch_num == 1 else -offset)
+        if command == f"{source}:COMBine:FEED?":
+            return ch_state.combine_source
+        if command == f"{source}:FREQuency? MINimum":
+            return "1e-6"
+        if command == f"{source}:FREQuency? MAXimum":
+            caps = capabilities_for_model_id(self.state.model_id)
+            maximum = 200000.0 if ch_state.active_function in {"RAMP", "TRI"} else caps.max_sine_square_pulse_noise_frequency_hz
+            return _format_number(maximum)
+        if command == f"{source}:VOLTage:LOW?":
+            return _format_number(ch_state.offset_v - ch_state.amplitude_vpp / 2)
+        if command == f"{source}:VOLTage:HIGH?":
+            return _format_number(ch_state.offset_v + ch_state.amplitude_vpp / 2)
         if command == f"{source}:DATA:VOLatile:CATalog?":
             names = (*ch_state.arbitrary_points, *(f"{name}.seq" for name in ch_state.arbitrary_sequences))
             return ",".join(f'"{name}"' for name in names)
