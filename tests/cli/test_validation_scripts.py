@@ -499,6 +499,16 @@ def test_full_plan_inventory_and_privacy(
         }
         if model == "33512b":
             expected_parity |= {"arbitrary-upload-configure", "sequence-bus"}
+    if 2 in channels:
+        expected_primary |= {"software-sequence-dual-channel"} | {
+            f"dual-channel-{name}" for name in (
+                "phase-output", "bus-trigger", "frequency-ratio-offset", "voltage-coupling",
+                "tracking-on", "tracking-invert", "modulation-am", "modulation-fm",
+                "modulation-pm", "modulation-pwm", "modulation-sum", "combine-ch1", "combine-ch2",
+            )
+        }
+    else:
+        expected_primary.add("static-phase-sync")
     primary = [case for case in inventory if case["channel"] == 1]
     secondary = [case for case in inventory if case["channel"] == 2]
     assert {case["name"] for case in primary} == {f"ch1/{name}" for name in expected_primary}

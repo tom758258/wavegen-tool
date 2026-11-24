@@ -500,7 +500,7 @@ function Get-AdvancedReadbackExpectation {
 }
 
 
-$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence', 'software-sequence', 'basic-workflows')
+$script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-sweep', 'output', 'arbitrary', 'sequence', 'software-sequence', 'basic-workflows', 'dual-channel')
 
 function Resolve-SelectedValidationModes {
     param(
@@ -532,7 +532,11 @@ function Get-ApplicableValidationModes {
         @($Modes | Where-Object { $_ -in @('arbitrary', 'sequence') }).Count -gt 0) {
         throw 'The selected model does not support Arbitrary or Sequence validation.'
     }
-    return @($Modes | Where-Object { $supportsArbitrary -or $_ -notin @('arbitrary', 'sequence') })
+    $supportsDual = $Capabilities.channel_count -eq 2
+    if (-not $supportsDual -and $RejectUnsupportedArbitrary -and 'dual-channel' -in $Modes) {
+        throw 'The selected model does not support dual-channel validation.'
+    }
+    return @($Modes | Where-Object { ($supportsArbitrary -or $_ -notin @('arbitrary', 'sequence')) -and ($supportsDual -or $_ -ne 'dual-channel') })
 }
 
 function New-ArbitraryValidationFixtures {
@@ -593,7 +597,7 @@ function New-ArbitraryValidationFixtures {
 
 function Test-ValidationCommandUsesChannel {
     param([string]$Command)
-    return $Command -notin @('trigger', 'configure-sync', 'sync-output', 'run-software-sequence')
+    return $Command -notin @('trigger', 'configure-sync', 'sync-output', 'run-software-sequence', 'phase-sync')
 }
 
 function Get-SoftwareSequenceIntent {
@@ -609,10 +613,11 @@ function Get-SoftwareSequenceIntent {
 
 function Assert-SoftwareSequenceResult {
     param($Payload, $Intent, [int]$Channel, [switch]$DryRun)
+    $expectedChannels = if ($Intent -is [System.Collections.IDictionary] -and $Intent.Contains('channels')) { @($Intent.channels) -join ',' } else { [string]$Channel }
     $count = @($Intent.actions).Count
     if ($Payload.step_count -ne $count -or $Payload.loop_count -ne 1 -or
         $Payload.execution_units -ne $count -or $Payload.total_wait_seconds -ne $Intent.wait_seconds -or
-        (@($Payload.channels) -join ',') -cne [string]$Channel) {
+        (@($Payload.channels) -join ',') -cne $expectedChannels) {
         throw 'Software sequence did not report the expected steps, wait or channel.'
     }
     if ($DryRun) {
@@ -623,7 +628,7 @@ function Assert-SoftwareSequenceResult {
         }
         return
     }
-    $expectedCleanupChannel = if ($Intent.output_on) { [string]$Channel } else { '' }
+    $expectedCleanupChannel = if ($Intent.output_on) { $expectedChannels } else { '' }
     if ($Payload.executed -ne $true -or $Payload.status -cne 'completed' -or
         $Payload.completed_loops -ne 1 -or $Payload.completed_step_executions -ne $count -or
         (@($Payload.results.action) -join ',') -cne ($Intent.actions -join ',') -or
@@ -799,8 +804,9 @@ function Get-FullValidationInventory {
         return [pscustomobject]@{ arguments = $Arguments; readback = $Readback; result = $Result }
     }
     function New-SequenceCase {
-        param([int]$Channel, [string]$Kind, [object[]]$Actions, [hashtable]$Readback, $Observation)
-        $name = "software-sequence-$Kind"
+        param([int]$Channel, [string]$Kind, [object[]]$Actions, [hashtable]$Readback, $Observation,
+            [string]$Family = 'software-sequence', [bool]$Dual = $false)
+        $name = "$Family-$Kind"
         $document = @{ version = 1; steps = @($Actions) }
         $args = @('run-software-sequence')
         if ($SequenceFixtureDirectory) {
@@ -810,10 +816,91 @@ function Get-FullValidationInventory {
             $args += @('--file', $path)
         }
         $step = New-Step $args $Readback
-        $step | Add-Member -NotePropertyName sequence_intent -NotePropertyValue (Get-SoftwareSequenceIntent $document)
-        return [pscustomobject]@{
-            name = "ch$Channel/$name"; family = 'software-sequence'
+        $intent = Get-SoftwareSequenceIntent $document
+        if ($Dual) { $intent['channels'] = @(1, 2) }
+        $step | Add-Member -NotePropertyName sequence_intent -NotePropertyValue $intent
+        $recipe = [pscustomobject]@{
+            name = "ch$Channel/$name"; family = $Family
             channel = $Channel; required = $true; steps = @($step); observation = $Observation
+        }
+        if ($Dual) { $recipe | Add-Member -NotePropertyName dual_channel -NotePropertyValue $true }
+        return $recipe
+    }
+
+    if ($Channels.Count -eq 1 -and 'static' -in $Modes) {
+        Add-Recipe 'static-phase-sync' 'static' @((New-Step @('phase-sync') @{ output_state = 'off' }))
+    }
+    if ($Channels.Count -eq 2 -and ('dual-channel' -in $Modes -or 'software-sequence' -in $Modes)) {
+        # One sequence preserves simulator state across dependent operations.
+        function Joint-Step {
+            param([string]$Action, [hashtable]$Arguments = @{})
+            @{ action = $Action; arguments = $Arguments }
+        }
+        function Joint-Sine {
+            param([int]$Channel, [double]$Frequency = 1000, [double]$Phase = 0)
+            Joint-Step 'configure-sine' @{channel=$Channel; frequency_hz=$Frequency; amplitude_vpp=0.1; offset_v=0; phase_deg=$Phase; load='50'}
+        }
+        $base = @((Joint-Sine 1), (Joint-Sine 2))
+        $on = Joint-Step 'output' @{channel='all'; enabled=$true}
+        $off = Joint-Step 'output' @{channel='all'; enabled=$false}
+        $wait = Joint-Step 'wait' @{seconds=3}
+        $status = Joint-Step 'dual-channel-status'
+        $phase = Joint-Step 'phase-sync'
+        if ('dual-channel' -in $Modes) {
+            New-SequenceCase 1 'phase-output' @((Joint-Sine 1), (Joint-Sine 2 1000 90), $phase, $on, $wait, $off, $status) @{} @{seconds=3; expected='Both channels produce 1 kHz sine waves with 90 degree relative phase; both turn OFF.'} 'dual-channel' $true
+            $burstSteps = @(foreach ($ch in @(1, 2)) {
+                Joint-Step 'configure-sine' @{channel=$ch; frequency_hz=1000; amplitude_vpp=0.1; burst=@{mode='counted'; count=5; trigger_source='bus'}}
+            })
+            New-SequenceCase 1 'bus-trigger' @($burstSteps + @($on, (Joint-Step 'trigger'), $wait, $off)) @{} @{seconds=3; expected='One Bus trigger releases both five-cycle bursts; both outputs turn OFF.'} 'dual-channel' $true
+            New-SequenceCase 1 'frequency-ratio-offset' @($base + @(
+                (Joint-Step 'configure-frequency-coupling' @{state='on';mode='ratio';ratio=2;reference_channel=1}),
+                (Joint-Step 'update-coupled-frequency' @{channel=2;frequency_hz=4000}),
+                $status, (Joint-Step 'configure-frequency-coupling' @{state='off'}),
+                (Joint-Step 'configure-frequency-coupling' @{state='on';mode='offset';offset_hz=500;reference_channel=1}),
+                (Joint-Step 'update-coupled-frequency' @{channel=1;frequency_hz=1500}),
+                $status, (Joint-Step 'configure-frequency-coupling' @{state='off'})
+            )) @{} $null 'dual-channel' $true
+            New-SequenceCase 1 'voltage-coupling' @($base + @(
+                (Joint-Step 'configure-voltage-coupling' @{state='on'}),
+                (Joint-Step 'update-coupled-voltage' @{channel=2;amplitude_vpp=0.2;offset_v=0.05}),
+                $on,$wait,$off,$status,(Joint-Step 'configure-voltage-coupling' @{state='off'})
+            )) @{} @{seconds=3; expected='Both channels show 0.2 Vpp with +0.05 V offset; both turn OFF.'} 'dual-channel' $true
+            foreach ($trackingMode in @('on','invert')) {
+                New-SequenceCase 1 "tracking-$trackingMode" @($base + @(
+                    (Joint-Step 'configure-tracking' @{mode=$trackingMode;reference_channel=1}),
+                    (Joint-Step 'configure-tracked-waveform' @{waveform='sine';arguments=@{channel=1;frequency_hz=2000;amplitude_vpp=0.2;offset_v=0.05}}),
+                    $phase,$on,$wait,$off,$status,(Joint-Step 'configure-tracking' @{mode='off'})
+                )) @{} @{seconds=3; expected="Both channels show 2 kHz, 0.2 Vpp with $trackingMode tracking polarity and common +0.05 V offset; both turn OFF."} 'dual-channel' $true
+            }
+            $modulations = [ordered]@{
+                am=@{depth_percent=40}; fm=@{deviation_hz=50}; pm=@{deviation_deg=30};
+                pwm=@{deviation_s=0.000001}; sum=@{amplitude_percent=20}
+            }
+            foreach ($kind in $modulations.Keys) {
+                $receiver = if ($kind -in @('fm','sum')) { 2 } else { 1 }
+                $source = 3 - $receiver
+                $mod = $modulations[$kind]; $mod['source'] = "ch$source"
+                $args = @{channel=$receiver;frequency_hz=10000;amplitude_vpp=0.1}
+                $args[$kind] = $mod
+                $waveform = if ($kind -eq 'pwm') { $args['pulse_width_s']=0.000025; 'pulse' } else { 'sine' }
+                New-SequenceCase 1 "modulation-$kind" @(
+                    (Joint-Sine $source 100), (Joint-Step "configure-$waveform" $args),
+                    $on,$wait,$off,(Joint-Step 'readback-advanced' @{channel=$receiver}),
+                    (Joint-Sine $receiver),$status
+                ) @{} @{seconds=3;expected="CH$receiver shows $kind modulation from the 100 Hz CH$source waveform; both outputs turn OFF."} 'dual-channel' $true
+            }
+            foreach ($receiver in @(1,2)) {
+                $source = 3 - $receiver
+                New-SequenceCase 1 "combine-ch$receiver" @(
+                    (Joint-Sine $receiver 1000),(Joint-Sine $source 2000),
+                    (Joint-Step 'configure-combine' @{channel=$receiver;source="ch$source"}),
+                    $on,$wait,$off,$status,
+                    (Joint-Step 'configure-combine' @{channel=$receiver;source='none'}),(Joint-Sine $receiver)
+                ) @{} @{seconds=3;expected="CH$receiver contains combined 1 kHz and 2 kHz signals, CH$source retains its own 2 kHz signal; both turn OFF."} 'dual-channel' $true
+            }
+        }
+        if ('software-sequence' -in $Modes) {
+            New-SequenceCase 1 'dual-channel' @($base + @($phase,$on,$wait,$off,$status)) @{} @{seconds=3;expected='Both channels turn ON together and the sequence finishes with both outputs OFF.'} 'software-sequence' $true
         }
     }
     Add-Recipe 'status' 'inspection' @((New-Step @('status'))) $true

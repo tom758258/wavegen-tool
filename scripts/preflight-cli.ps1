@@ -233,7 +233,8 @@ foreach ($targetProfile in $targets) {
             Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $(if ($null -ne $invocation) { $invocation.Process } else { $null })
         }
         foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures -SequenceFixtureDirectory $fixtureDirectory)) {
-            if ($recipe.channel -notin $channelsTested) { [void]$channelsTested.Add($recipe.channel) }
+            $recipeChannels = if ($recipe.PSObject.Properties['dual_channel']) { @(1, 2) } else { @($recipe.channel) }
+            foreach ($tested in $recipeChannels) { if ($tested -notin $channelsTested) { [void]$channelsTested.Add($tested) } }
             $stepIndex = 0
             foreach ($step in $recipe.steps) {
                 $stepIndex += 1
@@ -244,7 +245,7 @@ foreach ($targetProfile in $targets) {
                 $executionModes = if ($command -in @('configure-arbitrary', 'configure-arbitrary-sequence') -and
                     '--load-builtin' -notin $step.arguments) {
                     @('dry-run')
-                } elseif ($recipe.family -eq 'basic-workflows' -or $command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory', 'run-software-sequence')) {
+                } elseif ($recipe.family -eq 'basic-workflows' -or $command.StartsWith('configure-') -or $command -in @('upload-arbitrary', 'list-arbitrary-memory', 'clear-arbitrary-memory', 'run-software-sequence', 'phase-sync')) {
                     @('dry-run', 'simulate')
                 } else { @('simulate') }
                 foreach ($mode in $executionModes) {
@@ -268,6 +269,7 @@ foreach ($targetProfile in $targets) {
                         } elseif ($recipe.family -eq 'basic-workflows') {
                             Assert-BasicWorkflowResult -Payload $payload -Intent $step.workflow_intent -Channel $recipe.channel -DryRun:($mode -eq 'dry-run')
                         }
+                        if ($command -eq 'phase-sync' -and $mode -eq 'simulate' -and ($payload.phase_settings_preserved -ne $true -or $payload.output_state -ne 'off')) { throw 'Phase sync was not confirmed.' }
                         if ($mode -eq 'dry-run') {
                             if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or
                                 ($command -ne 'run-software-sequence' -and $recipe.family -ne 'basic-workflows' -and @($payload.commands).Count -eq 0)) { throw 'Invalid hardware-free plan.' }

@@ -390,6 +390,17 @@ function Set-FullSafeOff {
     }
 }
 
+function Set-FullGroupSafeOff {
+    param([string]$Name)
+    $payload = Invoke-FullCommand -Name "$Name-command" -Arguments @('output', '--state', 'off', '--channel', 'all')
+    if ($payload.output_states.'1' -ne 'off' -or $payload.output_states.'2' -ne 'off') {
+        throw 'Group OFF readback did not confirm both channels.'
+    }
+    foreach ($ch in @(1, 2)) {
+        $state = Invoke-FullCommand -Name "$Name-ch$ch-status" -Arguments @('status') -Channel $ch
+        Assert-FullReadback -Payload $state -Expected @{output_state='off'} -MainChannel $ch
+    }
+}
 function Set-FullSyncSafeOff {
     param([string]$Name)
     $payload = Invoke-FullCommand -Name $Name -Arguments @('sync-output', '--state', 'off')
@@ -434,6 +445,7 @@ function Invoke-FullLiveCases {
 
     $unconfirmedChannels = @()
     $mainOffByChannel = @{}
+    $dualAttempted = $false
     $syncOffUnconfirmed = $false
 
     try {
@@ -461,7 +473,10 @@ function Invoke-FullLiveCases {
                 continue
             }
             $channel = $recipe.channel
-            if ($channel -notin $channelsTested) { [void]$channelsTested.Add($channel) }
+            $dualRecipe = [bool]$recipe.PSObject.Properties['dual_channel']
+            $recipeChannels = if ($dualRecipe) { @(1, 2) } else { @($channel) }
+            foreach ($tested in $recipeChannels) { if ($tested -notin $channelsTested) { [void]$channelsTested.Add($tested) } }
+            if ($dualRecipe) { $dualAttempted = $true }
             $observation = $recipe.observation
             $externalInput = if ($observation) { $observation['input'] }
             $reasons = @()
@@ -493,7 +508,8 @@ function Invoke-FullLiveCases {
                 if ($observation) {
                     Write-Host ""
                     Write-Host "$targetCapabilityModel CH${channel} - $($recipe.name)"
-                    Write-Host "Connect the front-panel CH$channel Output BNC to a scope with a 50-ohm termination."
+                    if ($dualRecipe) { Write-Host "Connect both CH1 and CH2 Output BNCs to separate scope channels with 50-ohm termination." }
+                    else { Write-Host "Connect the front-panel CH$channel Output BNC to a scope with a 50-ohm termination." }
                     if ($externalInput) {
                         Write-Host 'Use the chassis-referenced rear-panel Ext Trig BNC. Confirm Trigger Out is disabled before connecting the external source.'
                         Write-Host "Check grounding and the Ext Trig input limits in the $targetCapabilityModel manual."
@@ -541,10 +557,10 @@ function Invoke-FullLiveCases {
                     $commandChannel = if (Test-ValidationCommandUsesChannel $command) { $channel } else { 0 }
                     if ($turningOn) {
                         $mainOnAttempted = $true
-                        $mainOffByChannel[$channel] = $false
+                        foreach ($affected in $recipeChannels) { $mainOffByChannel[$affected] = $false }
                     }
                     if ($command -eq 'run-software-sequence' -and $turningOn) {
-                        Write-Host "Observe CH$channel now. The software sequence will turn output OFF."
+                        Write-Host "Observe channel(s) $($recipeChannels -join ', ') now. The software sequence will turn output OFF."
                     } elseif ($recipe.family -eq 'basic-workflows' -and $turningOn) {
                         Write-Host "Observe CH$channel now. The workflow will turn output OFF."
                     }
@@ -560,6 +576,7 @@ function Invoke-FullLiveCases {
                         Assert-BasicWorkflowResult -Payload $result -Intent $step.workflow_intent -Channel $channel
                     }
                     Assert-FullReadback -Payload $result -Expected $step.result
+                    if ($command -eq 'phase-sync' -and $result.phase_settings_preserved -ne $true) { throw 'Phase sync was not confirmed.' }
                     if ($recipe.family -eq 'arbitrary' -and $recipe.name -like '*/arbitrary-clear' -and
                         $command -eq 'list-arbitrary-memory' -and $index -eq $recipe.steps.Count) {
                         $uploadArguments = @($recipe.steps[0].arguments)
@@ -584,7 +601,7 @@ function Invoke-FullLiveCases {
                     }
                     Assert-FullErrorQueue -Name "$name-errors"
                 }
-                if ($observation -and $recipe.family -notin @('software-sequence', 'basic-workflows')) {
+                if ($observation -and $recipe.family -notin @('software-sequence', 'basic-workflows', 'dual-channel')) {
                     if ($externalInput) { Write-Host $observation.action }
                     Write-Host "Observe CH$channel for $($observation.seconds) seconds. Output will then turn off."
                     Start-Sleep -Seconds $observation.seconds
@@ -594,7 +611,7 @@ function Invoke-FullLiveCases {
                 $unexpectedMainOnChannel = [int]$_.Exception.Data['MainOutputOnChannel']
                 if ($_.Exception.Data['TerminationUnconfirmed']) {
                     $syncOffUnconfirmed = $true
-                    if (-not $syncOnInFlight) { $unconfirmedChannels += $channel }
+                    if (-not $syncOnInFlight) { $unconfirmedChannels += $recipeChannels }
                 }
             } finally {
                 $cleanupOrder = if ($mainOnAttempted -or $unexpectedMainOnChannel -eq $channel) {
@@ -604,6 +621,14 @@ function Invoke-FullLiveCases {
                     $cleanupOrder = @($unexpectedMainOnChannel) + $cleanupOrder
                 }
                 $mainOffConfirmed = $true
+                if ($dualRecipe) {
+                    foreach ($affected in $recipeChannels) { $mainOffByChannel[$affected] = $false }
+                    try {
+                        Set-FullGroupSafeOff -Name "$($recipe.name)/cleanup-group"
+                        foreach ($affected in $recipeChannels) { $mainOffByChannel[$affected] = $affected -notin $unconfirmedChannels }
+                    } catch { $mainOffConfirmed = $false; $cleanupReasons += $_.Exception.Message }
+                    $cleanupOrder = @(0)
+                }
                 foreach ($checked in $cleanupOrder) {
                     if ($checked -eq 0) {
                         try {
@@ -676,7 +701,10 @@ function Invoke-FullLiveCases {
                 }
             } else {
                 $name = "ch${channel}/final-safe-off"
-                try { Set-FullSafeOff -Name $name -Channel $channel }
+                try {
+                    if ($dualAttempted) { Set-FullGroupSafeOff -Name $name }
+                    else { Set-FullSafeOff -Name $name -Channel $channel }
+                }
                 catch { $reasons += $_.Exception.Message }
                 if ($channel -in $unconfirmedChannels) {
                     $reasons += "Safe OFF for CH$channel remains unconfirmed after incomplete subprocess termination."
@@ -926,7 +954,7 @@ foreach ($caseName in $plannedCases) {
     Write-Host "  $caseName"
 }
 if ($Suite -eq 'full') {
-    foreach ($recipe in @($fullInventory | Where-Object family -eq 'software-sequence')) {
+    foreach ($recipe in @($fullInventory | Where-Object { $_.family -in @('software-sequence', 'dual-channel') })) {
         $intent = $recipe.steps[0].sequence_intent
         Write-Host "  $($recipe.name) intent - Output ON: $($intent.output_on), waveform uploads: $($intent.upload_count)"
     }
