@@ -1,12 +1,20 @@
+from dataclasses import replace
+
 import pytest
 
+import wavegen_tool_core.identity as identity_module
 from wavegen_tool_core.errors import MalformedIdnError, UnsupportedInstrumentError
 from wavegen_tool_core.identity import (
+    CANONICAL_MANUFACTURER,
     CANONICAL_MODEL_ID,
+    RECOGNIZED_MANUFACTURERS,
     SUPPORT_POLICY_MODE_VALIDATION,
+    ModelInfo,
+    VendorInfo,
     classify_discovered_identity,
     model_info_for_model_id,
     parse_idn,
+    registered_model_ids,
     resolve_supported_identity,
 )
 
@@ -29,6 +37,105 @@ def test_registered_model_lookup_is_exact(model_id, canonical_model):
     assert model_info is not None
     assert model_info.model_id == model_id
     assert model_info.canonical_model == canonical_model
+    assert model_info.vendor_id == "keysight"
+    assert model_info.display_name == f"Keysight {canonical_model}"
+    assert model_info_for_model_id(model_id.upper()) is None
+
+
+def test_identity_registry_preserves_legacy_manufacturer_names_and_model_order():
+    assert CANONICAL_MANUFACTURER == "Keysight Technologies"
+    assert RECOGNIZED_MANUFACTURERS == ("Keysight Technologies", "Agilent Technologies")
+    assert registered_model_ids() == ("keysight-33510b", "keysight-33512b", "keysight-33521b")
+
+
+def test_idn_matching_uses_vendor_and_model_without_expanding_live_policy(monkeypatch):
+    example = VendorInfo("example", "Example", "Example Instruments")
+    vendors, manufacturer_index = identity_module._build_vendor_registry(
+        (*identity_module._VENDOR_REGISTRY.values(), example)
+    )
+    _, model_index = identity_module._build_model_registry(
+        vendors,
+        (
+            *identity_module._MODEL_REGISTRY.values(),
+            ModelInfo("shared-33521b", "33521B", example.vendor_id, "Example 33521B"),
+        ),
+    )
+    monkeypatch.setattr(identity_module, "_VENDOR_ID_BY_MANUFACTURER", manufacturer_index)
+    monkeypatch.setattr(identity_module, "_MODEL_BY_VENDOR_AND_NAME", model_index)
+
+    keysight = parse_idn(VALID_IDN)
+    shared_model = parse_idn("Example Instruments,33521B,EXAMPLE-SERIAL,1.00")
+    wrong_vendor = parse_idn("Example Instruments,33512B,EXAMPLE-SERIAL,1.00")
+
+    assert classify_discovered_identity(keysight) == (CANONICAL_MODEL_ID, "product_live_model")
+    assert classify_discovered_identity(shared_model) == ("shared-33521b", "registered_only")
+    assert classify_discovered_identity(wrong_vendor) == (None, "unsupported")
+    assert resolve_supported_identity(keysight).canonical_model_id == CANONICAL_MODEL_ID
+    for identity in (shared_model, wrong_vendor):
+        with pytest.raises(UnsupportedInstrumentError):
+            resolve_supported_identity(identity)
+
+
+@pytest.mark.parametrize(
+    "vendor",
+    [
+        pytest.param(VendorInfo("keysight", "Example", "Example Instruments"), id="duplicate-id"),
+        pytest.param(
+            VendorInfo("example", "Example", "Example Instruments", (" agilent  technologies ",)),
+            id="conflicting-manufacturer",
+        ),
+        pytest.param(
+            VendorInfo("example", "Example", "Example Instruments", (" example instruments ",)),
+            id="duplicate-manufacturer",
+        ),
+    ],
+)
+def test_vendor_registry_rejects_conflicting_entries(vendor):
+    with pytest.raises(RuntimeError):
+        identity_module._build_vendor_registry((*identity_module._VENDOR_REGISTRY.values(), vendor))
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param(
+            ModelInfo(CANONICAL_MODEL_ID, "Different Model", "keysight", "Example"),
+            id="duplicate-id",
+        ),
+        pytest.param(
+            ModelInfo("example-model", " 33521b ", "keysight", "Example"), id="duplicate-name"
+        ),
+        pytest.param(
+            ModelInfo("example-model", "Different Model", "unknown", "Example"), id="unknown-vendor"
+        ),
+    ],
+)
+def test_model_registry_rejects_conflicting_entries(model):
+    with pytest.raises(RuntimeError):
+        identity_module._build_model_registry(
+            identity_module._VENDOR_REGISTRY, (*identity_module._MODEL_REGISTRY.values(), model)
+        )
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        pytest.param(CANONICAL_MODEL_ID, id="product-live"),
+        pytest.param("keysight-33510b", id="validation-live"),
+    ],
+)
+def test_model_registry_rejects_rebinding_a_live_model_id_to_another_vendor(model_id):
+    example = VendorInfo("example", "Example", "Example Instruments")
+    vendors, _ = identity_module._build_vendor_registry(
+        (*identity_module._VENDOR_REGISTRY.values(), example)
+    )
+    models = tuple(
+        replace(model, vendor_id=example.vendor_id) if model.model_id == model_id else model
+        for model in identity_module._MODEL_REGISTRY.values()
+    )
+
+    with pytest.raises(RuntimeError):
+        identity_module._build_model_registry(vendors, models)
 
 
 def test_valid_keysight_33521b_idn_resolves_exact_support():
