@@ -91,6 +91,19 @@ channel guard.
 Waveform and output configuration turn off only the selected channel and leave
 it off. Enabling output is a separate, explicit operation.
 
+## Explicit dual-channel operations
+
+`run_dual_channel(action, arguments, model=...)` plans a command;
+`run_dual_channel(action, arguments, resource=..., backend=...)` executes
+against an admitted simulator or the exact contributor-validation model.
+The [CLI guide](../cli/README.md#dual-channel-operations) documents the
+commands and the [Worker contract](../contracts/wavegen-worker-contract.md#dual-channel-arguments)
+defines structured arguments. The normal independent-channel guard is not
+bypassed for independent writes. Coupled updates require both outputs OFF.
+Group OFF confirms both outputs without changing topology. Software sequences
+use the same operations and confirm affected outputs OFF on cleanup without
+silently disabling coupling, tracking or Combine.
+
 ## Dry-run, Simulator, and Live Modes
 
 Dry-run validates a registered planning model, selected channel, requested

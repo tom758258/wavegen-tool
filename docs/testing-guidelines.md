@@ -124,12 +124,23 @@ Both CLI runners default to `-Suite smoke`; the only other suite is `full`.
 `-Modes` applies only to `-Suite full`; explicitly combining it with Smoke fails
 before artifacts or any VISA I/O. Full defaults to every applicable feature mode.
 Available families include `static`, `modulation`, `burst`, `sweep`, `list-sweep`,
-`output`, `arbitrary`, `sequence`, `software-sequence`, and `basic-workflows`. Selecting a subset
+`output`, `arbitrary`, `sequence`, `software-sequence`, `basic-workflows`, and `dual-channel`. Selecting a subset
 runs only those recipes and the shared identity, safe-off, error-queue and
 cleanup checks. An explicitly requested unsupported Arbitrary/Sequence mode
 for one model fails closed;
 all-target preflight skips those recipes for models lacking the Core capability.
 A subset PASS is not full-scope Product Live admission evidence.
+
+`dual-channel` is applicable only to two-channel models. An explicit selection
+on a single target without two-channel capability fails closed; all-target
+Preflight skips it for that model. Single-channel phase synchronization
+belongs to `static`, and joint sequence cleanup has a representative
+`software-sequence` case. The dual-channel recipes share the existing inventory
+and software sequence path so simulation retains dependent channel state.
+Real Live observations require both channel connections, interactive approval
+and confirmed group OFF. They must not be executed without authorization.
+Independent write guards and group OFF failure paths are covered with
+hardware-free tests; no simulation result extends Product Live support.
 
 `basic-workflows` checks expanded sequence order, scheduled waits, output
 continuity during amplitude updates, List Sweep settings, presets, and

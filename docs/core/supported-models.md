@@ -120,6 +120,21 @@ closed. Product Live means the model is admitted by current Core policy; it
 does not claim that every command/backend combination has been independently
 exercised on hardware.
 
+## Dual-channel operations
+
+The 33510B and 33512B support explicit phase synchronization, relative phase
+configuration through the existing waveform commands, instrument-wide Bus
+trigger, joint main output, frequency ratio/offset coupling, voltage coupling,
+tracking (including inverted tracking), other-channel AM/FM/PM/PWM/Sum, Combine,
+and dual-channel status. The 33521B supports phase synchronization, but rejects
+two-channel-only commands.
+
+The new operations and other-channel modulation are available in dry-run,
+simulation, and Direct CLI contributor validation only. Ordinary Product Live
+and Worker Live remain unchanged. Existing Bus trigger and phase parameters
+retain their prior admission. Hardware-free validation is not evidence of
+physical timing, polarity, modulation or coupling performance.
+
 ## Selected-channel Safety
 
 On two-channel live instruments, Core requires frequency coupling, voltage
@@ -127,7 +142,7 @@ coupling, Channel 1 tracking, and Channel 2 tracking to be reported off before
 an independent state-changing operation. In Core's contributor validation mode,
 Arbitrary waveform and sequence playback configuration also require Arbitrary
 sample rate coupling to be reported off on a two-channel instrument. Core does
-not disable coupling or tracking automatically.
+not disable coupling or tracking automatically. Independent writes also reject active Combine or other-channel modulation routes. Explicit contributor-only joint operations check both affected outputs and topology; the receiver's waveform may be reconfigured with both outputs OFF to release its other-channel modulation route. Joint OFF attempts both outputs even if one fails and confirms both states.
 
 Configuration leaves the selected output off. Output-on remains an explicit
 operation. The tool does not use `*RST` as part of normal operation.
