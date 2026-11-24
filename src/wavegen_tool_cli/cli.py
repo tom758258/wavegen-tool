@@ -10,6 +10,7 @@ import sys
 from enum import IntEnum
 from typing import Any, Sequence
 
+from wavegen_tool_core.dual_channel import DUAL_CHANNEL_COMMANDS, run_dual_channel
 from wavegen_tool_core.basic_workflows import (
     BASIC_WORKFLOW_COMMANDS,
     QUICK_OUTPUT_PRESETS,
@@ -1963,7 +1964,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly set selected-channel output on or off.",
     )
     _add_simulate_argument(output_parser)
-    _add_channel_argument(output_parser)
+    output_parser.add_argument("--channel", type=lambda value: "all" if value == "all" else int(value),
+                               choices=(1, 2, "all"), default=1)
+    output_parser.add_argument("--dry-run", action="store_true", help="Preview group output without VISA I/O.")
     _add_validation_only_live_arguments(output_parser)
     output_parser.add_argument(
         "--resource",
@@ -1986,6 +1989,39 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit exactly one JSON object.",
     )
+
+    for command in sorted(DUAL_CHANNEL_COMMANDS):
+        dual = subparsers.add_parser(command, help=f"Explicit {command} operation.", allow_abbrev=False)
+        _add_simulate_argument(dual)
+        _add_validation_support_policy_argument(dual)
+        dual.add_argument("--resource")
+        dual.add_argument("--backend", default="system")
+        dual.add_argument("--model", choices=_REGISTERED_MODEL_IDS)
+        dual.add_argument("--dry-run", action="store_true")
+        dual.add_argument("--json", action="store_true", dest="json_output")
+        if command in {"configure-frequency-coupling", "configure-voltage-coupling"}:
+            dual.add_argument("--state", choices=("on", "off"), required=True)
+        if command == "configure-frequency-coupling":
+            dual.add_argument("--mode", choices=("ratio", "offset"), default=argparse.SUPPRESS)
+            dual.add_argument("--ratio", type=float, default=argparse.SUPPRESS)
+            dual.add_argument("--offset-hz", type=float, default=argparse.SUPPRESS)
+            dual.add_argument("--reference-channel", type=int, choices=(1, 2), default=argparse.SUPPRESS)
+        elif command == "configure-tracking":
+            dual.add_argument("--mode", choices=("off", "on", "invert"), required=True)
+            dual.add_argument("--reference-channel", type=int, choices=(1, 2), default=argparse.SUPPRESS)
+        elif command == "configure-combine":
+            dual.add_argument("--channel", type=int, choices=(1, 2), required=True)
+            dual.add_argument("--source", choices=("none", "ch1", "ch2"), required=True)
+        elif command == "update-coupled-frequency":
+            _add_channel_argument(dual)
+            dual.add_argument("--frequency-hz", type=float, required=True)
+        elif command == "update-coupled-voltage":
+            _add_channel_argument(dual)
+            dual.add_argument("--amplitude-vpp", type=float, required=True)
+            dual.add_argument("--offset-v", type=float, required=True)
+        elif command == "configure-tracked-waveform":
+            dual.add_argument("--waveform", choices=("sine", "square", "ramp", "triangle", "pulse", "dc", "noise", "prbs"), required=True)
+            dual.add_argument("--arguments-json", required=True, help="Existing waveform arguments as a JSON object.")
 
     list_parser = subparsers.add_parser(
         "list-resources",
@@ -2183,6 +2219,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_manifest(args)
     if args.command == "capabilities":
         return run_capabilities(args)
+    if args.command in DUAL_CHANNEL_COMMANDS or (args.command == "output" and args.channel == "all"):
+        return _run_dual_channel(args, parser)
+    if args.command == "output" and args.dry_run:
+        parser.error("--dry-run for output requires --channel all")
     waveform_commands = {
         "configure-sine",
         "configure-sine-sweep",
@@ -3889,6 +3929,43 @@ def _run_output_dry_run(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_dual_channel(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.dry_run and args.simulate:
+        parser.error("--dry-run and --simulate cannot be used together")
+    if (args.dry_run or args.simulate) and args.resource is not None:
+        parser.error("--resource cannot be used with hardware-free execution")
+    if args.simulate and args.backend.strip().casefold() != "system":
+        parser.error("--simulate requires the system backend")
+    if args.validation_allow_pending_live_support:
+        if args.dry_run or args.simulate or args.model is None:
+            parser.error("Contributor validation requires an explicit model and live execution.")
+    elif not (args.dry_run or args.simulate) and args.model is not None:
+        parser.error("--model requires hardware-free execution or Contributor validation")
+    if not (args.dry_run or args.simulate):
+        args.resource = args.resource or os.environ.get("WAVEGEN_TOOL_RESOURCE")
+        if not args.resource:
+            parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
+
+    def operation():
+        model = args.model or CANONICAL_MODEL_ID
+        values = {key: value for key, value in vars(args).items()
+                  if key not in {"command", "model", "resource", "backend", "simulate",
+                                 "dry_run", "json_output", "validation_allow_pending_live_support"}}
+        if args.command == "output":
+            values = {"channel": "all", "enabled": args.state == "on"}
+        elif args.command == "configure-tracked-waveform":
+            try:
+                values["arguments"] = json.loads(values.pop("arguments_json"))
+            except (ValueError, TypeError) as exc:
+                raise WaveformParameterError("Tracked waveform arguments must be JSON.") from exc
+        if args.dry_run:
+            return run_dual_channel(args.command, values, model=model)
+        resource, factory = _simulated_target(model) if args.simulate else (args.resource, None)
+        return run_dual_channel(args.command, values, resource=resource, backend=args.backend,
+                               **_validation_live_injection(args), **_factory_injection(args.simulate, factory))
+    return _run_control(args, operation)
+
+
 def _run_output(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target(args.model or CANONICAL_MODEL_ID)
@@ -4417,6 +4494,13 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
 
 
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
+    if action in DUAL_CHANNEL_COMMANDS or (action == "output" and isinstance(result, dict)):
+        payload = dict(result, success=True, error=None)
+        if not result["executed"]:
+            payload["mode"] = "dry-run"
+        else:
+            payload["manufacturer"] = result["identity"]["manufacturer"]
+        return payload
     if action in ARBITRARY_COMMANDS | BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         payload = dict(result, success=True, action=action, error=None)
         if not result["executed"]:
@@ -5530,6 +5614,11 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
 
 
 def _human_control_success(action: str, result: Any) -> str:
+    if action in DUAL_CHANNEL_COMMANDS or (action == "output" and isinstance(result, dict)):
+        heading = f"{action}: {'applied' if result['executed'] else 'planned'} for {result['model']}."
+        details = {key: value for key, value in result.items()
+                   if key not in {"resource", "identity", "backend", "transport", "commands", "executed", "action", "model"}}
+        return "\n".join([heading, json.dumps(details, indent=2), *result["commands"]])
     if action in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         label = "Software sequence" if action == SOFTWARE_SEQUENCE_ACTION else action
         lines = [

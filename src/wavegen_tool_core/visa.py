@@ -7788,8 +7788,15 @@ def set_output(
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
 ) -> OutputResult:
-    """Explicitly set a policy-admitted instrument's selected-channel output state."""
+    """Explicitly set a policy-admitted instrument's selected or joint output state."""
 
+    if channel == "all":
+        from .dual_channel import run_dual_channel
+        if not isinstance(state, str) or state.strip().casefold() not in {"on", "off"}:
+            raise WaveformParameterError("Output state must be on or off.")
+        return run_dual_channel("output", {"channel": "all", "enabled": state.strip().casefold() == "on"},
+                                resource=resource, backend=backend, support_policy_mode=support_policy_mode,
+                                expected_model_id=expected_model_id, resource_manager_factory=resource_manager_factory)
     if not isinstance(state, str) or state.strip().casefold() not in {"on", "off"}:
         raise WaveformParameterError("Output state must be on or off.")
     normalized_state = state.strip().casefold()

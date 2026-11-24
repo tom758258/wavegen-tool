@@ -104,6 +104,7 @@ def plan_dual_channel(action: str, arguments: Mapping, model: str) -> dict:
         state = "on" if args["enabled"] else "off"
         commands = [f"OUTPut{ch} {state.upper()}" for ch in (1, 2)]
         result["requested_output_state"] = state
+        result["channel"] = "all"
     elif action == "configure-frequency-coupling":
         _fields(args, ("state",), ("mode", "ratio", "offset_hz", "reference_channel"))
         state = _choice(args["state"], ("on", "off"), "coupling state")
@@ -169,6 +170,8 @@ def plan_dual_channel(action: str, arguments: Mapping, model: str) -> dict:
         result.update(channel=plan.channel, waveform=args["waveform"])
     else:
         raise WaveformParameterError("Unknown dual channel operation.")
+    if action != "dual-channel-status" and action != "output":
+        result["output_state"] = "off"
     return dict(action=action, model=info.canonical_model, canonical_model_id=model,
                 channels=list(range(1, caps.channel_count + 1)), commands=commands,
                 executed=False, **result)
@@ -350,7 +353,8 @@ def _apply(session, plan, arguments, context):
         try:
             for command in commands:
                 session.write(command)
-            _equal(_outputs(session), {"1": "on", "2": "on"}, "Group output")
+            actual = _outputs(session)
+            _equal(actual, {"1": "on", "2": "on"}, "Group output")
             _error_free(session)
         except (Exception, KeyboardInterrupt) as exc:
             error = exc if isinstance(exc, WavegenError) else VisaWriteError("Group output ON failed.")
@@ -362,7 +366,7 @@ def _apply(session, plan, arguments, context):
                 exc.args = (str(error) + " " + "; ".join(error.cleanup_errors),)
                 raise
             raise error from (None if error is exc else exc)
-        return {"output_states": _outputs(session), "output_state": "on"}
+        return {"output_states": actual, "output_state": "on"}
     _require_off(session, channels)
     if action == "phase-sync":
         # There is no instrument query that proves physical phase alignment.
@@ -506,7 +510,7 @@ def run_dual_channel(action: str, arguments: Mapping, *, model: str | None = Non
 
     try:
         context, result = visa._run_on_supported_instrument(resource, backend, operation, **options)
-    except VisaCleanupError as error:
+    except (VisaCleanupError, KeyboardInterrupt) as error:
         if attempted_on:
             # A successful ON followed by session teardown failure still needs a
             # bounded best-effort OFF against the same explicitly selected resource.
@@ -514,7 +518,10 @@ def run_dual_channel(action: str, arguments: Mapping, *, model: str | None = Non
                 visa._run_on_supported_instrument(resource, backend,
                     lambda session, _: _off_all(session), **options)
             except WavegenError as cleanup:
-                error.attach_cleanup_errors(error.cleanup_errors + (str(cleanup),) + cleanup.cleanup_errors)
+                if isinstance(error, WavegenError):
+                    error.attach_cleanup_errors(error.cleanup_errors + (str(cleanup),) + cleanup.cleanup_errors)
+                else:
+                    error.args = (f"{error}; group OFF cleanup failed: {cleanup}",)
         raise
     return dict(result, resource=context.resource, backend=context.backend, transport=context.transport,
                 identity={"manufacturer": context.identity.manufacturer,
