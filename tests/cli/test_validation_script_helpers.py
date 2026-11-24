@@ -602,3 +602,21 @@ def test_full_mode_subsets_and_sequence_fixtures(artifact_root: Path) -> None:
     assert external["trigger_slope"] == "positive"
     assert negative == {**external, "trigger_slope": "negative"}
     assert bus["steps"][0]["waveform"] != external["steps"][0]["waveform"]
+
+
+def test_dual_channel_inventory_model_filter():
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$m = @(Resolve-SelectedValidationModes -Suite full); "
+        + "$dual = @(Get-FullValidationInventory -Channels @(1,2) -Modes dual-channel); "
+        + "$single = @(Get-FullValidationInventory -Channels @(1) -Modes static); "
+        + "$filtered = @(Get-ApplicableValidationModes -Modes $m -Capabilities @{channel_count=1;max_arbitrary_sample_rate_hz=250000000}); "
+        + "@{ modes=$m; dual=$dual; single=$single; filtered=$filtered } | ConvertTo-Json -Depth 12 -Compress"
+    )
+    data = json.loads(result.stdout)
+    assert len(data["modes"]) == 11 and data["modes"][-1] == "dual-channel"
+    assert "dual-channel" not in data["filtered"]
+    assert len([case for case in data["dual"] if case["family"] == "dual-channel"]) == 13
+    assert all(case["steps"][0]["sequence_intent"]["channels"] == [1, 2]
+               for case in data["dual"] if case["family"] == "dual-channel")
+    assert any(case["name"] == "ch1/static-phase-sync" for case in data["single"])

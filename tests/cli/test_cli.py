@@ -5064,3 +5064,18 @@ def test_frequency_step_ctrl_c_during_final_off_reports_interruption(interrupt_a
     assert cleanup["confirmed_off_channels"] == ([1] if interrupt_at == "write" else [])
     error, = cleanup["errors"]
     assert error["channel"] == 1 and error["code"] == "visa_cleanup_error"
+
+
+def test_dual_channel_direct_cli_plans_and_simulates(capsys):
+    assert main(["phase-sync", "--dry-run", "--model", "keysight-33521b", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["channels"] == [1] and payload["commands"] == ["PHASe:SYNChronize"]
+    assert main(["output", "--channel", "all", "--state", "off", "--simulate",
+                 "--model", "keysight-33512b", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["output_states"] == {"1": "off", "2": "off"}
+    assert main(["configure-sine", "--channel", "2", "--frequency-hz", "10000",
+                 "--amplitude-vpp", "0.1", "--am-source", "ch1", "--am-depth", "40",
+                 "--dry-run", "--model", "keysight-33512b", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "SOURce2:AM:SOURce CH1" in payload["commands"]

@@ -7,7 +7,7 @@ import math
 
 from . import visa
 from .errors import (
-    UnsupportedInstrumentError, VisaCleanupError, VisaWriteError,
+    VisaCleanupError, VisaWriteError,
     WaveformParameterError, WaveformVerificationError, WavegenError,
 )
 from .identity import SUPPORT_POLICY_MODE_PRODUCT, SUPPORT_POLICY_MODE_VALIDATION
@@ -132,7 +132,7 @@ def plan_dual_channel(action: str, arguments: Mapping, model: str) -> dict:
             commands = [f"SOURce1:{_FREQ}:MODE {setting}",
                         f"{_source(ch)}:{_FREQ}:{setting} {_fmt(value)}",
                         f"{_source(ch)}:{_FREQ}:STATe ON"]
-            result.update(mode=mode, reference_channel=ch, **{key: value})
+            result.update(coupling_mode=mode, reference_channel=ch, **{key: value})
         result["state"] = state
     elif action == "configure-voltage-coupling":
         _fields(args, ("state",))
@@ -422,7 +422,7 @@ def _apply(session, plan, arguments, context):
             raise WaveformParameterError("Disable tracking or existing frequency coupling first.")
         ref = plan["reference_channel"]
         original = _numeric(session, f"SOURce{ref}:FREQuency?")
-        other = original * plan["ratio"] if plan["mode"] == "ratio" else original + plan["offset_hz"]
+        other = original * plan["ratio"] if plan["coupling_mode"] == "ratio" else original + plan["offset_hz"]
         expected_frequency = {ref: original, 3-ref: other}
     elif action == "update-coupled-frequency":
         if not frequency or tracked:
@@ -516,9 +516,9 @@ def _apply(session, plan, arguments, context):
     if action == "configure-frequency-coupling":
         _equal(result["frequency_coupling"]["enabled"], plan["state"] == "on", "Frequency coupling")
         if plan["state"] == "on":
-            _equal(result["frequency_coupling"]["mode"], plan["mode"], "Coupling mode")
-            key = "RATio" if plan["mode"] == "ratio" else "OFFSet"
-            value = plan["ratio"] if plan["mode"] == "ratio" else plan["offset_hz"]
+            _equal(result["frequency_coupling"]["mode"], plan["coupling_mode"], "Coupling mode")
+            key = "RATio" if plan["coupling_mode"] == "ratio" else "OFFSet"
+            value = plan["ratio"] if plan["coupling_mode"] == "ratio" else plan["offset_hz"]
             _equal(_numeric(session, f"SOURce{plan['reference_channel']}:{_FREQ}:{key}?"), value, "Coupling setting")
     elif action == "configure-voltage-coupling":
         _equal(result["voltage_coupling"], plan["state"] == "on", "Voltage coupling")

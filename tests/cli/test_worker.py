@@ -1927,3 +1927,25 @@ def test_worker_live_amplitude_ramp_rejected_at_admission():
     finally:
         runtime.request_stop()
         assert runtime.wait(3)
+
+
+def test_worker_dual_channel_simulated_state_round_trip():
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        def submit(command, arguments):
+            payload = _payload(command, arguments, mode="simulate")
+            payload["context"]["planning_model_id"] = "keysight-33512b"
+            code, response = _request(runtime, "POST", "/command", payload)
+            assert code == 202
+            return _wait_for_job(runtime, response["worker_job_id"], "succeeded")["result"]
+        submit("configure-frequency-coupling", {"state": "on", "mode": "ratio", "ratio": 2})
+        submit("update-coupled-frequency", {"channel": 1, "frequency_hz": 1000})
+        observed = submit("dual-channel-status", {})
+        assert observed["channel_status"]["2"]["frequency_hz"] == 2000
+        assert submit("output", {"channel": "all", "enabled": False})["output_states"] == {
+            "1": "off", "2": "off",
+        }
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(timeout=2.0)
