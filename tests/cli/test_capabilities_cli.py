@@ -1,6 +1,8 @@
 import json
 from dataclasses import asdict
 
+import pytest
+
 import wavegen_tool_cli.cli as cli_module
 from wavegen_tool_cli.cli import ExitCode, main
 from wavegen_tool_core import visa
@@ -14,12 +16,16 @@ def _fail_if_called(*args, **kwargs):
     raise AssertionError("offline capabilities query must not perform this operation")
 
 
-def test_capabilities_json_matches_core_registry(capsys) -> None:
-    exit_code = main(["capabilities", "--model", MODEL_ID, "--json"])
+@pytest.mark.parametrize(
+    ("model_id", "canonical_model"),
+    [("keysight-33510b", "33510B"), ("keysight-33512b", "33512B"), (MODEL_ID, "33521B")],
+)
+def test_capabilities_json_matches_core_registry(capsys, model_id, canonical_model) -> None:
+    exit_code = main(["capabilities", "--model", model_id, "--json"])
 
     captured = capsys.readouterr()
     lines = captured.out.splitlines()
-    core_capabilities = capabilities_for_model_id(MODEL_ID)
+    core_capabilities = capabilities_for_model_id(model_id)
     assert core_capabilities is not None
     assert exit_code == ExitCode.SUCCESS
     assert len(lines) == 1
@@ -27,10 +33,12 @@ def test_capabilities_json_matches_core_registry(capsys) -> None:
         "event": "capabilities",
         "schema_version": 2,
         "tool_id": "wavegen",
-        "selection": {"requested_model": MODEL_ID},
+        "selection": {"requested_model": model_id},
         "model": {
-            "model_id": MODEL_ID,
-            "canonical_model": "33521B",
+            "model_id": model_id,
+            "vendor_id": "keysight",
+            "canonical_model": canonical_model,
+            "display_name": f"Keysight {canonical_model}",
         },
         "capabilities": asdict(core_capabilities),
     }

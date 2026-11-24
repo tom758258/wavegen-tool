@@ -43,18 +43,26 @@ WebUI feature surface.
 
 ## Identity and Model Registry
 
-Live identity comes from the instrument's `*IDN?` response. Core recognizes the
-manufacturers `Keysight Technologies` and `Agilent Technologies` and the
-registered model IDs:
+Core's vendor registry defines stable vendor IDs, display names, canonical
+manufacturer names, and manufacturer aliases. The registered vendor `keysight`
+has the display name `Keysight`, the canonical manufacturer
+`Keysight Technologies`, and the alias `Agilent Technologies`. Each model
+entry connects a model ID, canonical model name, and display name to a
+registered vendor. Keysight has three model entries.
 
 - `keysight-33510b` (`33510B`)
 - `keysight-33512b` (`33512B`)
 - `keysight-33521b` (`33521B`)
 
-Manufacturer matching ignores case and collapses ordinary whitespace. Model
-matching ignores case and surrounding whitespace. Neither uses prefix,
-substring, fuzzy, alias, resource-name, or guessed matching. Unknown,
-malformed, unsupported, or mismatched identities fail closed.
+Live identification and discovery use the same Core lookup. Core resolves the
+manufacturer reported by `*IDN?` to a vendor, then matches the reported model
+within that vendor. Manufacturer matching is exact after case and whitespace
+normalization, including registered manufacturer aliases. Model matching is
+exact after ignoring case and surrounding whitespace. Core rejects duplicate
+or conflicting registry entries and fails closed on unknown, malformed,
+unsupported, or mismatched live identities. Discovery only reports the model's
+classification. Live control also requires admission under the applicable Core
+support policy.
 
 A dry-run or simulator can use an explicitly selected registered planning
 model. That selection does not establish the identity of a physical

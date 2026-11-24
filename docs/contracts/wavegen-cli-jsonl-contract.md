@@ -38,8 +38,11 @@ Result families add fields appropriate to the command:
   `schema_version: 2`, tool identity, and Worker protocol compatibility.
 - `capabilities` emits `event: "capabilities"`, exact integer
   `schema_version: 2`, the requested/registered model identity, and Core
-  capabilities. Its structured invalid-model response uses `event: "error"`,
-  `ok: false`, and exit code 2.
+  capabilities without opening a VISA session. The `model` object contains
+  `model_id` and `canonical_model` plus two additive string fields from Core.
+  The `vendor_id` identifies the registered vendor and `display_name` gives the
+  human-readable model name. Its structured invalid-model response uses
+  `event: "error"`, `ok: false`, and exit code 2.
 - `list-resources` returns backend and resource entries. Every entry retains
   `resource`, `manufacturer`, and `model`, with additive `model_id` and
   `model_support_status`. Raw listings set the new fields to `null` because

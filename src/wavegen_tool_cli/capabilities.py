@@ -41,7 +41,9 @@ def build_capabilities_response(model_id: str) -> dict[str, object]:
         "selection": {"requested_model": model_id},
         "model": {
             "model_id": model_info.model_id,
+            "vendor_id": model_info.vendor_id,
             "canonical_model": model_info.canonical_model,
+            "display_name": model_info.display_name,
         },
         "capabilities": asdict(capabilities),
     }
