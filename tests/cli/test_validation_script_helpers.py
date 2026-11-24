@@ -551,18 +551,51 @@ def test_publication_failure_removes_partial_evidence(artifact_root: Path) -> No
 def test_full_mode_resolution_and_family_filtering() -> None:
     result = _run_powershell(
         _dot_source(HELPERS_PATH)
-        + "$selected = @(Resolve-SelectedValidationModes -Suite full -Modes @('output,burst', 'static', 'burst') -Specified $true); "
+        + "$selected = @(Resolve-SelectedValidationModes -Suite full -Modes @('output,burst', 'static,sweep,modulation', 'burst') -Specified $true); "
         + "$recipes = @(Get-FullValidationInventory -Channels @(1,2) -Modes $selected); "
-        + "@{ modes = $selected; families = @($recipes | ForEach-Object { $_.family } | Select-Object -Unique); "
-        + "count = $recipes.Count } | ConvertTo-Json -Compress"
+        + "@{ modes = $selected; recipes = $recipes } | ConvertTo-Json -Depth 12 -Compress"
     )
     data = json.loads(result.stdout)
-    assert data["modes"] == ["static", "burst", "output"]
-    assert set(data["families"]) == {
-        "inspection", "static", "burst", "output-config", "output-control",
+    assert data["modes"] == ["static", "modulation", "burst", "sweep", "output"]
+    assert {recipe["family"] for recipe in data["recipes"]} == {
+        "inspection", "static", "modulation", "burst", "sweep", "output-config", "output-control",
         "sync-configuration", "sync-control",
     }
-    assert data["count"] > 0
+    steps = {recipe["name"]: recipe["steps"][0] for recipe in data["recipes"]}
+    for waveform in ("square", "ramp", "triangle", "pulse"):
+        assert steps[f"ch1/static-{waveform}"]["result"]["phase_deg"] != 0
+    prbs_settings = [
+        step["result"] for name, step in steps.items() if name.startswith("ch1/static-prbs")
+    ]
+    assert {settings["pattern"] for settings in prbs_settings} == {
+        "PN7", "PN9", "PN11", "PN15", "PN20", "PN23",
+    }
+    assert any(result.get("edge_time_s") == 50e-9 for result in prbs_settings)
+    for recipe, shape in {
+        "am-square": "square", "fm-ramp": "up-ramp", "pm-triangle": "down-ramp",
+        "pwm-pulse": "triangle", "sum-pulse": "square",
+    }.items():
+        assert steps[f"ch1/modulation-{recipe}"]["advanced_expected"]["settings"]["shape"] == shape
+    for recipe, delay in {
+        "burst-immediate": 0, "burst-square": 0.1,
+        "sweep-square-logarithmic": 0, "sweep-ramp-logarithmic": 0.1,
+    }.items():
+        assert steps[f"ch1/{recipe}"]["advanced_expected"]["settings"]["trigger_delay_s"] == delay
+    assert steps["ch1/sweep-square-logarithmic"]["result"]["duty_cycle_percent"] == 30
+    assert steps["ch1/sweep-ramp-logarithmic"]["result"]["symmetry_percent"] == 30
+
+    output = next(recipe for recipe in data["recipes"] if recipe["name"] == "ch1/configure-output")
+    assert any(step["readback"]["load"] == "1000" for step in output["steps"])
+    sync_settings = {
+        (step["result"]["source_channel"], step["result"]["sync_mode"], step["result"]["polarity"])
+        for recipe in data["recipes"] if recipe["family"] == "sync-configuration"
+        for step in recipe["steps"]
+        if step["result"]["sync_state"] == "off"
+    }
+    assert sync_settings == {
+        (1, "normal", "normal"), (1, "carrier", "normal"), (1, "normal", "inverted"),
+        (2, "carrier", "inverted"), (2, "normal", "normal"),
+    }
 
 
 def test_modes_reject_smoke_and_unsupported_capability() -> None:
@@ -595,6 +628,7 @@ def test_triggered_sequence_fixtures_wait_before_playback(artifact_root: Path) -
 
     bus = json.loads((fixtures_dir / "sequence-bus-functional.json").read_text(encoding="utf-8"))
     external = json.loads((fixtures_dir / "sequence-external.json").read_text(encoding="utf-8"))
+    negative = json.loads((fixtures_dir / "sequence-external-negative.json").read_text(encoding="utf-8"))
     for source, document in (("bus", bus), ("external", external)):
         assert document["trigger_source"] == source
         steps = document["steps"]
@@ -603,4 +637,5 @@ def test_triggered_sequence_fixtures_wait_before_playback(artifact_root: Path) -
         duration_s = len(signal_samples) * steps[1]["repeat_count"] / document["sample_rate_hz"]
         assert 1 <= duration_s <= 5
     assert external["trigger_slope"] == "positive"
+    assert negative == {**external, "trigger_slope": "negative"}
     assert bus["steps"][0]["waveform"] != external["steps"][0]["waveform"]

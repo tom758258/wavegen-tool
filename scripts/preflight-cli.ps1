@@ -5,8 +5,7 @@ param(
     [string]$Target = "all",
     [string]$Python = ".\.venv\Scripts\python.exe",
     [switch]$DebugArtifacts,
-    [string]$OutputRoot = ".tmp_tests\cli_preflight",
-    [switch]$IncludeBurstStartPhase
+    [string]$OutputRoot = ".tmp_tests\cli_preflight"
 )
 
 Set-StrictMode -Version Latest
@@ -96,7 +95,7 @@ function Get-ValidationSummary {
 
 try {
     $modesSpecified = $PSBoundParameters.ContainsKey("Modes")
-    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified -IncludeBurstStartPhase:$IncludeBurstStartPhase)
+    $selectedModes = @(Resolve-SelectedValidationModes -Suite $Suite -Modes $Modes -Specified $modesSpecified)
     $targets = @(Resolve-ValidationTargets -Target $Target)
     if ($Suite -eq 'full' -and ($env:OS -ne 'Windows_NT' -or $PSVersionTable.PSEdition -ne 'Desktop')) {
         throw 'Full requires Windows PowerShell Desktop on Windows.'
@@ -217,7 +216,7 @@ foreach ($targetProfile in $targets) {
             ('software-sequence' -in $applicableModes -and $payload.capabilities.max_arbitrary_sample_rate_hz -gt 0)) {
             New-ArbitraryValidationFixtures -Directory $fixtureDirectory
         } else { $null }
-        if ($IncludeBurstStartPhase) {
+        if ('burst' -in $applicableModes) {
             $name = "${modelId}/ch1/burst-invalid-start-phase-dry-run"
             $reasons = @()
             $invocation = $null
@@ -233,7 +232,7 @@ foreach ($targetProfile in $targets) {
             } catch { $reasons += $_.Exception.Message }
             Add-ValidationCase -Cases $cases -Name $name -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons -Process $(if ($null -ne $invocation) { $invocation.Process } else { $null })
         }
-        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures -SequenceFixtureDirectory $fixtureDirectory -IncludeBurstStartPhase:$IncludeBurstStartPhase)) {
+        foreach ($recipe in @(Get-FullValidationInventory -Channels @(1..$channelCount) -Modes $applicableModes -ArbitraryFixtures $fixtures -SequenceFixtureDirectory $fixtureDirectory)) {
             if ($recipe.channel -notin $channelsTested) { [void]$channelsTested.Add($recipe.channel) }
             $stepIndex = 0
             foreach ($step in $recipe.steps) {
@@ -273,25 +272,21 @@ foreach ($targetProfile in $targets) {
                             if ($payload.executed -ne $false -or $payload.canonical_model_id -cne $modelId -or
                                 ($command -ne 'run-software-sequence' -and $recipe.family -ne 'basic-workflows' -and @($payload.commands).Count -eq 0)) { throw 'Invalid hardware-free plan.' }
                         } elseif ($payload.simulated -ne $true -or $payload.model -cne $capabilityModel) { throw 'Unexpected simulator identity or mode.' }
-                        if ($command -in @('configure-sync', 'sync-output')) {
-                            foreach ($key in $step.result.Keys) {
-                                if ($mode -eq 'dry-run' -and $key -eq 'readback_verified') { continue }
-                                if ($key -notin $payload.PSObject.Properties.Name -or $payload.$key -cne $step.result[$key]) {
-                                    throw "Unexpected Sync result for $key."
-                                }
-                            }
-                        } elseif ($command.StartsWith('configure-') -and $payload.output_state -cne 'off') {
+                        if ($command.StartsWith('configure-') -and $command -ne 'configure-sync' -and $payload.output_state -cne 'off') {
                             throw 'Configuration did not leave output off.'
                         }
-                        if ($step.result.ContainsKey('burst_start_phase_deg') -and (
-                            'burst_start_phase_deg' -notin $payload.PSObject.Properties.Name -or
-                            $payload.burst_start_phase_deg -ne $step.result['burst_start_phase_deg']
-                        )) {
-                            throw 'Burst start phase did not match the recipe.'
+                        if ($recipe.family -in @('static', 'modulation', 'burst', 'sweep', 'output-config', 'sync-configuration', 'sync-control', 'sequence') -and
+                            ($command.StartsWith('configure-') -or $command -eq 'sync-output')) {
+                            foreach ($key in $step.result.Keys) {
+                                if ($mode -eq 'dry-run' -and $key -eq 'readback_verified') { continue }
+                                if ($key -notin $payload.PSObject.Properties.Name -or $null -eq $payload.$key -or $payload.$key -cne $step.result[$key]) {
+                                    throw "Unexpected configuration result for $key."
+                                }
+                            }
                         }
-                        if ($recipe.family -eq 'sweep' -and $step.result['trigger_source'] -eq 'external') {
-                            if ($payload.trigger_source -cne 'external' -or $payload.trigger_slope -cne $step.result['trigger_slope']) {
-                                throw 'External Sweep trigger source or slope did not match the recipe.'
+                        if ($mode -eq 'simulate' -and '--load-builtin' -in $step.arguments) {
+                            if ($payload.name -cne $step.result.name -or $payload.builtin_loaded -isnot [bool]) {
+                                throw 'Simulation did not confirm selection of the expected built-in waveform.'
                             }
                         }
                         if ('--verify-readback' -in $step.arguments -and $mode -eq 'simulate' -and $payload.readback_verified -ne $true) {

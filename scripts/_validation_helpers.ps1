@@ -439,6 +439,8 @@ function Get-AdvancedReadbackExpectation {
         if ($mode -eq 'AM' -and (Get-AdvancedOption $Arguments '--am-type') -eq 'dssc') { $mode = 'AM-DSSC' }
         $settings.source = 'internal'
         $settings[$mod.field] = [double]$value
+        $shape = Get-AdvancedOption $Arguments "--$($mod.name.ToLowerInvariant())-shape"
+        if ($null -ne $shape) { $settings.shape = $shape }
         $freq = Get-AdvancedOption $Arguments $mod.freq
         if ($null -ne $freq) {
             $field = if ($mod.name -in @('FSK', 'BPSK')) { 'rate_hz' } else { 'internal_frequency_hz' }
@@ -463,6 +465,8 @@ function Get-AdvancedReadbackExpectation {
         if ($null -ne $timer) { $settings.trigger_timer_s = [double]$timer }
         $slope = Get-AdvancedOption $Arguments '--burst-trigger-slope'
         if ($null -ne $slope) { $settings.trigger_slope = $slope }
+        $delay = Get-AdvancedOption $Arguments '--burst-trigger-delay-s'
+        if ($null -ne $delay) { $settings.trigger_delay_s = [double]$delay }
     } elseif ($null -eq $mode -and $Arguments[0] -like '*-list-sweep') {
         $mode = 'LIST'
         $frequencies = Get-AdvancedOption $Arguments '--frequencies-hz'
@@ -479,7 +483,7 @@ function Get-AdvancedReadbackExpectation {
         $settings.sweep_time_s = [double](Get-AdvancedOption $Arguments '--sweep-time-s')
         $trigger = Get-AdvancedOption $Arguments '--trigger-source'
         $settings.trigger_source = if ($null -ne $trigger) { $trigger } else { 'immediate' }
-        foreach ($pair in @(@('--hold-time-s', 'hold_time_s'), @('--return-time-s', 'return_time_s'), @('--trigger-timer-s', 'trigger_timer_s'))) {
+        foreach ($pair in @(@('--hold-time-s', 'hold_time_s'), @('--return-time-s', 'return_time_s'), @('--trigger-timer-s', 'trigger_timer_s'), @('--trigger-delay-s', 'trigger_delay_s'))) {
             $value = Get-AdvancedOption $Arguments $pair[0]
             if ($null -ne $value) { $settings[$pair[1]] = [double]$value }
         }
@@ -500,8 +504,7 @@ $script:FullValidationModes = @('static', 'modulation', 'burst', 'sweep', 'list-
 
 function Resolve-SelectedValidationModes {
     param(
-        [string]$Suite, [string[]]$Modes = @(), [bool]$Specified = $false,
-        [switch]$IncludeBurstStartPhase
+        [string]$Suite, [string[]]$Modes = @(), [bool]$Specified = $false
     )
 
     if ($Specified -and $Suite -ne 'full') {
@@ -514,9 +517,6 @@ function Resolve-SelectedValidationModes {
             throw "Modes must contain one or more of: $($script:FullValidationModes -join ', ')."
         }
         $selected = @($script:FullValidationModes | Where-Object { $_ -in $requested })
-    }
-    if ($IncludeBurstStartPhase -and ($Suite -ne 'full' -or $selected.Count -ne 1 -or $selected[0] -ne 'burst')) {
-        throw '-IncludeBurstStartPhase requires -Suite full -Modes burst.'
     }
     return $selected
 }
@@ -548,6 +548,7 @@ function New-ArbitraryValidationFixtures {
     Write-Utf8NoBomText -LiteralPath $idleCsv -Text ("0`n" * 16)
     $bus = Join-Path $Directory 'sequence-bus.json'
     $external = Join-Path $Directory 'sequence-external.json'
+    $externalNegative = Join-Path $Directory 'sequence-external-negative.json'
     $busFunctional = Join-Path $Directory 'sequence-bus-functional.json'
     $common = @{ version = 1; sample_rate_hz = 1000000; amplitude_vpp = 0.1; offset_v = 0; load = '50' }
     $busDocument = $common.Clone()
@@ -579,8 +580,11 @@ function New-ArbitraryValidationFixtures {
     )
     Write-Utf8NoBomText -LiteralPath $bus -Text ($busDocument | ConvertTo-Json -Depth 6 -Compress)
     Write-Utf8NoBomText -LiteralPath $external -Text ($externalDocument | ConvertTo-Json -Depth 6 -Compress)
+    $externalDocument.trigger_slope = 'negative'
+    Write-Utf8NoBomText -LiteralPath $externalNegative -Text ($externalDocument | ConvertTo-Json -Depth 6 -Compress)
     return [pscustomobject]@{
         csv = $csv; idleCsv = $idleCsv; bus = $bus; busFunctional = $busFunctional; external = $external
+        externalNegative = $externalNegative
         nameA = $names.A; nameB = $names.B; nameC = $names.C; nameD = $names.D; nameE = $names.E; nameF = $names.F
         nameG = $names.G; nameH = $names.H
         softwareWave = "WGW_$token"; softwareNative = "WGN_$token"
@@ -679,6 +683,10 @@ function Get-BasicWorkflowValidationRecipes {
         @('configure-sine', 'output', 'wait', 'update-sine-amplitude', 'wait', 'update-sine-amplitude', 'wait', 'output') 3 `
         @{ function = 'SIN'; amplitude = 0.25 } 'Observe the sine amplitude step from 0.1 to 0.2 to 0.25 Vpp, followed by output OFF.' `
         -Values @{ ramp_points = @(0.1, 0.2, 0.25) }
+    New-BasicRecipe 'amplitude-ramp-descending' @('run-amplitude-ramp', '--start-vpp', '0.25', '--stop-vpp', '0.1', '--step-vpp', '0.1', '--dwell-s', '1') `
+        @('configure-sine', 'output', 'wait', 'update-sine-amplitude', 'wait', 'update-sine-amplitude', 'wait', 'output') 3 `
+        @{ function = 'SIN'; amplitude = 0.1 } 'Observe the sine amplitude step from 0.25 to 0.15 to 0.1 Vpp, followed by output OFF.' `
+        -Values @{ ramp_points = @(0.25, 0.15, 0.1) }
     New-BasicRecipe 'output-cycle' @('run-output-cycle', '--on-s', '1', '--off-s', '1', '--cycles', '2') `
         @('output', 'wait', 'output', 'wait') 4 @{} 'Observe two one-second ON periods separated by a one-second OFF period.' -Loops 2
     New-BasicRecipe 'waveform-sequence' @('run-waveform-sequence', '--file', $waveformsFile) `
@@ -688,9 +696,18 @@ function Get-BasicWorkflowValidationRecipes {
         @('run-sine-list-sweep-once') 3 @{ function = 'SIN'; frequency_hz = 1000 } `
         'Use a scope to confirm a 1 kHz start, then 2 kHz and 3 kHz once each, with a full one-second dwell at each point and output OFF after 3 kHz. Check for any return to 1 kHz before OFF.' `
         -Values @{ frequencies_hz = @(1000, 2000, 3000); dwell_s = 1; trigger_source = 'immediate' }
-    New-BasicRecipe 'quick-output-preset' @('apply-quick-output-preset', '--preset', 'square') `
-        @('configure-square') 0 @{ function = 'SQU'; frequency_hz = 1000; amplitude = 0.1; offset_v = 0; load = 'high-z' } `
-        -Values @{ frequency_hz = 1000; amplitude_vpp = 0.1; offset_v = 0; load = 'high-z'; duty_cycle_percent = 50 }
+    New-BasicRecipe 'frequency-step-descending' @('run-frequency-step', '--start-frequency-hz', '3000', '--stop-frequency-hz', '1000', '--frequency-step-hz', '1000', '--dwell-s', '1') `
+        @('run-sine-list-sweep-once') 3 @{ function = 'SIN'; frequency_hz = 3000 } `
+        'Use a scope to confirm a 3 kHz start, then 2 kHz and 1 kHz once each, with a full one-second dwell per point and output OFF after 1 kHz. Check for any return to 3 kHz before OFF.' `
+        -Values @{ frequencies_hz = @(3000, 2000, 1000); dwell_s = 1; trigger_source = 'immediate' }
+    $presetFunctions = [ordered]@{ square = 'SQU'; sine = 'SIN'; triangle = 'TRI' }
+    foreach ($preset in $presetFunctions.Keys) {
+        $name = if ($preset -eq 'square') { 'quick-output-preset' } else { "quick-output-preset-$preset" }
+        $values = @{ frequency_hz = 1000; amplitude_vpp = 0.1; offset_v = 0; load = 'high-z' }
+        if ($preset -eq 'square') { $values.duty_cycle_percent = 50 }
+        New-BasicRecipe $name @('apply-quick-output-preset', '--preset', $preset) @("configure-$preset") 0 `
+            @{ function = $presetFunctions[$preset]; frequency_hz = 1000; amplitude = 0.1; offset_v = 0; load = 'high-z' } -Values $values
+    }
 }
 
 function Assert-BasicWorkflowResult {
@@ -760,13 +777,14 @@ function Get-FullValidationInventory {
         [Parameter(Mandatory = $true)][int[]]$Channels,
         [string[]]$Modes = $script:FullValidationModes,
         $ArbitraryFixtures = $null,
-        [string]$SequenceFixtureDirectory,
-        [switch]$IncludeBurstStartPhase
+        [string]$SequenceFixtureDirectory
     )
 
     # Recipes contain public CLI arguments only; Core owns admission and SCPI.
     $voltage = @('--amplitude-vpp', '0.1', '--offset-v', '0', '--load', '50')
-    $sine = @('configure-sine', '--frequency-hz', '1000') + $voltage
+    $periodic = @('--frequency-hz', '1000') + $voltage
+    $sine = @('configure-sine') + $periodic
+    $prbs = @('configure-prbs', '--bit-rate-bps', '10000') + $voltage
     $pulseSharedEdge = @('configure-pulse', '--frequency-hz', '1000', '--pulse-width-s', '0.0001', '--edge-time-s', '0.00000005') + $voltage
     $pulseIndependentEdges = @('configure-pulse', '--frequency-hz', '1000', '--pulse-width-s', '0.0001', '--leading-edge-s', '0.00000004', '--trailing-edge-s', '0.00000006') + $voltage
     $recipes = [System.Collections.ArrayList]::new()
@@ -827,9 +845,22 @@ function Get-FullValidationInventory {
                 $args = @('configure-triangle', '--frequency-hz', '1000', '--high-level-v', '0.075', '--low-level-v', '-0.025', '--load', '50')
                 $readback.offset_v = 0.025
             }
-            'prbs' { $args += @('--pattern', 'PN9'); $result.pattern = 'PN9' }
+            'prbs' {
+                $args = $prbs + @('--pattern', 'PN9', '--edge-time-s', '0.00000005')
+                $result = @{ pattern = 'PN9'; edge_time_s = 0.00000005 }
+            }
+        }
+        if ($wave -in @('square', 'ramp', 'triangle', 'pulse')) {
+            $args += @('--phase-deg', '45')
+            $result.phase_deg = 45
         }
         Add-Recipe "static-$wave" 'static' @((New-Step $args $readback $result)) ($wave -eq 'sine')
+    }
+    $prbsReadback = @{ function = 'PRBS'; bit_rate_bps = 10000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+    foreach ($pattern in @('PN7', 'PN11', 'PN15', 'PN20', 'PN23')) {
+        Add-Recipe "static-prbs-$($pattern.ToLowerInvariant())" 'static' @(
+            (New-Step ($prbs + @('--pattern', $pattern)) $prbsReadback @{ pattern = $pattern })
+        )
     }
     $modulations = [ordered]@{
         am = @('--am-frequency', '10', '--am-depth', '20')
@@ -849,9 +880,32 @@ function Get-FullValidationInventory {
         $readback = @{ function = $(if ($mode -eq 'pwm') { 'PULS' } else { 'SIN' }); frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
         Add-Recipe "modulation-$mode" 'modulation' @((New-Step ($carrier + $modulations[$mode]) $readback $result)) ($mode -eq 'am')
     }
+    foreach ($variant in @(
+        @{ mode = 'am'; wave = 'square'; shape = 'square' },
+        @{ mode = 'fm'; wave = 'ramp'; shape = 'up-ramp' },
+        @{ mode = 'pm'; wave = 'triangle'; shape = 'down-ramp' },
+        @{ mode = 'fsk'; wave = 'square' },
+        @{ mode = 'bpsk'; wave = 'triangle' },
+        @{ mode = 'pwm'; wave = 'pulse'; shape = 'triangle' },
+        @{ mode = 'sum'; wave = 'pulse'; shape = 'square' }
+    )) {
+        $mode = $variant.mode
+        $wave = $variant.wave
+        $carrier = if ($wave -eq 'pulse') { $pulseSharedEdge } else { @("configure-$wave") + $periodic }
+        $args = $carrier + $modulations[$mode]
+        $result = @{}
+        $result[$mode + '_enabled'] = $true
+        if ($variant.ContainsKey('shape')) {
+            $args += @("--$mode-shape", $variant.shape)
+            $result[$mode + '_shape'] = $variant.shape
+        }
+        $readback = @{ function = $functions[$wave]; frequency_hz = 1000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
+        Add-Recipe "modulation-$mode-$wave" 'modulation' @((New-Step $args $readback $result))
+    }
 
     Add-Recipe 'configure-output' 'output-config' @(
         (New-Step @('configure-output', '--load', 'high-z', '--polarity', 'inverted', '--voltage-limits', 'off', '--autorange', 'off') @{ load = 'high-z' } @{ polarity = 'inverted'; voltage_limits_enabled = $false; autorange_enabled = $false }),
+        (New-Step @('configure-output', '--load', '1000', '--voltage-limits', 'off') @{ load = '1000' } @{ load = '1000' }),
         (New-Step @('configure-output', '--load', '50', '--polarity', 'normal', '--voltage-limit-low', '-1', '--voltage-limit-high', '1', '--voltage-limits', 'on', '--autorange', 'on') @{ load = '50' } @{ polarity = 'normal'; voltage_limit_low = -1; voltage_limit_high = 1; voltage_limits_enabled = $true; autorange_enabled = $true })
     ) $true
 
@@ -862,11 +916,14 @@ function Get-FullValidationInventory {
         $carrier = if ($source -eq 'immediate') { $sine } else { $burstPulse }
         $readback = if ($source -eq 'immediate') { $sineReadback } else { $pulseReadback }
         $args = $carrier + @('--burst-count', '3', '--burst-trigger-source', $source)
-        if ($source -eq 'immediate') { $args += @('--burst-period-s', '0.1') }
+        if ($source -eq 'immediate') { $args += @('--burst-period-s', '0.1', '--burst-trigger-delay-s', '0') }
         if ($source -eq 'timer') { $args += @('--burst-trigger-timer-s', '5') }
         if ($source -eq 'external') { $args += @('--burst-trigger-slope', 'positive') }
         $result = @{ burst_mode = 'counted'; burst_count = 3; burst_trigger_source = $source }
-        if ($source -eq 'immediate') { $result.burst_start_phase_deg = 0 }
+        if ($source -eq 'immediate') {
+            $result.burst_start_phase_deg = 0
+            $result.burst_trigger_delay_s = 0
+        }
         if ($source -eq 'external') { $result.burst_trigger_slope = 'positive' }
         $steps = @((New-Step $args $readback $result))
         $observation = switch ($source) {
@@ -903,19 +960,41 @@ function Get-FullValidationInventory {
             seconds = 20
         }
     }
-    if ($IncludeBurstStartPhase) {
-        Add-Recipe 'burst-counted-start-phase' 'burst' @(
-            (New-Step ($sine + @('--burst-count', '3', '--burst-period-s', '0.1', '--burst-start-phase-deg', '90')) $sineReadback @{
-                burst_mode = 'counted'; burst_start_phase_deg = 90
-            })
-        )
-        Add-Recipe 'burst-gated-start-phase' 'burst' @(
-            (New-Step ($sine + @('--gated-burst', '--gate-polarity', 'normal', '--burst-start-phase-deg', '45.1')) $sineReadback @{
-                burst_mode = 'gated'; burst_start_phase_deg = 45.1
-            })
-        )
+    Add-Recipe 'burst-counted-start-phase' 'burst' @(
+        (New-Step ($sine + @('--burst-count', '3', '--burst-period-s', '0.1', '--burst-start-phase-deg', '90')) $sineReadback @{
+            burst_mode = 'counted'; burst_start_phase_deg = 90
+        })
+    )
+    Add-Recipe 'burst-gated-start-phase' 'burst' @(
+        (New-Step ($sine + @('--gated-burst', '--gate-polarity', 'normal', '--burst-start-phase-deg', '45.1')) $sineReadback @{
+            burst_mode = 'gated'; burst_start_phase_deg = 45.1
+        })
+    )
+    foreach ($wave in @('square', 'ramp', 'triangle', 'prbs')) {
+        $readback = $sineReadback.Clone()
+        $readback.function = $functions[$wave]
+        if ($wave -eq 'prbs') {
+            $args = $prbs
+            $readback = $prbsReadback
+        } else {
+            $args = @("configure-$wave") + $periodic
+        }
+        $args += @('--burst-count', '3')
+        $result = @{ burst_mode = 'counted'; burst_count = 3 }
+        if ($wave -eq 'square') {
+            $args += @('--burst-trigger-source', 'bus', '--burst-trigger-delay-s', '0.1')
+            $result.burst_trigger_source = 'bus'
+            $result.burst_trigger_delay_s = 0.1
+        } else {
+            $args += @('--burst-period-s', '0.1')
+        }
+        Add-Recipe "burst-$wave" 'burst' @((New-Step $args $readback $result))
     }
-    foreach ($variant in @('sine-linear', 'sine-logarithmic', 'sine-bus', 'sine-timer', 'square-linear', 'ramp-linear', 'triangle-linear')) {
+    foreach ($variant in @(
+        'sine-linear', 'sine-logarithmic', 'sine-bus', 'sine-timer',
+        'square-linear', 'ramp-linear', 'triangle-linear',
+        'square-logarithmic', 'ramp-logarithmic', 'triangle-logarithmic'
+    )) {
         $wave, $option = $variant.Split('-')
         $spacing = if ($option -eq 'logarithmic') { 'logarithmic' } else { 'linear' }
         $triggered = $option -in @('bus', 'timer')
@@ -926,6 +1005,18 @@ function Get-FullValidationInventory {
         $readback = @{ function = $functions[$wave]; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
         $result = @{ spacing = $spacing }
         if ($triggered) { $result += @{ trigger_source = $option; hold_time_s = 0.2; return_time_s = 0.2 } }
+        if ($spacing -eq 'logarithmic') {
+            switch ($wave) {
+                'square' {
+                    $args += @('--duty-cycle-percent', '30', '--trigger-delay-s', '0')
+                    $result += @{ duty_cycle_percent = 30; trigger_delay_s = 0 }
+                }
+                'ramp' {
+                    $args += @('--symmetry-percent', '30', '--trigger-delay-s', '0.1')
+                    $result += @{ symmetry_percent = 30; trigger_delay_s = 0.1 }
+                }
+            }
+        }
         $steps = @((New-Step $args $readback $result))
         $observation = $null
         if ($triggered) {
@@ -1014,25 +1105,41 @@ function Get-FullValidationInventory {
             (New-Step @('list-arbitrary-memory') @{} @{ names = @('INT:\BUILTIN\SINC.ARB') }),
             (New-Step $builtinArgs $builtinReadback @{ name = 'SINC'; output_state = 'off'; builtin_loaded = $false })
         )
+        foreach ($name in @('CARDIAC', 'EXP_RISE', 'EXP_FALL', 'GAUSSIAN', 'HAVERSINE', 'LORENTZ', 'D_LORENTZ', 'NEG_RAMP')) {
+            $args = @('configure-arbitrary', '--name', $name, '--load-builtin', '--sample-rate-hz', '1000000') + $voltage
+            Add-Recipe "arbitrary-builtin-$($name.ToLowerInvariant().Replace('_', '-'))" 'arbitrary' @(
+                (New-Step $args $builtinReadback @{ name = $name; output_state = 'off' }),
+                (New-Step @('list-arbitrary-memory') @{} @{ names = @("INT:\BUILTIN\$name.ARB") })
+            )
+        }
         Add-Recipe 'sequence-bus' 'sequence' @(
             $uploadB, $uploadC,
             (New-Step @('configure-arbitrary-sequence', '--file', $fixture.bus) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 4; trigger_source = 'bus'; output_state = 'off' })
-        )
+        ) $true
         Add-Recipe 'sequence-bus-functional' 'sequence' @(
             $uploadG, $uploadF,
             (New-Step @('configure-arbitrary-sequence', '--file', $fixture.busFunctional) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 2; trigger_source = 'bus'; output_state = 'off' }),
             $outputOn,
             (New-Step @('trigger') @{ output_state = 'on' })
         ) -Observation @{ expected = 'Only idle is present before the Bus trigger; after triggering, capture the approximately 100 Hz waveform for about 2 seconds on the scope.'; seconds = 8 }
-        Add-Recipe 'sequence-external' 'sequence' @(
-            $uploadH, $uploadD,
-            (New-Step @('configure-arbitrary-sequence', '--file', $fixture.external) @{ function = 'ARB'; output_state = 'off' } @{ step_count = 2; trigger_source = 'external'; output_state = 'off' }),
-            $outputOn
-        ) -Observation @{
-            input = 'external-trigger'; idle = 'low'
-            action = 'Send one rising-edge external trigger; use a scope single-shot capture for the active waveform.'
-            expected = 'Only idle is present before the external edge; after triggering, capture the approximately 100 Hz waveform for about 2 seconds.'
-            seconds = 8
+        foreach ($slope in @('positive', 'negative')) {
+            $name, $document, $idle, $edge = if ($slope -eq 'positive') {
+                'sequence-external', $fixture.external, 'low', 'rising'
+            } else {
+                'sequence-external-negative', $fixture.externalNegative, 'high', 'falling'
+            }
+            Add-Recipe $name 'sequence' @(
+                $uploadH, $uploadD,
+                (New-Step @('configure-arbitrary-sequence', '--file', $document) @{ function = 'ARB'; output_state = 'off' } @{
+                    step_count = 2; trigger_source = 'external'; trigger_slope = $slope; output_state = 'off'
+                }),
+                $outputOn
+            ) -Observation @{
+                input = 'external-trigger'; idle = $idle
+                action = "Send one $edge edge; use a scope single-shot capture for the active waveform."
+                expected = 'Only idle is present before the external edge; after triggering, capture the approximately 100 Hz waveform for about 2 seconds.'
+                seconds = 8
+            }
         }
     }
 
@@ -1130,11 +1237,17 @@ function Get-FullValidationInventory {
             if ($channel -ne 1 -and -not $recipe.parity) { continue }
             $steps = $recipe.steps
             if ($recipe.family -eq 'sync-configuration') {
-                $syncMode = if ($channel -eq 1) { 'normal' } else { 'carrier' }
-                $polarity = if ($channel -eq 1) { 'normal' } else { 'inverted' }
-                $steps = @(New-Step @('configure-sync', '--source-channel', [string]$channel, '--mode', $syncMode, '--polarity', $polarity) @{} @{
-                    source_channel = $channel; sync_mode = $syncMode; polarity = $polarity
-                    sync_state = 'off'; readback_verified = $true
+                $configurations = if ($channel -eq 1) {
+                    'normal/normal', 'carrier/normal', 'normal/inverted'
+                } else {
+                    'carrier/inverted', 'normal/normal'
+                }
+                $steps = @(foreach ($configuration in $configurations) {
+                    $syncMode, $polarity = $configuration.Split('/')
+                    New-Step @('configure-sync', '--source-channel', [string]$channel, '--mode', $syncMode, '--polarity', $polarity) @{} @{
+                        source_channel = $channel; sync_mode = $syncMode; polarity = $polarity
+                        sync_state = 'off'; readback_verified = $true
+                    }
                 })
             }
             [pscustomobject]@{
