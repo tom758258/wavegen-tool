@@ -701,6 +701,7 @@ def test_full_preflight_static_direct_without_hardware(
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
     assert report["selected_modes"] in ("static", ["static"])
+    assert report["complete_mode_selection"] is False
     cases = {case["name"]: case["status"] for case in report["cases"]}
     for mode in ("dry-run", "simulate"):
         assert cases[f"keysight-33521b/ch1/static-sine/step1-{mode}"] == "PASS"
@@ -730,9 +731,10 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
     if mode == "burst,output":
-        assert {"ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"} <= set(
-            report["planned_cases"]
-        )
+        assert {
+            "ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase",
+            "ch1/sync-control", "ch1/sync-configuration", "ch1/output-control",
+        } <= set(report["planned_cases"])
     if mode == "arbitrary":
         assert {"ch1/arbitrary-upload-configure", "ch1/arbitrary-clear"} <= set(report["planned_cases"])
         private_report = _read_report(_only_run(artifact_root), "private")
@@ -782,6 +784,8 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     case_names = {case["name"] for case in readiness["cases"]}
     assert any(name.startswith(f"keysight-33521b/{expected}/") for name in case_names)
     assert not any(name.startswith(f"keysight-33521b/{unexpected}/") for name in case_names)
+    if mode == "burst,output":
+        assert "keysight-33521b/ch1/sync-control/step2-simulate" in case_names
     if mode == "arbitrary":
         cases = {case["name"]: case["status"] for case in readiness["cases"]}
         for step in (1, 3):
