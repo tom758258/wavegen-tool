@@ -1216,6 +1216,12 @@ identity and final error-queue cases remain mandatory regardless of selection.
 | `software-sequence` | Ordered software-controlled actions, supported arbitrary operations and confirmed output cleanup |
 | `basic-workflows` | Timed output, both directions of Amplitude Ramp and Frequency Step, Output Cycle, Waveform Sequence, Sine/Square/Triangle Quick Output Presets and simulated Worker cancellation and stop |
 
+The Full Static and Sweep recipes use `--verify-waveform-readback` to compare
+the programmed Square, Ramp, and Triangle phase, PRBS pattern and edge time,
+Square Sweep duty cycle, and Ramp Sweep symmetry with readback while output
+is OFF. Pulse phase uses the readback already built into Pulse configuration.
+Preflight checks simulated readback, and PlanOnly shows the intended verification.
+
 `-Suite full -Modes burst` includes both nonzero Burst start phase cases.
 These contributor validation cases keep output OFF and verify the programmed
 phase through readback. Measuring physical waveform behavior requires a

@@ -584,6 +584,17 @@ def test_full_mode_resolution_and_family_filtering() -> None:
     assert steps["ch1/sweep-square-logarithmic"]["result"]["duty_cycle_percent"] == 30
     assert steps["ch1/sweep-ramp-logarithmic"]["result"]["symmetry_percent"] == 30
 
+    waveform_readback_recipes = {
+        "ch1/static-square", "ch1/static-ramp", "ch1/static-triangle",
+        "ch1/sweep-square-logarithmic", "ch1/sweep-ramp-logarithmic",
+    } | {name for name in steps if name.startswith("ch1/static-prbs")}
+    assert {
+        name for name, step in steps.items() if "--verify-waveform-readback" in step["arguments"]
+    } == waveform_readback_recipes
+    assert {
+        name for name, step in steps.items() if step["result"].get("waveform_readback_verified") is True
+    } == waveform_readback_recipes
+
     output = next(recipe for recipe in data["recipes"] if recipe["name"] == "ch1/configure-output")
     assert any(step["readback"]["load"] == "1000" for step in output["steps"])
     sync_settings = {

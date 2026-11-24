@@ -199,6 +199,14 @@ _ADVANCED_READBACK_ACTIONS = _ADVANCED_STATIC_ACTIONS | frozenset(
         "configure-triangle-list-sweep",
     }
 )
+_WAVEFORM_READBACK_ACTIONS = (
+    "configure-square",
+    "configure-ramp",
+    "configure-triangle",
+    "configure-prbs",
+    "configure-square-sweep",
+    "configure-ramp-sweep",
+)
 _ADVANCED_OPTION_FIELDS = (
     "am_frequency",
     "am_shape",
@@ -2141,6 +2149,12 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="Compare active Advanced Mode settings with independent instrument readback.",
         )
+    for command in _WAVEFORM_READBACK_ACTIONS:
+        subparsers.choices[command].add_argument(
+            "--verify-waveform-readback",
+            action="store_true",
+            help="Verify programmed phase, PRBS settings, or sweep carrier shape for this command.",
+        )
     return parser
 
 
@@ -2719,6 +2733,7 @@ def _run_configure_square_sweep(args: argparse.Namespace) -> int:
             trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
+            verify_waveform_readback=args.verify_waveform_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -2811,6 +2826,7 @@ def _run_configure_ramp_sweep(args: argparse.Namespace) -> int:
             trigger_slope=args.trigger_slope,
             channel=args.channel,
             verify_readback=args.verify_readback,
+            verify_waveform_readback=args.verify_waveform_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3201,6 +3217,7 @@ def _run_configure_square(args: argparse.Namespace) -> int:
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
             verify_readback=args.verify_readback,
+            verify_waveform_readback=args.verify_waveform_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3289,6 +3306,7 @@ def _run_configure_ramp(args: argparse.Namespace) -> int:
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
             verify_readback=args.verify_readback,
+            verify_waveform_readback=args.verify_waveform_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3376,6 +3394,7 @@ def _run_configure_triangle(args: argparse.Namespace) -> int:
             burst=_burst_config_from_args(args),
             sum=_sum_config_from_args(args),
             verify_readback=args.verify_readback,
+            verify_waveform_readback=args.verify_waveform_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -3677,6 +3696,7 @@ def _run_configure_prbs(args: argparse.Namespace) -> int:
             channel=args.channel,
             burst=_burst_config_from_args(args),
             verify_readback=args.verify_readback,
+            verify_waveform_readback=args.verify_waveform_readback,
             **_validation_live_injection(args),
             **_factory_injection(args.simulate, factory),
         ),
@@ -4145,10 +4165,13 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
             )
         return int(ExitCode.INTERNAL_ERROR)
 
+    waveform_readback_verified = getattr(args, "verify_waveform_readback", False)
     if args.json_output:
         payload = _control_success_payload(args.command, result)
         if getattr(args, "verify_readback", False):
             payload["readback_verified"] = True
+        if waveform_readback_verified:
+            payload["waveform_readback_verified"] = True
         print(
             json.dumps(
                 _with_simulation_fields(payload, args.simulate),
@@ -4163,7 +4186,8 @@ def _run_control(args: argparse.Namespace, operation: Any) -> int:
                     "\nAdvanced Mode readback: PASS"
                     if getattr(args, "verify_readback", False)
                     else ""
-                ),
+                )
+                + ("\nWaveform setting readback: PASS" if waveform_readback_verified else ""),
                 args.simulate,
             )
         )

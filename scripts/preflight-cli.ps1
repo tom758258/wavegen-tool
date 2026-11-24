@@ -278,7 +278,7 @@ foreach ($targetProfile in $targets) {
                         if ($recipe.family -in @('static', 'modulation', 'burst', 'sweep', 'output-config', 'sync-configuration', 'sync-control', 'sequence') -and
                             ($command.StartsWith('configure-') -or $command -eq 'sync-output')) {
                             foreach ($key in $step.result.Keys) {
-                                if ($mode -eq 'dry-run' -and $key -eq 'readback_verified') { continue }
+                                if ($mode -eq 'dry-run' -and $key -in @('readback_verified', 'waveform_readback_verified')) { continue }
                                 if ($key -notin $payload.PSObject.Properties.Name -or $null -eq $payload.$key -or $payload.$key -cne $step.result[$key]) {
                                     throw "Unexpected configuration result for $key."
                                 }
@@ -292,7 +292,9 @@ foreach ($targetProfile in $targets) {
                         if ('--verify-readback' -in $step.arguments -and $mode -eq 'simulate' -and $payload.readback_verified -ne $true) {
                             throw 'Advanced Mode simulator readback was not verified.'
                         }
-                        if ($mode -eq 'dry-run' -and 'readback_verified' -in $payload.PSObject.Properties.Name) {
+                        if ($mode -eq 'dry-run' -and
+                            ('readback_verified' -in $payload.PSObject.Properties.Name -or
+                             'waveform_readback_verified' -in $payload.PSObject.Properties.Name)) {
                             throw 'Dry-run cannot claim independent readback verification.'
                         }
                     } catch { $reasons += $_.Exception.Message }

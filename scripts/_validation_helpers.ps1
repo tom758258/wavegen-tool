@@ -846,20 +846,26 @@ function Get-FullValidationInventory {
                 $readback.offset_v = 0.025
             }
             'prbs' {
-                $args = $prbs + @('--pattern', 'PN9', '--edge-time-s', '0.00000005')
-                $result = @{ pattern = 'PN9'; edge_time_s = 0.00000005 }
+                $args = $prbs + @('--pattern', 'PN9', '--edge-time-s', '0.00000005', '--verify-waveform-readback')
+                $result = @{ pattern = 'PN9'; edge_time_s = 0.00000005; waveform_readback_verified = $true }
             }
         }
         if ($wave -in @('square', 'ramp', 'triangle', 'pulse')) {
             $args += @('--phase-deg', '45')
             $result.phase_deg = 45
         }
+        if ($wave -in @('square', 'ramp', 'triangle')) {
+            $args += '--verify-waveform-readback'
+            $result.waveform_readback_verified = $true
+        }
         Add-Recipe "static-$wave" 'static' @((New-Step $args $readback $result)) ($wave -eq 'sine')
     }
     $prbsReadback = @{ function = 'PRBS'; bit_rate_bps = 10000; amplitude = 0.1; amplitude_unit = 'VPP'; offset_v = 0; load = '50' }
     foreach ($pattern in @('PN7', 'PN11', 'PN15', 'PN20', 'PN23')) {
         Add-Recipe "static-prbs-$($pattern.ToLowerInvariant())" 'static' @(
-            (New-Step ($prbs + @('--pattern', $pattern)) $prbsReadback @{ pattern = $pattern })
+            (New-Step ($prbs + @('--pattern', $pattern, '--verify-waveform-readback')) $prbsReadback @{
+                pattern = $pattern; waveform_readback_verified = $true
+            })
         )
     }
     $modulations = [ordered]@{
@@ -1008,12 +1014,12 @@ function Get-FullValidationInventory {
         if ($spacing -eq 'logarithmic') {
             switch ($wave) {
                 'square' {
-                    $args += @('--duty-cycle-percent', '30', '--trigger-delay-s', '0')
-                    $result += @{ duty_cycle_percent = 30; trigger_delay_s = 0 }
+                    $args += @('--duty-cycle-percent', '30', '--trigger-delay-s', '0', '--verify-waveform-readback')
+                    $result += @{ duty_cycle_percent = 30; trigger_delay_s = 0; waveform_readback_verified = $true }
                 }
                 'ramp' {
-                    $args += @('--symmetry-percent', '30', '--trigger-delay-s', '0.1')
-                    $result += @{ symmetry_percent = 30; trigger_delay_s = 0.1 }
+                    $args += @('--symmetry-percent', '30', '--trigger-delay-s', '0.1', '--verify-waveform-readback')
+                    $result += @{ symmetry_percent = 30; trigger_delay_s = 0.1; waveform_readback_verified = $true }
                 }
             }
         }
