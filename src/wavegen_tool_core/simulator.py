@@ -1142,6 +1142,16 @@ class SimulatedResource:
             f"SOURce{prefix_ch}:FUNCtion:PRBS:BRATe?": _format_number(
                 ch_state.prbs_bit_rate_bps
             ),
+            f"SOURce{prefix_ch}:FUNCtion:PRBS:DATA?": ch_state.prbs_pattern,
+            f"SOURce{prefix_ch}:FUNCtion:PRBS:TRANsition:BOTH?": _format_number(
+                ch_state.prbs_edge_time_s
+            ),
+            f"SOURce{prefix_ch}:FUNCtion:SQUare:DCYCle?": _format_number(
+                ch_state.square_duty_cycle_percent
+            ),
+            f"SOURce{prefix_ch}:FUNCtion:RAMP:SYMMetry?": _format_number(
+                ch_state.ramp_symmetry_percent
+            ),
             f"SOURce{prefix_ch}:VOLTage:UNIT?": ch_state.voltage_unit,
             f"SOURce{prefix_ch}:VOLTage?": _format_number(ch_state.amplitude_vpp),
             f"SOURce{prefix_ch}:VOLTage:OFFSet?": _format_number(ch_state.offset_v),

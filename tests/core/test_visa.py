@@ -6187,6 +6187,57 @@ class EchoAdvancedReadbackSession(FakeSession):
 
 
 @pytest.mark.parametrize(
+    ("configure", "args", "options", "query", "stale"),
+    [
+        pytest.param(configure_square, (1000, 0.1), {"phase_deg": 45},
+                     "SOURce1:PHASe?", "0", id="square-phase"),
+        pytest.param(configure_ramp, (1000, 0.1), {"phase_deg": 45},
+                     "SOURce1:PHASe?", "0", id="ramp-phase"),
+        pytest.param(configure_triangle, (1000, 0.1), {"phase_deg": 45},
+                     "SOURce1:PHASe?", "0", id="triangle-phase"),
+        pytest.param(configure_prbs, (10000, 0.1, "PN9"), {"edge_time_s": 50e-9},
+                     "SOURce1:FUNCtion:PRBS:DATA?", "PN7", id="prbs-pattern"),
+        pytest.param(configure_prbs, (10000, 0.1, "PN9"), {"edge_time_s": 50e-9},
+                     "SOURce1:FUNCtion:PRBS:TRANsition:BOTH?", "8.4e-9", id="prbs-edge"),
+        pytest.param(configure_square_sweep, (2, 8, "logarithmic", 0.1, 0.1),
+                     {"channel": 2, "duty_cycle_percent": 30, "verify_readback": True},
+                     "SOURce2:FUNCtion:SQUare:DCYCle?", "50", id="square-sweep-duty"),
+        pytest.param(configure_ramp_sweep, (2, 8, "logarithmic", 0.1, 0.1),
+                     {"symmetry_percent": 30, "verify_readback": True},
+                     "SOURce1:FUNCtion:RAMP:SYMMetry?", "100", id="ramp-sweep-symmetry"),
+    ],
+)
+@pytest.mark.parametrize("settings_match", [True, False], ids=["matches", "stale"])
+def test_waveform_setting_readback_checks_programmed_value(
+    configure, args, options, query, stale, settings_match
+):
+    session = EchoAdvancedReadbackSession(
+        response="Keysight Technologies,33512B,MY00000000,1.00",
+        responses_by_command={} if settings_match else {query: stale},
+    )
+    manager = FakeManager(session)
+    settings = {
+        **options,
+        "verify_waveform_readback": True,
+        "support_policy_mode": SUPPORT_POLICY_MODE_VALIDATION,
+        "resource_manager_factory": RecordingFactory(manager),
+    }
+
+    if settings_match:
+        assert configure(USB_RESOURCE, *args, **settings).output_state == "off"
+    else:
+        with pytest.raises(WaveformVerificationError) as error:
+            configure(USB_RESOURCE, *args, **settings)
+        assert query in str(error.value)
+        assert error.value.output_state == "off"
+
+    assert query in session.queries
+    assert session.writes[0] == f"OUTPut{options.get('channel', 1)} OFF"
+    assert not {"OUTPut1 ON", "OUTPut2 ON", "*RST"}.intersection(session.writes)
+    assert session.close_calls == manager.close_calls == 1
+
+
+@pytest.mark.parametrize(
     ("channel", "trigger_options", "slope", "slope_command", "slope_reply"),
     [
         (1, {}, "positive", "POSitive", "POS"),

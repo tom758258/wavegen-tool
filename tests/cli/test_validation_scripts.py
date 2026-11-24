@@ -457,18 +457,28 @@ def test_full_plan_inventory_and_privacy(
         "status",
         "static-sine", "static-square", "static-ramp", "static-triangle",
         "static-pulse", "static-dc", "static-noise", "static-prbs",
+        "static-prbs-pn7", "static-prbs-pn11", "static-prbs-pn15",
+        "static-prbs-pn20", "static-prbs-pn23",
         "modulation-am", "modulation-am-dssc", "modulation-fm", "modulation-pm",
         "modulation-fsk", "modulation-bpsk", "modulation-pwm", "modulation-sum",
+        "modulation-am-square", "modulation-fm-ramp", "modulation-pm-triangle",
+        "modulation-fsk-square", "modulation-bpsk-triangle", "modulation-pwm-pulse",
+        "modulation-sum-pulse",
         "burst-immediate", "burst-bus", "burst-timer", "burst-external", "burst-gated",
         "burst-external-negative", "burst-gated-inverted",
+        "burst-counted-start-phase", "burst-gated-start-phase",
+        "burst-square", "burst-ramp", "burst-triangle", "burst-prbs",
         "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus", "sweep-sine-timer",
         "sweep-square-linear", "sweep-ramp-linear", "sweep-triangle-linear",
+        "sweep-square-logarithmic", "sweep-ramp-logarithmic", "sweep-triangle-logarithmic",
         "sweep-external-positive", "sweep-external-negative",
         "list-transition-cw-recovery", "list-bus-trigger", "configure-output", "output-control",
         "sync-configuration", "sync-control",
         "software-sequence-basic", "software-sequence-advanced",
         "timed-output", "amplitude-ramp", "output-cycle", "waveform-sequence",
         "frequency-step", "quick-output-preset",
+        "amplitude-ramp-descending", "frequency-step-descending",
+        "quick-output-preset-sine", "quick-output-preset-triangle",
     }
     expected_parity = {
         "status", "static-sine", "modulation-am", "burst-immediate",
@@ -478,10 +488,17 @@ def test_full_plan_inventory_and_privacy(
     if model != "33510b":
         expected_primary |= {
             "arbitrary-upload-configure", "arbitrary-clear", "arbitrary-builtin-select",
-            "sequence-bus", "sequence-bus-functional", "sequence-external", "software-sequence-arbitrary",
+            "sequence-bus", "sequence-bus-functional", "sequence-external",
+            "sequence-external-negative", "software-sequence-arbitrary",
+        }
+        expected_primary |= {
+            f"arbitrary-builtin-{name}" for name in (
+                "cardiac", "exp-rise", "exp-fall", "gaussian", "haversine",
+                "lorentz", "d-lorentz", "neg-ramp",
+            )
         }
         if model == "33512b":
-            expected_parity.add("arbitrary-upload-configure")
+            expected_parity |= {"arbitrary-upload-configure", "sequence-bus"}
     primary = [case for case in inventory if case["channel"] == 1]
     secondary = [case for case in inventory if case["channel"] == 2]
     assert {case["name"] for case in primary} == {f"ch1/{name}" for name in expected_primary}
@@ -521,6 +538,7 @@ def test_full_plan_inventory_and_privacy(
         "sweep-sine-linear", "sweep-sine-logarithmic", "sweep-sine-bus",
         "sweep-sine-timer", "sweep-square-linear", "sweep-ramp-linear",
         "sweep-triangle-linear", "sweep-external-positive", "sweep-external-negative",
+        "sweep-square-logarithmic", "sweep-ramp-logarithmic", "sweep-triangle-logarithmic",
     }
     for case in primary:
         if case["name"].split("/", 1)[1] in sweep_names:
@@ -538,8 +556,11 @@ def test_full_plan_inventory_and_privacy(
         "ch1/sweep-sine-timer", "ch1/sweep-external-positive",
         "ch1/sweep-external-negative", "ch1/list-bus-trigger", "ch1/software-sequence-basic",
         "ch1/timed-output", "ch1/amplitude-ramp", "ch1/output-cycle",
-        "ch1/waveform-sequence", "ch1/frequency-step",
-    } | ({"ch1/sequence-bus-functional", "ch1/sequence-external"} if model != "33510b" else set())
+        "ch1/waveform-sequence", "ch1/frequency-step", "ch1/amplitude-ramp-descending",
+        "ch1/frequency-step-descending",
+    } | ({
+        "ch1/sequence-bus-functional", "ch1/sequence-external", "ch1/sequence-external-negative",
+    } if model != "33510b" else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
     for private in (resource, private_token, str(REPO_ROOT), str(run)):
@@ -601,10 +622,7 @@ def test_full_preflight_arbitrary_direct_without_hardware(
 def test_full_plan_filters_modes_and_propagates_to_preflight(
     artifact_root, fake_git, mode, expected, unexpected,
 ):
-    extra_args = {
-        "arbitrary": ("-DebugArtifacts",),
-        "burst": ("-IncludeBurstStartPhase",),
-    }.get(mode, ())
+    extra_args = ("-DebugArtifacts",) if mode == "arbitrary" else ()
     result = _run_script(
         LIVE_SCRIPT, artifact_root, "-Target", "keysight-33521b",
         "-Suite", "full", "-Modes", mode, "-Connection", "usb",
@@ -617,7 +635,7 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
     assert report["hardware_touched"] is False
     assert report["visa_io_performed"] is False
     if mode == "burst,output":
-        assert {"ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"}.isdisjoint(
+        assert {"ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase"} <= set(
             report["planned_cases"]
         )
     if mode == "burst":
@@ -652,6 +670,13 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         assert catalog["result"]["names"] == [r"INT:\BUILTIN\SINC.ARB"]
         assert reuse["result"]["builtin_loaded"] is False
         assert reuse["readback"]["output_state"] == "off"
+        for recipe in private_report["full_inventory"]:
+            if not recipe["name"].startswith("ch1/arbitrary-builtin-") or recipe is builtin:
+                continue
+            select, catalog = recipe["steps"]
+            name = select["result"]["name"]
+            assert select["readback"]["output_state"] == "off"
+            assert catalog["result"]["names"] == [rf"INT:\BUILTIN\{name}.ARB"]
     if mode == "software-sequence":
         assert report["complete_mode_selection"] is False
         recipes = {
@@ -675,6 +700,12 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         assert "ch1/sequence-bus" in report["planned_cases"]
         assert "ch1/sequence-bus-functional" in report["planned_cases"]
         assert "ch1/sequence-external" in report["planned_cases"]
+        negative = next(
+            case for case in report["full_inventory"] if case["name"] == "ch1/sequence-external-negative"
+        )
+        assert negative["observation"]["input"] == "external-trigger"
+        assert negative["observation"]["idle"] == "high"
+        assert negative["steps"][2]["result"]["trigger_slope"] == "negative"
         clear = next(x for x in report["full_inventory"] if x["name"] == "ch1/arbitrary-clear")
         assert any(step["arguments"][0] == "clear-arbitrary-memory" and
                    "--confirm-clear" in step["arguments"] for step in clear["steps"])
@@ -694,10 +725,12 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         assert set(recipes) == {f"ch1/{name}" for name in (
             "timed-output", "amplitude-ramp", "output-cycle",
             "waveform-sequence", "frequency-step", "quick-output-preset",
+            "amplitude-ramp-descending", "frequency-step-descending",
+            "quick-output-preset-sine", "quick-output-preset-triangle",
         )}
         for name, recipe in recipes.items():
             step, = recipe["steps"]
-            turns_on = name != "ch1/quick-output-preset"
+            turns_on = not name.startswith("ch1/quick-output-preset")
             assert step["workflow_intent"]["output_on"] is turns_on
             assert bool(recipe["observation"]) is turns_on
         cases = {case["name"]: case["status"] for case in readiness["cases"]}
@@ -719,8 +752,10 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
             for case in readiness["cases"] if "/ch1/sync-" in case["name"]
         }
         assert sync_stages == {
-            "ch1/sync-configuration/step1-dry-run": "PASS",
-            "ch1/sync-configuration/step1-simulate": "PASS",
+            **{
+                f"ch1/sync-configuration/step{step}-{execution}": "PASS"
+                for step in (1, 2, 3) for execution in ("dry-run", "simulate")
+            },
             "ch1/sync-control/step1-simulate": "PASS",
             "ch1/sync-control/step2-simulate": "PASS",
         }

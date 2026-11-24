@@ -112,6 +112,13 @@ dry-run plans never include that field. Normalized configuration results remain
 requested values and must not be mistaken for independent observations.
 Configuration verification queries Trigger Delay only when explicitly supplied.
 
+Successful Direct CLI execution with `--verify-waveform-readback` adds
+`waveform_readback_verified: true`. This verifies phase for Square, Ramp, and
+Triangle configuration, pattern and edge time for PRBS, duty cycle for Square
+Sweep, or symmetry for Ramp Sweep. A mismatch or failed query uses the existing
+waveform verification error category (exit 29). Dry-run and default execution
+omit this field. Sweep commands can opt into both types of verification.
+
 ### Software Sequence Results
 
 `run-software-sequence --file <sequence.json>` returns one JSON object with the

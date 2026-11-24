@@ -212,6 +212,8 @@ def _channelize_commands(commands: tuple[str, ...], channel: int) -> tuple[str, 
         for command in commands
     )
 
+_PHASE_READBACK_HEADERS = ("SOURce1:PHASe",)
+
 PULSE_TIMING_REL_TOLERANCE = 0.0
 PULSE_TIMING_ABS_TOLERANCE_S = 100e-12
 PULSE_FREQUENCY_ABS_TOLERANCE_HZ = 1e-6
@@ -2333,6 +2335,7 @@ def configure_square_sweep(
     trigger_delay_s: object = None,
     channel: int = 1,
     verify_readback: bool = False,
+    verify_waveform_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2373,6 +2376,9 @@ def configure_square_sweep(
         channel=channel,
         independent_channel_guard=True,
         verify_readback=verify_readback,
+        waveform_readback_headers=(
+            ("SOURce1:FUNCtion:SQUare:DCYCle",) if verify_waveform_readback else ()
+        ),
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -2524,6 +2530,7 @@ def configure_ramp_sweep(
     trigger_delay_s: object = None,
     channel: int = 1,
     verify_readback: bool = False,
+    verify_waveform_readback: bool = False,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
     resource_manager_factory: ResourceManagerFactory | None = None,
@@ -2576,6 +2583,9 @@ def configure_ramp_sweep(
         channel=channel,
         independent_channel_guard=True,
         verify_readback=verify_readback,
+        waveform_readback_headers=(
+            ("SOURce1:FUNCtion:RAMP:SYMMetry",) if verify_waveform_readback else ()
+        ),
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -5604,6 +5614,7 @@ def configure_square(
     *,
     channel: int = 1,
     verify_readback: bool = False,
+    verify_waveform_readback: bool = False,
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
@@ -5720,6 +5731,9 @@ def configure_square(
         channel=channel,
         independent_channel_guard=True,
         verify_readback=verify_readback,
+        waveform_readback_headers=(
+            _PHASE_READBACK_HEADERS if verify_waveform_readback else ()
+        ),
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -6024,6 +6038,7 @@ def configure_ramp(
     *,
     channel: int = 1,
     verify_readback: bool = False,
+    verify_waveform_readback: bool = False,
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
@@ -6119,6 +6134,9 @@ def configure_ramp(
         channel=channel,
         independent_channel_guard=True,
         verify_readback=verify_readback,
+        waveform_readback_headers=(
+            _PHASE_READBACK_HEADERS if verify_waveform_readback else ()
+        ),
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -6369,6 +6387,7 @@ def configure_triangle(
     *,
     channel: int = 1,
     verify_readback: bool = False,
+    verify_waveform_readback: bool = False,
     am: AMConfig | None = None,
     fm: FMConfig | None = None,
     pm: PMConfig | None = None,
@@ -6463,6 +6482,9 @@ def configure_triangle(
         channel=channel,
         independent_channel_guard=True,
         verify_readback=verify_readback,
+        waveform_readback_headers=(
+            _PHASE_READBACK_HEADERS if verify_waveform_readback else ()
+        ),
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -7562,6 +7584,7 @@ def configure_prbs(
     *,
     channel: int = 1,
     verify_readback: bool = False,
+    verify_waveform_readback: bool = False,
     burst: BurstConfig | None = None,
     support_policy_mode: str = SUPPORT_POLICY_MODE_PRODUCT,
     expected_model_id: str | None = None,
@@ -7596,6 +7619,11 @@ def configure_prbs(
         channel=channel,
         independent_channel_guard=True,
         verify_readback=verify_readback,
+        waveform_readback_headers=(
+            ("SOURce1:FUNCtion:PRBS:DATA", "SOURce1:FUNCtion:PRBS:TRANsition:BOTH")
+            if verify_waveform_readback
+            else ()
+        ),
         resource_manager_factory=resource_manager_factory,
         support_policy_mode=support_policy_mode,
         expected_model_id=expected_model_id,
@@ -9201,7 +9229,7 @@ def _canonical_readback_enum(value: str) -> str:
     return _READBACK_ENUM_ALIASES.get(normalized, normalized)
 
 
-def _advanced_readback_matches(header: str, expected: str, response: str) -> bool:
+def _configuration_readback_matches(header: str, expected: str, response: str) -> bool:
     actual = response.strip()
     if not actual:
         return False
@@ -9267,6 +9295,25 @@ def _verify_advanced_mode_configuration(
     )
 
 
+def _verify_waveform_configuration(
+    session: VisaSession,
+    context: IdentificationResult,
+    commands: tuple[str, ...],
+    headers: tuple[str, ...],
+    selected_channel: int,
+) -> None:
+    settings = {
+        header: value
+        for header, _, value in (command.partition(" ") for command in commands)
+    }
+    channel_headers = _channelize_commands(headers, selected_channel)
+    fields = {
+        channel_header: settings[header]
+        for header, channel_header in zip(headers, channel_headers, strict=True)
+    }
+    _verify_configuration_readback(session, context, fields, label="Waveform setting")
+
+
 def _verify_configuration_readback(
     session: VisaSession, context: IdentificationResult, fields: dict[str, str], *, label: str
 ) -> None:
@@ -9282,7 +9329,7 @@ def _verify_configuration_readback(
                 identity=context.identity,
                 output_state="off",
             ) from exc
-        if not isinstance(actual, str) or not _advanced_readback_matches(
+        if not isinstance(actual, str) or not _configuration_readback_matches(
             header, expected, actual
         ):
             actual_label = repr(actual)[:120]
@@ -9337,6 +9384,7 @@ def _write_to_supported_instrument(
     channel: int = 1,
     independent_channel_guard: bool = False,
     verify_readback: bool = False,
+    waveform_readback_headers: tuple[str, ...] = (),
     validation_only_feature: str | None = None,
 ) -> IdentificationResult:
     def write_commands(
@@ -9360,6 +9408,10 @@ def _write_to_supported_instrument(
         if verify_readback:
             _verify_advanced_mode_configuration(
                 session, context, commands, selected_channel=selected_channel
+            )
+        if waveform_readback_headers:
+            _verify_waveform_configuration(
+                session, context, commands, waveform_readback_headers, selected_channel
             )
 
     context, _ = _run_on_supported_instrument(
@@ -9389,6 +9441,7 @@ def _prepare_and_write_to_supported_instrument(
     channel: int = 1,
     independent_channel_guard: bool = False,
     verify_readback: bool = False,
+    waveform_readback_headers: tuple[str, ...] = (),
     validation_only_feature: str | None = None,
 ) -> tuple[IdentificationResult, tuple[object, ...]]:
     preflight = prepare_configuration(
@@ -9417,6 +9470,10 @@ def _prepare_and_write_to_supported_instrument(
         if verify_readback:
             _verify_advanced_mode_configuration(
                 session, context, commands, selected_channel=selected_channel
+            )
+        if waveform_readback_headers:
+            _verify_waveform_configuration(
+                session, context, commands, waveform_readback_headers, selected_channel
             )
         return values
 

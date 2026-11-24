@@ -1205,22 +1205,29 @@ identity and final error-queue cases remain mandatory regardless of selection.
 
 | Mode | Coverage |
 | --- | --- |
-| `static` | Sine, Square, Ramp, Triangle, Pulse, DC, Noise, PRBS |
-| `modulation` | AM/DSSC, FM, PM, FSK, BPSK, PWM, Sum |
-| `burst` | Counted/Gated Burst and representative Bus, Timer, External trigger |
-| `sweep` | Linear and logarithmic sweeps with Immediate, Bus, Timer, and both External trigger edges |
+| `static` | Sine, Square, Ramp, Triangle and Pulse with nonzero phase, DC, Noise, all six PRBS patterns and a non-default PRBS edge time |
+| `modulation` | AM/DSSC, FM, PM, FSK, BPSK, PWM and Sum, with representative carriers and non-sine internal shapes where supported |
+| `burst` | Counted and Gated Burst, representative carriers and trigger sources, explicit zero and nonzero trigger delay, Counted 90° and Gated 45.1° start phase |
+| `sweep` | Linear and logarithmic Sine, Square, Ramp and Triangle sweeps, representative triggers, explicit zero and nonzero delay, Square duty cycle and Ramp symmetry |
 | `list-sweep` | Native frequency List and Bus triggers, CW recovery |
-| `output` | Output setup, controlled ON/OFF |
-| `arbitrary` | Synthetic CSV upload, memory inspection, playback, confirmed volatile Clear, and built-in SINC selection and reuse |
-| `sequence` | Native Bus/External sequences; once, repeat, onceWaitTrig, repeatTilTrig |
+| `output` | Output setup including a 1000 Ω load, controlled ON/OFF, and representative Sync source, mode and polarity settings |
+| `arbitrary` | Synthetic CSV upload, memory inspection, playback, confirmed volatile Clear, all supported built-in waveforms and SINC reuse |
+| `sequence` | Native Bus and both External trigger edges, representative CH2 Bus sequence on supported models, and once, repeat, onceWaitTrig and repeatTilTrig |
+| `software-sequence` | Ordered software-controlled actions, supported arbitrary operations and confirmed output cleanup |
+| `basic-workflows` | Timed output, both directions of Amplitude Ramp and Frequency Step, Output Cycle, Waveform Sequence, Sine/Square/Triangle Quick Output Presets and simulated Worker cancellation and stop |
 
-Add `-IncludeBurstStartPhase` to `-Suite full -Modes burst` on either script
-to include the contributor-only Counted 90° and Gated 45.1° readback cases.
-The added cases keep output off and verify the programmed phase through
-readback. Measuring physical waveform behavior requires a separately
-authorized observation. Preflight also checks that an invalid phase is
-rejected. Use the same options for Preflight and PlanOnly before an authorized
-Real Live run.
+The Full Static and Sweep recipes use `--verify-waveform-readback` to compare
+the programmed Square, Ramp, and Triangle phase, PRBS pattern and edge time,
+Square Sweep duty cycle, and Ramp Sweep symmetry with readback while output
+is OFF. Pulse phase uses the readback already built into Pulse configuration.
+Preflight checks simulated readback, and PlanOnly shows the intended verification.
+
+`-Suite full -Modes burst` includes both nonzero Burst start phase cases.
+These contributor validation cases keep output OFF and verify the programmed
+phase through readback. Measuring physical waveform behavior requires a
+separately authorized observation. Whenever Burst is selected, Preflight
+also checks that an invalid phase is rejected. Use the same mode selection for
+Preflight and PlanOnly before an authorized Real Live run.
 
 33512B admits CH1/CH2 Arbitrary; 33521B admits CH1; 33510B has no
 Arbitrary capability. All-target Preflight selects applicable recipes per
