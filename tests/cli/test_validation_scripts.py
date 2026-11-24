@@ -734,6 +734,7 @@ def test_full_plan_filters_modes_and_propagates_to_preflight(
         assert {
             "ch1/burst-counted-start-phase", "ch1/burst-gated-start-phase",
             "ch1/sync-control", "ch1/sync-configuration", "ch1/output-control",
+            "ch1/configure-output",
         } <= set(report["planned_cases"])
     if mode == "arbitrary":
         assert {"ch1/arbitrary-upload-configure", "ch1/arbitrary-clear"} <= set(report["planned_cases"])
