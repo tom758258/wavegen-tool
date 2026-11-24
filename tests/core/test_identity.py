@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 import wavegen_tool_core.identity as identity_module
@@ -113,6 +115,27 @@ def test_model_registry_rejects_conflicting_entries(model):
         identity_module._build_model_registry(
             identity_module._VENDOR_REGISTRY, (*identity_module._MODEL_REGISTRY.values(), model)
         )
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        pytest.param(CANONICAL_MODEL_ID, id="product-live"),
+        pytest.param("keysight-33510b", id="validation-live"),
+    ],
+)
+def test_model_registry_rejects_rebinding_a_live_model_id_to_another_vendor(model_id):
+    example = VendorInfo("example", "Example", "Example Instruments")
+    vendors, _ = identity_module._build_vendor_registry(
+        (*identity_module._VENDOR_REGISTRY.values(), example)
+    )
+    models = tuple(
+        replace(model, vendor_id=example.vendor_id) if model.model_id == model_id else model
+        for model in identity_module._MODEL_REGISTRY.values()
+    )
+
+    with pytest.raises(RuntimeError):
+        identity_module._build_model_registry(vendors, models)
 
 
 def test_valid_keysight_33521b_idn_resolves_exact_support():

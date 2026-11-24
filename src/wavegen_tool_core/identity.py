@@ -14,6 +14,17 @@ CANONICAL_MODEL_ID = "keysight-33521b"
 SUPPORT_POLICY_MODE_PRODUCT = "product"
 SUPPORT_POLICY_MODE_VALIDATION = "validation"
 
+# Bind live policy to the vendor and canonical model independently of registry metadata.
+_PRODUCT_LIVE_MODEL_IDENTITIES = MappingProxyType(
+    {
+        "keysight-33512b": ("keysight", "33512B"),
+        CANONICAL_MODEL_ID: ("keysight", CANONICAL_MODEL),
+    }
+)
+_VALIDATION_PENDING_LIVE_MODEL_IDENTITIES = MappingProxyType(
+    {"keysight-33510b": ("keysight", "33510B")}
+)
+
 
 @dataclass(frozen=True)
 class VendorInfo:
@@ -75,6 +86,12 @@ def _build_model_registry(
             raise RuntimeError(f"Empty or duplicate model ID: {model.model_id!r}.")
         if model.vendor_id not in vendors:
             raise RuntimeError(f"Model {model.model_id!r} references unknown vendor {model.vendor_id!r}.")
+        live_identity = (
+            _PRODUCT_LIVE_MODEL_IDENTITIES.get(model.model_id)
+            or _VALIDATION_PENDING_LIVE_MODEL_IDENTITIES.get(model.model_id)
+        )
+        if live_identity is not None and (model.vendor_id, model.canonical_model) != live_identity:
+            raise RuntimeError(f"Model {model.model_id!r} conflicts with its live policy identity.")
         name = normalize_model(model.canonical_model)
         key = (model.vendor_id, name)
         if not name or key in by_vendor_and_name:
@@ -110,8 +127,8 @@ _MODEL_REGISTRY, _MODEL_BY_VENDOR_AND_NAME = _build_model_registry(
         ModelInfo(CANONICAL_MODEL_ID, CANONICAL_MODEL, "keysight", "Keysight 33521B"),
     ),
 )
-_LIVE_SUPPORTED_MODEL_IDS = frozenset({"keysight-33512b", CANONICAL_MODEL_ID})
-_VALIDATION_PENDING_LIVE_MODEL_IDS = frozenset({"keysight-33510b"})
+_LIVE_SUPPORTED_MODEL_IDS = frozenset(_PRODUCT_LIVE_MODEL_IDENTITIES)
+_VALIDATION_PENDING_LIVE_MODEL_IDS = frozenset(_VALIDATION_PENDING_LIVE_MODEL_IDENTITIES)
 _SUPPORT_POLICY_MODES = frozenset(
     {SUPPORT_POLICY_MODE_PRODUCT, SUPPORT_POLICY_MODE_VALIDATION}
 )
