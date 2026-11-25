@@ -6867,7 +6867,7 @@ def configure_pulse(
         commands = _channelize_commands(commands, selected_channel)
         advanced_commands = (*am_commands, *pwm_commands, *sum_commands, *burst_commands)
         channel_advanced = _channelize_commands(advanced_commands, selected_channel)
-        other = _other_channel_modulation_precheck(session, (*commands, *channel_advanced), selected_channel)
+        other = _other_channel_modulation_precheck(session, (*commands, *channel_advanced), selected_channel, context)
         source_prefix = f"SOURce{selected_channel}"
         output_prefix = f"OUTPut{selected_channel}"
 
@@ -8934,6 +8934,219 @@ class AdvancedModeReadbackResult:
     settings: dict[str, object]
 
 
+def _read_advanced_mode_session(
+    session: VisaSession, context: IdentificationResult, channel: int,
+) -> tuple[int, str, dict[str, object]]:
+    capabilities = _capabilities_for_identity(context.identity)
+    selected = _validate_channel(
+        channel, capabilities, context.identity.model
+    )
+    prefix = f"SOURce{selected}:"
+    fields: dict[str, object] = {}
+
+    def raw(header: str) -> str:
+        command = f"{header}?"
+        try:
+            response = session.query(command)
+        except Exception as exc:
+            raise StatusQueryError(
+                f"Advanced Mode query {command} failed or timed out.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            ) from exc
+        if not isinstance(response, str) or not response.strip():
+            raise StatusQueryError(
+                f"Advanced Mode query {command} returned an invalid response.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        return response.strip()
+
+    def choice(header: str, allowed: frozenset[str]) -> str:
+        value = _canonical_readback_enum(raw(header))
+        if value not in allowed:
+            raise StatusQueryError(
+                f"Advanced Mode query {header}? returned an unknown value.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        return value.lower()
+
+    def number(header: str) -> float:
+        try:
+            value = float(raw(header))
+        except ValueError as exc:
+            raise StatusQueryError(
+                f"Advanced Mode query {header}? returned an invalid number.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            ) from exc
+        if not math.isfinite(value):
+            raise StatusQueryError(
+                f"Advanced Mode query {header}? returned a non-finite number.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        return value
+
+    source_values = frozenset({"INTERNAL", "EXTERNAL", "CH1", "CH2"})
+    modes = [
+        prefix_name
+        for prefix_name in _ADVANCED_MODULATION_PREFIXES
+        if choice(prefix + prefix_name + ":STATe", frozenset({"ON", "OFF"}))
+        == "on"
+    ]
+    frequency_mode = choice(
+        prefix + "FREQuency:MODE", frozenset({"CW", "LIST", "SWEEP"})
+    )
+    if len(modes) > 1 or (modes and frequency_mode != "cw"):
+        raise StatusQueryError(
+            "Advanced Mode instrument state is ambiguous.",
+            backend=context.backend,
+            transport=context.transport,
+            identity=context.identity,
+        )
+    active = modes[0] if modes else None
+    if active is None:
+        if frequency_mode == "cw":
+            return selected, "CW", fields
+        active = frequency_mode.upper()
+
+    if active in {"AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM"}:
+        source = choice(prefix + active + ":SOURce", source_values)
+        fields["source"] = source
+        if source == "internal":
+            if active not in {"FSKey", "BPSK"}:
+                internal_function = choice(
+                    prefix + active + ":INTernal:FUNCtion",
+                    frozenset({
+                        "SINUSOID", "SQUARE", "TRIANGLE", "RAMP",
+                        "NOISE", "PRBS", "ARB", "NRAMP", "UPRAMP", "DOWNRAMP",
+                    }),
+                )
+                fields["internal_function"] = internal_function
+                shape = _MODULATION_SHAPE_READBACK.get(internal_function.upper())
+                if shape is not None:
+                    fields["shape"] = shape
+                fields["internal_frequency_hz"] = number(
+                    prefix + active + ":INTernal:FREQuency"
+                )
+            else:
+                fields["rate_hz"] = number(
+                    prefix + active + ":INTernal:RATE"
+                )
+        specific = {
+            "AM": ("depth_percent", "DEPTh"),
+            "FM": ("deviation_hz", "DEViation"),
+            "PM": ("deviation_deg", "DEViation"),
+            "FSKey": ("hop_frequency_hz", "FREQuency"),
+            "BPSK": ("phase_shift_deg", "PHASe"),
+            "PWM": ("deviation_s", "DEViation"),
+            "SUM": ("amplitude_percent", "AMPLitude"),
+        }
+        field, suffix = specific[active]
+        fields[field] = number(prefix + active + ":" + suffix)
+        if active == "AM":
+            dssc = choice(prefix + "AM:DSSC", frozenset({"ON", "OFF"}))
+            return selected, "AM-DSSC" if dssc == "on" else "AM", fields
+        return selected, "FSK" if active == "FSKey" else active, fields
+
+    if active == "BURSt":
+        burst_mode = choice(
+            prefix + "BURSt:MODE", frozenset({"TRIGGERED", "GATED"})
+        )
+        fields["burst_mode"] = "counted" if burst_mode == "triggered" else "gated"
+        fields["phase_deg"] = number(prefix + "BURSt:PHASe")
+        if burst_mode == "gated":
+            fields["gate_polarity"] = choice(
+                prefix + "BURSt:GATE:POLarity",
+                frozenset({"NORMAL", "INVERTED"}),
+            )
+        else:
+            count = number(prefix + "BURSt:NCYCles")
+            if count < 1 or not count.is_integer():
+                raise StatusQueryError(
+                    "Advanced Mode Burst cycle count is not a positive integer.",
+                    backend=context.backend,
+                    transport=context.transport,
+                    identity=context.identity,
+                )
+            fields["count"] = int(count)
+            trigger = choice(
+                f"TRIGger{selected}:SOURce",
+                frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
+            )
+            fields["trigger_source"] = trigger
+            fields["trigger_delay_s"] = number(f"TRIGger{selected}:DELay")
+            if trigger == "immediate":
+                fields["period_s"] = number(prefix + "BURSt:INTernal:PERiod")
+            elif trigger == "timer":
+                fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
+            elif trigger == "external":
+                fields["trigger_slope"] = choice(
+                    f"TRIGger{selected}:SLOPe",
+                    frozenset({"POSITIVE", "NEGATIVE"}),
+                )
+        return selected, "BURST", fields
+
+    if active == "SWEEP":
+        fields["start_frequency_hz"] = number(prefix + "FREQuency:STARt")
+        fields["stop_frequency_hz"] = number(prefix + "FREQuency:STOP")
+        fields["spacing"] = choice(
+            prefix + "SWEep:SPACing",
+            frozenset({"LINEAR", "LOGARITHMIC"}),
+        )
+        fields["sweep_time_s"] = number(prefix + "SWEep:TIME")
+        fields["hold_time_s"] = number(prefix + "SWEep:HTIMe")
+        fields["return_time_s"] = number(prefix + "SWEep:RTIMe")
+        fields["trigger_delay_s"] = number(f"TRIGger{selected}:DELay")
+    elif active == "LIST":
+        response = raw(prefix + "LIST:FREQuency")
+        try:
+            values = [float(part.strip()) for part in response.split(",")]
+        except ValueError as exc:
+            raise StatusQueryError(
+                "Advanced Mode LIST frequencies are invalid.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            ) from exc
+        if not values or not all(math.isfinite(x) and x > 0 for x in values):
+            raise StatusQueryError(
+                "Advanced Mode LIST frequencies are invalid.",
+                backend=context.backend,
+                transport=context.transport,
+                identity=context.identity,
+            )
+        fields["frequencies_hz"] = values
+        fields["dwell_s"] = number(prefix + "LIST:DWELl")
+    else:
+        raise StatusQueryError(
+            "Advanced Mode frequency mode is unsupported.",
+            backend=context.backend,
+            transport=context.transport,
+            identity=context.identity,
+        )
+    trigger = choice(
+        f"TRIGger{selected}:SOURce",
+        frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
+    )
+    fields["trigger_source"] = trigger
+    if trigger == "timer":
+        fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
+    elif trigger == "external":
+        fields["trigger_slope"] = choice(
+            f"TRIGger{selected}:SLOPe",
+            frozenset({"POSITIVE", "NEGATIVE"}),
+        )
+    return selected, active, fields
+
+
 def query_advanced_mode(
     resource: str,
     backend: str | None = None,
@@ -8948,214 +9161,7 @@ def query_advanced_mode(
     def operation(
         session: VisaSession, context: IdentificationResult
     ) -> tuple[int, str, dict[str, object]]:
-        capabilities = _capabilities_for_identity(context.identity)
-        selected = _validate_channel(
-            channel, capabilities, context.identity.model
-        )
-        prefix = f"SOURce{selected}:"
-        fields: dict[str, object] = {}
-
-        def raw(header: str) -> str:
-            command = f"{header}?"
-            try:
-                response = session.query(command)
-            except Exception as exc:
-                raise StatusQueryError(
-                    f"Advanced Mode query {command} failed or timed out.",
-                    backend=context.backend,
-                    transport=context.transport,
-                    identity=context.identity,
-                ) from exc
-            if not isinstance(response, str) or not response.strip():
-                raise StatusQueryError(
-                    f"Advanced Mode query {command} returned an invalid response.",
-                    backend=context.backend,
-                    transport=context.transport,
-                    identity=context.identity,
-                )
-            return response.strip()
-
-        def choice(header: str, allowed: frozenset[str]) -> str:
-            value = _canonical_readback_enum(raw(header))
-            if value not in allowed:
-                raise StatusQueryError(
-                    f"Advanced Mode query {header}? returned an unknown value.",
-                    backend=context.backend,
-                    transport=context.transport,
-                    identity=context.identity,
-                )
-            return value.lower()
-
-        def number(header: str) -> float:
-            try:
-                value = float(raw(header))
-            except ValueError as exc:
-                raise StatusQueryError(
-                    f"Advanced Mode query {header}? returned an invalid number.",
-                    backend=context.backend,
-                    transport=context.transport,
-                    identity=context.identity,
-                ) from exc
-            if not math.isfinite(value):
-                raise StatusQueryError(
-                    f"Advanced Mode query {header}? returned a non-finite number.",
-                    backend=context.backend,
-                    transport=context.transport,
-                    identity=context.identity,
-                )
-            return value
-
-        source_values = frozenset({"INTERNAL", "EXTERNAL", "CH1", "CH2"})
-        modes = [
-            prefix_name
-            for prefix_name in _ADVANCED_MODULATION_PREFIXES
-            if choice(prefix + prefix_name + ":STATe", frozenset({"ON", "OFF"}))
-            == "on"
-        ]
-        frequency_mode = choice(
-            prefix + "FREQuency:MODE", frozenset({"CW", "LIST", "SWEEP"})
-        )
-        if len(modes) > 1 or (modes and frequency_mode != "cw"):
-            raise StatusQueryError(
-                "Advanced Mode instrument state is ambiguous.",
-                backend=context.backend,
-                transport=context.transport,
-                identity=context.identity,
-            )
-        active = modes[0] if modes else None
-        if active is None:
-            if frequency_mode == "cw":
-                return selected, "CW", fields
-            active = frequency_mode.upper()
-
-        if active in {"AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM"}:
-            source = choice(prefix + active + ":SOURce", source_values)
-            fields["source"] = source
-            if source == "internal":
-                if active not in {"FSKey", "BPSK"}:
-                    internal_function = choice(
-                        prefix + active + ":INTernal:FUNCtion",
-                        frozenset({
-                            "SINUSOID", "SQUARE", "TRIANGLE", "RAMP",
-                            "NOISE", "PRBS", "ARB", "NRAMP", "UPRAMP", "DOWNRAMP",
-                        }),
-                    )
-                    fields["internal_function"] = internal_function
-                    shape = _MODULATION_SHAPE_READBACK.get(internal_function.upper())
-                    if shape is not None:
-                        fields["shape"] = shape
-                    fields["internal_frequency_hz"] = number(
-                        prefix + active + ":INTernal:FREQuency"
-                    )
-                else:
-                    fields["rate_hz"] = number(
-                        prefix + active + ":INTernal:RATE"
-                    )
-            specific = {
-                "AM": ("depth_percent", "DEPTh"),
-                "FM": ("deviation_hz", "DEViation"),
-                "PM": ("deviation_deg", "DEViation"),
-                "FSKey": ("hop_frequency_hz", "FREQuency"),
-                "BPSK": ("phase_shift_deg", "PHASe"),
-                "PWM": ("deviation_s", "DEViation"),
-                "SUM": ("amplitude_percent", "AMPLitude"),
-            }
-            field, suffix = specific[active]
-            fields[field] = number(prefix + active + ":" + suffix)
-            if active == "AM":
-                dssc = choice(prefix + "AM:DSSC", frozenset({"ON", "OFF"}))
-                return selected, "AM-DSSC" if dssc == "on" else "AM", fields
-            return selected, "FSK" if active == "FSKey" else active, fields
-
-        if active == "BURSt":
-            burst_mode = choice(
-                prefix + "BURSt:MODE", frozenset({"TRIGGERED", "GATED"})
-            )
-            fields["burst_mode"] = "counted" if burst_mode == "triggered" else "gated"
-            fields["phase_deg"] = number(prefix + "BURSt:PHASe")
-            if burst_mode == "gated":
-                fields["gate_polarity"] = choice(
-                    prefix + "BURSt:GATE:POLarity",
-                    frozenset({"NORMAL", "INVERTED"}),
-                )
-            else:
-                count = number(prefix + "BURSt:NCYCles")
-                if count < 1 or not count.is_integer():
-                    raise StatusQueryError(
-                        "Advanced Mode Burst cycle count is not a positive integer.",
-                        backend=context.backend,
-                        transport=context.transport,
-                        identity=context.identity,
-                    )
-                fields["count"] = int(count)
-                trigger = choice(
-                    f"TRIGger{selected}:SOURce",
-                    frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
-                )
-                fields["trigger_source"] = trigger
-                fields["trigger_delay_s"] = number(f"TRIGger{selected}:DELay")
-                if trigger == "immediate":
-                    fields["period_s"] = number(prefix + "BURSt:INTernal:PERiod")
-                elif trigger == "timer":
-                    fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
-                elif trigger == "external":
-                    fields["trigger_slope"] = choice(
-                        f"TRIGger{selected}:SLOPe",
-                        frozenset({"POSITIVE", "NEGATIVE"}),
-                    )
-            return selected, "BURST", fields
-
-        if active == "SWEEP":
-            fields["start_frequency_hz"] = number(prefix + "FREQuency:STARt")
-            fields["stop_frequency_hz"] = number(prefix + "FREQuency:STOP")
-            fields["spacing"] = choice(
-                prefix + "SWEep:SPACing",
-                frozenset({"LINEAR", "LOGARITHMIC"}),
-            )
-            fields["sweep_time_s"] = number(prefix + "SWEep:TIME")
-            fields["hold_time_s"] = number(prefix + "SWEep:HTIMe")
-            fields["return_time_s"] = number(prefix + "SWEep:RTIMe")
-            fields["trigger_delay_s"] = number(f"TRIGger{selected}:DELay")
-        elif active == "LIST":
-            response = raw(prefix + "LIST:FREQuency")
-            try:
-                values = [float(part.strip()) for part in response.split(",")]
-            except ValueError as exc:
-                raise StatusQueryError(
-                    "Advanced Mode LIST frequencies are invalid.",
-                    backend=context.backend,
-                    transport=context.transport,
-                    identity=context.identity,
-                ) from exc
-            if not values or not all(math.isfinite(x) and x > 0 for x in values):
-                raise StatusQueryError(
-                    "Advanced Mode LIST frequencies are invalid.",
-                    backend=context.backend,
-                    transport=context.transport,
-                    identity=context.identity,
-                )
-            fields["frequencies_hz"] = values
-            fields["dwell_s"] = number(prefix + "LIST:DWELl")
-        else:
-            raise StatusQueryError(
-                "Advanced Mode frequency mode is unsupported.",
-                backend=context.backend,
-                transport=context.transport,
-                identity=context.identity,
-            )
-        trigger = choice(
-            f"TRIGger{selected}:SOURce",
-            frozenset({"IMMEDIATE", "BUS", "TIMER", "EXTERNAL"}),
-        )
-        fields["trigger_source"] = trigger
-        if trigger == "timer":
-            fields["trigger_timer_s"] = number(f"TRIGger{selected}:TIMer")
-        elif trigger == "external":
-            fields["trigger_slope"] = choice(
-                f"TRIGger{selected}:SLOPe",
-                frozenset({"POSITIVE", "NEGATIVE"}),
-            )
-        return selected, active, fields
+        return _read_advanced_mode_session(session, context, channel)
 
     context, values = _run_on_supported_instrument(
         resource,
@@ -9485,13 +9491,53 @@ def _write_to_supported_instrument(
     return context
 
 
-def _other_channel_modulation_precheck(session, commands, channel):
+def _other_channel_pm_source_frequency(session, context, source, *, frequency_hz=None):
+    """Use the source's configured frequency range, not just a nominal carrier."""
+    from .dual_channel import _function_name, _numeric, _query
+
+    prefix = f"SOURce{source}:"
+    waveform = _function_name(_query(session, prefix + "FUNCtion?"))
+    if waveform == "dc":
+        return 0.0
+    if waveform == "noise":
+        return _numeric(session, prefix + "FUNCtion:NOISe:BANDwidth?")
+    if waveform == "prbs":
+        return _numeric(session, prefix + "FUNCtion:PRBS:BRATe?")
+    if waveform == "arbitrary":
+        return _numeric(session, prefix + "FUNCtion:ARBitrary:FREQuency?")
+    frequency = _numeric(session, prefix + "FREQuency?") if frequency_hz is None else frequency_hz
+    _, mode, settings = _read_advanced_mode_session(session, context, source)
+    if mode == "SWEEP":
+        return max(settings["start_frequency_hz"], settings["stop_frequency_hz"])
+    if mode == "LIST":
+        return max(settings["frequencies_hz"])
+    if settings.get("source") == "external" or mode in {"PM", "BPSK"}:
+        raise WaveformParameterError("Cannot confirm the other-channel PM source frequency range.")
+    if mode == "FM":
+        return frequency + settings["deviation_hz"]
+    if mode == "FSK":
+        return max(frequency, settings["hop_frequency_hz"])
+    if mode == "SUM":
+        frequency = max(frequency, settings.get("internal_frequency_hz", frequency))
+    return frequency
+
+
+def _verify_other_channel_pm_frequency(session, context, channel, *, carrier_hz=None):
+    from .dual_channel import _numeric
+
+    frequency = _numeric(session, f"SOURce{channel}:FREQuency?") if carrier_hz is None else carrier_hz
+    mod_frequency = _other_channel_pm_source_frequency(session, context, 3-channel)
+    if frequency <= 20 * mod_frequency:
+        raise WaveformParameterError("PM carrier frequency must be greater than 20 times the source frequency.")
+
+
+def _other_channel_modulation_precheck(session, commands, channel, context):
     """Check a requested cross-channel source before any configuration write."""
     sources = [(cmd.split(":")[1], cmd[-1]) for cmd in commands
                if cmd.endswith((":SOURce CH1", ":SOURce CH2"))]
     if not sources:
         return False
-    from .dual_channel import _require_off, _active_other_source, _numeric, _query, _check_levels
+    from .dual_channel import _require_off, _active_other_source, _query, _check_levels
     _require_off(session, (1, 2))
     if len(sources) != 1 or int(sources[0][1]) != 3-channel:
         raise WaveformParameterError("Invalid other-channel modulation source.")
@@ -9506,18 +9552,9 @@ def _other_channel_modulation_precheck(session, commands, channel):
     settings = dict(cmd.split(" ", 1) for cmd in commands if " " in cmd)
     prefix = f"SOURce{channel}:"
     if mode == "PM":
-        if source_function == "DC":
-            mod_frequency = 0
-        elif source_function in {"NOIS", "NOISE"}:
-            mod_frequency = _numeric(session, f"SOURce{source}:FUNCtion:NOISe:BANDwidth?")
-        elif source_function == "PRBS":
-            mod_frequency = _numeric(session, f"SOURce{source}:FUNCtion:PRBS:BRATe?")
-        elif source_function == "ARB":
-            mod_frequency = _numeric(session, f"SOURce{source}:FUNCtion:ARBitrary:FREQuency?")
-        else:
-            mod_frequency = _numeric(session, f"SOURce{source}:FREQuency?")
-        if float(settings[prefix + "FREQuency"]) <= 20 * mod_frequency:
-            raise WaveformParameterError("PM carrier frequency must be greater than 20 times the source frequency.")
+        _verify_other_channel_pm_frequency(
+            session, context, channel, carrier_hz=float(settings[prefix + "FREQuency"])
+        )
     if mode in {"AM", "SUM"}:
         amp = float(settings[prefix + "VOLTage"])
         offset = float(settings[prefix + "VOLTage:OFFSet"])
@@ -9533,6 +9570,11 @@ def _verify_other_channel_modulation(session, context, commands, selected_channe
     from .dual_channel import _error_free, _require_off
     _error_free(session)
     _verify_advanced_mode_configuration(session, context, commands, selected_channel=selected_channel)
+    if "SOURce1:PM:STATe ON" in commands:
+        _verify_waveform_configuration(
+            session, context, commands, ("SOURce1:FREQuency",), selected_channel
+        )
+        _verify_other_channel_pm_frequency(session, context, selected_channel)
     _require_off(session, (1, 2))
     from .dual_channel import _signal_levels, _check_levels
     _check_levels(session, selected_channel, *_signal_levels(session, selected_channel))
@@ -9579,7 +9621,7 @@ def _prepare_and_write_to_supported_instrument(
             _check_independent_channel_guard(session, capabilities, context, recover_modulation_receiver=recover)
         values, commands = prepare_configuration(capabilities)
         channel_commands = _channelize_commands(commands, selected_channel)
-        other = _other_channel_modulation_precheck(session, channel_commands, selected_channel)
+        other = _other_channel_modulation_precheck(session, channel_commands, selected_channel, context)
         _check_trigger_delay_configuration(session, commands, before_writes=True)
         for command in channel_commands:
             session.write(command)

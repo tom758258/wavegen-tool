@@ -110,6 +110,10 @@ def test_voltage_coupling_group_off_and_tracking(joint):
     assert result["readback_verified"]
     assert state.ch1.pulse_width_s == state.ch2.pulse_width_s == 0.0001
     assert state.ch1.pulse_edge_time_s == state.ch2.pulse_edge_time_s == pytest.approx(20e-9)
+    state.ch2.pulse_width_s = 0.00015
+    with pytest.raises(WaveformVerificationError):
+        run("output", channel="all", enabled=True)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
     run("configure-tracking", mode="off")
     assert state.tracking == "OFF"
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
@@ -250,16 +254,31 @@ def test_group_on_rejects_inconsistent_topology(joint):
 def test_tracking_rejects_volatile_memory(joint, channel):
     state, _, run = joint
     state.channels[channel].arbitrary_points["existing"] = 16
+    before = {ch: dict(state.channels[ch].arbitrary_points) for ch in (1, 2)}
     with pytest.raises(WaveformParameterError):
         run("configure-tracking", mode="on")
     assert state.tracking == "OFF"
-    assert state.channels[channel].arbitrary_points == {"existing": 16}
-    assert not state.channels[3-channel].arbitrary_points
+    assert {ch: state.channels[ch].arbitrary_points for ch in (1, 2)} == before
 
 
-def test_coupled_frequency_preserves_pm_frequency_ratio(joint):
+def test_coupled_frequency_preserves_pm_frequency_ratio(joint, monkeypatch):
     state, options, run = joint
     visa.configure_sine(frequency_hz=100, amplitude_vpp=0.1, channel=2, **options)
+    write = SimulatedResource.write
+
+    def ignore_carrier(self, command):
+        if command != "SOURce1:FREQuency 10000":
+            return write(self, command)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "write", ignore_carrier)
+        with pytest.raises(WaveformVerificationError):
+            visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                                pm=visa.PMConfig(deviation_deg=30, source="ch2"), **options)
+    assert state.ch1.frequency_hz == 1000
+    with pytest.raises(WavegenError):
+        run("output", channel="all", enabled=True)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
     visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
                         pm=visa.PMConfig(deviation_deg=30, source="ch2"), **options)
     with pytest.raises(WaveformParameterError):
@@ -278,6 +297,7 @@ def test_coupled_frequency_preserves_pm_frequency_ratio(joint):
     ("square", {"frequency_hz": 1000, "duty_cycle_percent": 30}, "SOURce1:FUNCtion:SQUare:DCYCle 30"),
     ("prbs", {"bit_rate_bps": 1000, "pattern": "PN23"}, "SOURce1:FUNCtion:PRBS:BRATe 1000"),
     ("prbs", {"bit_rate_bps": 1000, "pattern": "PN23"}, "SOURce1:FUNCtion:PRBS:DATA PN23"),
+    ("square", {"frequency_hz": 1000, "duty_cycle_percent": 30}, "tracking-copy"),
 ])
 def test_tracking_rejects_ignored_waveform_write(waveform, settings, ignored):
     state = Simulated33521BState(model_id=MODEL)
@@ -286,6 +306,8 @@ def test_tracking_rejects_ignored_waveform_write(waveform, settings, ignored):
         def write(self, command):
             if command != ignored:
                 super().write(command)
+            if ignored == "tracking-copy" and command == "SOURce1:TRACk ON":
+                state.ch2.square_duty_cycle_percent = 50
 
     class FaultyManager(SimulatedResourceManager):
         def open_resource(self, _resource_name):
@@ -297,10 +319,18 @@ def test_tracking_rejects_ignored_waveform_write(waveform, settings, ignored):
                                 support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
                                 resource_manager_factory=lambda _: FaultyManager(state))
 
-    run("configure-tracking", mode="on")
-    with pytest.raises(WaveformVerificationError):
-        run("configure-tracked-waveform", waveform=waveform,
-            arguments={"amplitude_vpp": 0.1, **settings})
+    if ignored == "tracking-copy":
+        visa.configure_square(
+            resource=state.resource_name, resource_manager_factory=SimulatedResourceManagerFactory(state),
+            amplitude_vpp=0.1, **settings,
+        )
+        with pytest.raises(WaveformVerificationError):
+            run("configure-tracking", mode="on")
+    else:
+        run("configure-tracking", mode="on")
+        with pytest.raises(WaveformVerificationError):
+            run("configure-tracked-waveform", waveform=waveform,
+                arguments={"amplitude_vpp": 0.1, **settings})
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
 
 
@@ -351,13 +381,21 @@ def test_combine_rejects_excessive_output(joint):
     assert state.ch1.combine_source == "NONE"
 
 
-def test_group_on_readback_failure_cleans_both_outputs():
+@pytest.mark.parametrize("enabled", [True, False])
+def test_group_output_readback_failure_cleans_both_outputs(enabled):
     state = Simulated33521BState(model_id=MODEL)
+    state.ch1.output_enabled = state.ch2.output_enabled = not enabled
+    reads = 0
 
     class FaultyResource(SimulatedResource):
         def query(self, command):
-            if command == "OUTPut2?" and state.ch2.output_enabled:
-                return "UNKNOWN"
+            nonlocal reads
+            if command == "OUTPut2?":
+                reads += 1
+                if enabled and state.ch2.output_enabled:
+                    return "UNKNOWN"
+                if not enabled and reads == 2:
+                    return "1"
             return super().query(command)
 
     class FaultyManager(SimulatedResourceManager):
@@ -365,7 +403,7 @@ def test_group_on_readback_failure_cleans_both_outputs():
             return FaultyResource(state)
 
     with pytest.raises(WaveformVerificationError):
-        run_dual_channel("output", {"channel": "all", "enabled": True},
+        run_dual_channel("output", {"channel": "all", "enabled": enabled},
                          resource=state.resource_name, expected_model_id=MODEL,
                          support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
                          resource_manager_factory=lambda _: FaultyManager(state))

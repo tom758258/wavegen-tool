@@ -648,7 +648,7 @@ def test_software_sequence_cancellation_between_steps_cleans_up(fake_instrument,
 
 
 
-@pytest.mark.parametrize("failure", ["step", "cancel", "cleanup"])
+@pytest.mark.parametrize("failure", ["step", "cancel", "cleanup", "interrupt"])
 def test_dual_sequence_failure_or_cancel_preserves_topology_and_reports_off(
     fake_instrument, monkeypatch, failure,
 ):
@@ -667,11 +667,13 @@ def test_dual_sequence_failure_or_cancel_preserves_topology_and_reports_off(
         return result
 
     monkeypatch.setattr(software_sequence, "run_dual_channel", operation)
-    if failure == "cleanup":
+    if failure in {"cleanup", "interrupt"}:
         write = SimulatedResource.write
 
         def fail_off(self, command):
             if command == "OUTPut2 OFF" and state.ch2.output_enabled:
+                if failure == "interrupt":
+                    raise KeyboardInterrupt
                 raise OSError("injected cleanup failure")
             return write(self, command)
 
@@ -687,7 +689,11 @@ def test_dual_sequence_failure_or_cancel_preserves_topology_and_reports_off(
         )
     cleanup = caught.value.details["cleanup"]
     assert cleanup["attempted_channels"] == [1, 2]
-    assert cleanup["confirmed_off_channels"] == ([1] if failure == "cleanup" else [1, 2])
-    assert bool(cleanup["errors"]) == (failure == "cleanup")
+    off_failed = failure in {"cleanup", "interrupt"}
+    assert cleanup["confirmed_off_channels"] == ([1] if off_failed else [1, 2])
+    assert bool(cleanup["errors"]) == off_failed
+    if failure == "interrupt":
+        assert caught.value.code == "interrupted"
+        assert any(error.get("cleanup_errors") for error in cleanup["errors"])
     assert state.frequency_coupling and not state.ch1.output_enabled
-    assert state.ch2.output_enabled == (failure == "cleanup")
+    assert state.ch2.output_enabled == off_failed

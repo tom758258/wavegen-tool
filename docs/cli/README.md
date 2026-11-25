@@ -1015,8 +1015,8 @@ both; a partial ON failure attempts both OFF. Conflicting settings are
 rejected rather than implicitly released. Native tracking copies reference
 channel settings (including frequency list settings and loaded Arbitrary
 memory) and may change the Sync source. To avoid unsupported memory changes,
-the tool rejects active Arbitrary or List waveform settings and requires empty
-volatile Arbitrary catalogs on both channels, when supported. Inverted tracking
+the tool rejects active Arbitrary or List waveform settings and permits only an empty catalog or the default built-in EXP_RISE entry
+on both channels, when Arbitrary is supported. No memory is cleared automatically. Inverted tracking
 preserves the DC offset. Coupled frequency changes require CW frequency mode
 and valid resulting modulation, duty cycle, pulse and Burst timing. Voltage coupling maintains
 amplitude, offset, range, load and units. Combine adds the source signal to
@@ -1027,7 +1027,9 @@ For AM, FM, PM, PWM and Sum, use `--am-source`, `--fm-source`,
 Select the other channel, supply the usual depth/deviation/amplitude,
 and omit the internal modulation frequency and shape. Internal modulation
 remains the default. Configure the source before the receiver. Both outputs
-must be OFF before configuring this route. Reconfigure the receiving waveform
+must be OFF before configuring this route. Other-channel PM checks the source
+frequency range and the actual programmed carrier frequency; sources whose
+frequency range cannot be confirmed are rejected. Reconfigure the receiving waveform
 with both outputs OFF to release the route. FSK and BPSK are unchanged.
 
 ```powershell

@@ -515,7 +515,9 @@ def _cleanup(
                              resource=resource, backend=backend, **options)
         except (Exception, KeyboardInterrupt) as exc:
             interrupted = isinstance(exc, KeyboardInterrupt)
-            cause = exc if isinstance(exc, WavegenError) else VisaCleanupError("Group OFF did not complete.")
+            cause = exc if isinstance(exc, WavegenError) else VisaCleanupError(
+                "Group OFF did not complete."
+            ).attach_cleanup_errors(getattr(exc, "cleanup_errors", ()))
             for channel in cleanup["attempted_channels"]:
                 cleanup["errors"].append({"channel": channel, **_error_summary(cause)})
     for channel in cleanup["attempted_channels"]:

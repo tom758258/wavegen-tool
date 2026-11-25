@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import math
 
 from . import visa
+from ._keysight_builtin import BUILTIN_ARBITRARY_PATHS
 from .errors import (
     VisaCleanupError, VisaWriteError,
     WaveformParameterError, WaveformVerificationError, WavegenError,
@@ -298,8 +299,13 @@ def _check_tracking_memory(session, context):
             raise WaveformParameterError("Tracking Arbitrary is outside the supported scope.")
         if visa._canonical_readback_enum(_query(session, source + ":FREQuency:MODE?")) == "LIST":
             raise WaveformParameterError("Tracking an active frequency list is outside the supported scope.")
-        if caps.max_arbitrary_sample_rate_hz is not None and _catalog(session, source):
-            raise WaveformParameterError("Tracking requires empty volatile Arbitrary catalogs on both channels.")
+        if caps.max_arbitrary_sample_rate_hz is not None:
+            # Clearing volatile memory reloads the default built-in waveform.
+            catalog = _catalog(session, source)
+            if catalog and tuple(name.casefold() for name in catalog) != (
+                BUILTIN_ARBITRARY_PATHS["EXP_RISE"].casefold(),
+            ):
+                raise WaveformParameterError("Tracking requires only the default built-in waveform in volatile memory.")
 
 
 def _frequency_limit(session, ch, value):
@@ -339,7 +345,9 @@ def _check_coupled_frequencies(session, values, context):
                 raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
             modulation_frequency = (
                 _numeric(session, prefix + ":PM:INTernal:FREQuency?")
-                if source == "INTERNAL" else values[3-ch]
+                if source == "INTERNAL" else visa._other_channel_pm_source_frequency(
+                    session, context, 3-ch, frequency_hz=values[3-ch]
+                )
             )
             if modulation_frequency <= 0 or frequency <= 20 * modulation_frequency:
                 raise WaveformParameterError("PM carrier frequency must be greater than 20 times the modulation frequency.")
@@ -475,7 +483,34 @@ def _status(session):
     }
 
 
-def _verify_tracking_pair(result, inverted):
+def _tracking_settings(session, context, channel, function):
+    suffixes = {
+        "square": ("SQUare:DCYCle",),
+        "ramp": ("RAMP:SYMMetry",),
+        "pulse": ("PULSe:WIDTh", "PULSe:TRANsition:LEADing", "PULSe:TRANsition:TRAiling"),
+        "noise": ("NOISe:BANDwidth",),
+        "prbs": ("PRBS:BRATe", "PRBS:DATA", "PRBS:TRANsition:BOTH"),
+    }.get(_function_name(function), ())
+    fields = {suffix: _query(session, f"SOURce{channel}:FUNCtion:{suffix}?")
+              for suffix in suffixes}
+    _, mode, advanced = visa._read_advanced_mode_session(session, context, channel)
+    return fields, mode, advanced
+
+
+def _verify_tracking_settings(actual, expected):
+    fields, mode, advanced = actual
+    wanted_fields, wanted_mode, wanted_advanced = expected
+    _equal(fields.keys(), wanted_fields.keys(), "Tracked waveform fields")
+    for suffix, value in wanted_fields.items():
+        if not visa._configuration_readback_matches(suffix, value, fields[suffix]):
+            raise WaveformVerificationError(f"Tracked {suffix} readback did not match.")
+    _equal(mode, wanted_mode, "Tracked advanced mode")
+    _equal(advanced.keys(), wanted_advanced.keys(), "Tracked advanced settings")
+    for field, value in wanted_advanced.items():
+        _equal(advanced[field], value, "Tracked " + field)
+
+
+def _verify_tracking_pair(session, context, result, inverted):
     first, second = (result["channel_status"][str(ch)] for ch in (1, 2))
     _equal(_function_name(first["function"]), _function_name(second["function"]), "Tracked function")
     for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load", "amplitude_unit", "autorange_enabled"):
@@ -484,20 +519,34 @@ def _verify_tracking_pair(result, inverted):
         raise WaveformVerificationError("Unknown tracked output polarity.")
     if (first["polarity"] == second["polarity"]) == inverted:
         raise WaveformVerificationError("Tracked output polarity did not match mode.")
+    settings = {
+        ch: _tracking_settings(session, context, ch, result["channel_status"][str(ch)]["function"])
+        for ch in (1, 2)
+    }
+    _verify_tracking_settings(settings[2], settings[1])
+    return settings
 
 
 def _off_all(session):
     failures = []
+    interruption = None
     for ch in (1, 2):
         try:
             session.write(f"OUTPut{ch} OFF")
-        except (Exception, KeyboardInterrupt):
+        except (Exception, KeyboardInterrupt) as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                interruption = exc
             failures.append(f"Channel {ch} OFF write failed.")
     for ch in (1, 2):
         try:
             _equal(_outputs(session, (ch,))[str(ch)], "off", f"Channel {ch} OFF")
-        except (Exception, KeyboardInterrupt):
+        except (Exception, KeyboardInterrupt) as exc:
+            if isinstance(exc, KeyboardInterrupt):
+                interruption = exc
             failures.append(f"Channel {ch} OFF was not confirmed.")
+    if interruption is not None:
+        interruption.cleanup_errors = tuple(failures)
+        raise interruption
     if failures:
         raise VisaCleanupError("Group output OFF failed.").attach_cleanup_errors(tuple(failures))
 
@@ -512,7 +561,9 @@ def _apply(session, plan, arguments, context):
         if plan["requested_output_state"] == "off":
             _off_all(session)
             _error_free(session)
-            return {"output_states": _outputs(session), "output_state": "off"}
+            actual = _outputs(session)
+            _equal(actual, {"1": "off", "2": "off"}, "Group output OFF")
+            return {"output_states": actual, "output_state": "off"}
         _require_off(session, channels)
         topology = _topology(session)
         _check_topology(session, topology)
@@ -534,8 +585,11 @@ def _apply(session, plan, arguments, context):
                     _equal(first[field], second[field], "Coupled " + field)
             if tracking[0] != "OFF":
                 _check_tracking_memory(session, context)
-                _verify_tracking_pair(status, tracking[0] in {"INV", "INVERTED"})
+                _verify_tracking_pair(session, context, status, tracking[0] in {"INV", "INVERTED"})
         for ch in (1, 2):
+            if not frequency and _state(session, f"SOURce{ch}:PM:STATe?"):
+                if _modulation_source(session, ch, "PM") == f"CH{3-ch}":
+                    visa._verify_other_channel_pm_frequency(session, context, ch)
             _check_levels(session, ch, *_signal_levels(session, ch))
             if combined[ch-1] != "NONE":
                 _check_combine(session, ch, 3-ch)
@@ -551,7 +605,11 @@ def _apply(session, plan, arguments, context):
                 _off_all(session)
             except WavegenError as cleanup:
                 error.attach_cleanup_errors(cleanup.cleanup_errors)
+            except KeyboardInterrupt as cleanup:
+                cleanup.cleanup_errors = (str(error), *getattr(cleanup, "cleanup_errors", ()))
+                raise
             if isinstance(exc, KeyboardInterrupt):
+                exc.cleanup_errors = error.cleanup_errors
                 exc.args = (str(error) + " " + "; ".join(error.cleanup_errors),)
                 raise
             raise error from (None if error is exc else exc)
@@ -637,6 +695,7 @@ def _apply(session, plan, arguments, context):
         load = visa._parse_status_load(session.query(f"OUTPut{ref}:LOAD?"))
         _check_levels(session, 3-ref, *_signal_levels(session, ref), load=load)
         tracking_reference = _status(session)["channel_status"][str(ref)]
+        tracking_reference_settings = _tracking_settings(session, context, ref, tracking_reference["function"])
     elif action == "configure-combine" and plan["source"] != "none":
         ch = plan["channel"]
         if tracked or combine[2-ch] != "NONE":
@@ -697,7 +756,8 @@ def _apply(session, plan, arguments, context):
         wanted = {"off": "OFF", "on": "ON", "invert": "INV"}[plan["tracking"]]
         _equal([v.replace("INVERTED", "INV") for v in actual], [wanted, wanted], "Tracking")
         if wanted != "OFF":
-            _verify_tracking_pair(result, wanted == "INV")
+            settings = _verify_tracking_pair(session, context, result, wanted == "INV")
+            _verify_tracking_settings(settings[plan["reference_channel"]], tracking_reference_settings)
             reference = result["channel_status"][str(plan["reference_channel"])]
             _equal(_function_name(reference["function"]), _function_name(tracking_reference["function"]),
                    "Tracking reference function")
@@ -716,7 +776,7 @@ def _apply(session, plan, arguments, context):
             _equal(state["offset_v"], plan["offset_v"], "Coupled offset")
             _equal(state["amplitude_unit"], "VPP", "Coupled amplitude unit")
     elif action == "configure-tracked-waveform":
-        _verify_tracking_pair(result, tracking[0] in {"INV", "INVERTED"})
+        _verify_tracking_pair(session, context, result, tracking[0] in {"INV", "INVERTED"})
         actual_tracking = [result["channel_status"][str(ch)]["tracking"].upper().replace("INVERTED", "INV") for ch in (1, 2)]
         _equal(actual_tracking, [mode.replace("INVERTED", "INV") for mode in tracking], "Tracking state")
         wave = _tracked_plan(context.identity.canonical_model_id, arguments)
@@ -794,11 +854,14 @@ def run_dual_channel(action: str, arguments: Mapping, *, model: str | None = Non
             try:
                 visa._run_on_supported_instrument(resource, backend,
                     lambda session, _: _off_all(session), **options)
-            except WavegenError as cleanup:
+            except (WavegenError, KeyboardInterrupt) as cleanup:
+                diagnostics = (str(cleanup) or "Group OFF cleanup interrupted.",
+                               *getattr(cleanup, "cleanup_errors", ()))
                 if isinstance(error, WavegenError):
-                    error.attach_cleanup_errors(error.cleanup_errors + (str(cleanup),) + cleanup.cleanup_errors)
+                    error.attach_cleanup_errors(error.cleanup_errors + diagnostics)
                 else:
-                    error.args = (f"{error}; group OFF cleanup failed: {cleanup}",)
+                    error.cleanup_errors = (*getattr(error, "cleanup_errors", ()), *diagnostics)
+                    error.args = (f"{error}; group OFF cleanup failed: {diagnostics[0]}",)
         raise
     return dict(result, resource=context.resource, backend=context.backend, transport=context.transport,
                 identity={"manufacturer": context.identity.manufacturer,

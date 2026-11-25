@@ -417,6 +417,10 @@ def _preflight_diagnostics(artifact_root: Path) -> str:
 def test_full_plan_inventory_and_privacy(
     artifact_root, monkeypatch, fake_git, model, channels, connection, resource, private_token,
 ):
+    # This integration checks inventory, command execution, cleanup and evidence,
+    # not elapsed wall-clock time. Preserve declared waits and results, using a
+    # no-op sleep only in one-shot simulated software-sequence processes.
+    # Dedicated sequence/workflow timing and cancellation checks are unaffected.
     # Any unexpected attempt to construct VISA fails the subprocess and leaves a marker.
     guard = artifact_root / "guard"
     guard.mkdir()
@@ -426,7 +430,10 @@ def test_full_plan_inventory_and_privacy(
         "def forbidden(*args, **kwargs):\n"
         f"    Path({str(marker)!r}).touch()\n"
         "    raise AssertionError('VISA forbidden in PlanOnly')\n"
-        "pyvisa.ResourceManager = forbidden\n", encoding="utf-8",
+        "pyvisa.ResourceManager = forbidden\n"
+        "import sys, time\n"
+        "if 'run-software-sequence' in sys.argv and '--simulate' in sys.argv:\n"
+        "    time.sleep = lambda seconds: None\n", encoding="utf-8",
     )
     monkeypatch.setenv("PYTHONPATH", str(guard))
     result = _run_script(
