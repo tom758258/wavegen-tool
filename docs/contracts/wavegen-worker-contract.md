@@ -313,7 +313,7 @@ channel. This is not available in Worker Live. Both affected outputs must
 be OFF for joint configuration or coupled updates. Tracking activation also
 requires Sync OFF and verifies its reference-channel source and OFF state.
 Tracked Pulse readback uses the existing Pulse timing and phase checks on both
-channels. Tracking rejects active Arbitrary or List waveform settings and volatile Arbitrary catalogs containing anything other than the default built-in EXP_RISE entry on either channel. Coupled frequency changes require CW frequency mode and valid resulting modulation and pulse timing. Mixed DC/non-DC voltage coupling cannot verify equal amplitudes; coupled amplitude/offset updates require two non-DC waveforms. Two DC channels may use voltage coupling for offset settings. Group output results
+channels. Tracking rejects active Arbitrary waveform settings and volatile Arbitrary catalogs containing anything other than the default built-in EXP_RISE entry on either channel. Coupled frequency changes require CW frequency mode and valid resulting modulation and pulse timing. Mixed DC/non-DC voltage coupling cannot verify equal amplitudes; coupled amplitude/offset updates require two non-DC waveforms. Two DC channels may use voltage coupling for offset settings. Group output results
 contain `output_states` keyed by string channel number; joint status and
 topology configuration return `channel_status`, `frequency_coupling` and
 `voltage_coupling`. A dry-run describes commands and intent, not measured

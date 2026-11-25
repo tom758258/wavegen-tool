@@ -1037,7 +1037,7 @@ memory) and assigns the Sync source to the reference channel. Tracking
 activation verifies that source and that Sync remains OFF. Tracked Pulse
 readback uses the existing Pulse timing and phase checks on both channels.
 To avoid unsupported memory changes,
-the tool rejects active Arbitrary or List waveform settings and permits only an empty catalog or the default built-in EXP_RISE entry
+the tool rejects active Arbitrary waveform settings and permits only an empty catalog or the default built-in EXP_RISE entry
 on both channels, when Arbitrary is supported. No memory is cleared automatically. Inverted tracking
 preserves the DC offset. Coupled frequency changes require CW frequency mode
 and valid resulting modulation, duty cycle, pulse and Burst timing. Voltage coupling maintains

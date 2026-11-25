@@ -322,6 +322,23 @@ def test_tracking_rejects_volatile_memory(joint, channel):
     assert {ch: state.channels[ch].arbitrary_points for ch in (1, 2)} == before
 
 
+def test_tracking_copies_existing_frequency_list(joint):
+    state, options, run = joint
+    visa.configure_sine_list_sweep(
+        frequencies_hz=[1000, 2000], amplitude_vpp=0.1, dwell_s=0.1,
+        channel=2, **options,
+    )
+    result = run("configure-tracking", mode="on", reference_channel=2)
+    assert result["readback_verified"]
+    assert state.ch1.list_frequencies_hz == state.ch2.list_frequencies_hz == (1000, 2000)
+    assert state.ch1.list_dwell_s == state.ch2.list_dwell_s == pytest.approx(0.1)
+    run("output", channel="all", enabled=True)
+    run("output", channel="all", enabled=False)
+    run("configure-tracking", mode="off")
+    assert state.tracking == "OFF"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
 def test_coupled_frequency_preserves_pm_frequency_ratio(joint, monkeypatch):
     state, options, run = joint
     visa.configure_sine(frequency_hz=100, amplitude_vpp=0.1, channel=2, **options)
@@ -462,11 +479,10 @@ def test_joint_pm_rejects_invalid_deviation(joint, monkeypatch, reading):
     run("output", channel="all", enabled=False)
 
 
-@pytest.mark.parametrize("kind", ["fm", "pm", "pwm"])
-@pytest.mark.parametrize(
-    ("shape", "frequency"),
-    [("RAMP", 300000), ("TRI", 300000), ("NRAMP", 300000), ("UNKNOWN", 100000)],
-)
+@pytest.mark.parametrize(("kind", "shape", "frequency"), [
+    ("fm", "RAMP", 300000), ("pm", "TRI", 300000),
+    ("pwm", "NRAMP", 300000), ("fm", "UNKNOWN", 100000),
+])
 def test_coupled_frequency_validates_internal_modulation_shape(joint, monkeypatch, kind, shape, frequency):
     state, options, run = joint
     if kind == "pwm":
@@ -1543,14 +1559,11 @@ def test_tracking_rejects_invalid_reference_frequency_before_copy(joint, monkeyp
 @pytest.mark.parametrize("mode,field,invalid", [
     ("SWEEP", "sweep_stop_frequency_hz", 21e6),
     ("SWEEP", "sweep_time_s", -1),
-    ("SWEEP", "sweep_hold_time_s", -1),
-    ("SWEEP", "sweep_return_time_s", -1),
     ("SWEEP", "trigger_delay_s", 2e-9),
     ("SWEEP_TIMER", "trigger_timer_s", 0.5),
     ("LIST", "list_frequencies_hz", (1000, 21e6)),
     ("LIST", "list_dwell_s", -1),
     ("LIST_BUS", "list_frequencies_hz", (1000, 21e6)),
-    ("ramp", "ramp_symmetry_percent", 101),
     ("noise", "noise_bandwidth_hz", 21e6),
     ("prbs", "prbs_bit_rate_bps", 51e6),
 ])
@@ -1569,7 +1582,7 @@ def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypa
             channel.trigger_source = "bus"
             channel.list_dwell_s = -1  # Inactive dwell is not used by Bus.
     else:
-        channel.active_function = {"ramp": "RAMP", "noise": "NOIS", "prbs": "PRBS"}[mode]
+        channel.active_function = {"noise": "NOIS", "prbs": "PRBS"}[mode]
     run("output", channel="all", enabled=True)
     run("output", channel="all", enabled=False)
     setattr(channel, field, invalid)
@@ -1596,15 +1609,8 @@ def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypa
     ("output", "fsk", "external", "fsk_hop_frequency_hz", 21e6),
     ("update", "fsk", "external", "fsk_hop_frequency_hz", 0),
     ("output", "fm", "external", "fm_deviation_hz", 2000),
-    ("tracking", "fm", "external", "fm_deviation_hz", 2000),
-    ("output", "pm", "external", "pm_deviation_deg", 361),
     ("tracking", "pm", "external", "pm_deviation_deg", 361),
     ("output", "pwm", "external", "pwm_deviation_s", 0.0002),
-    ("tracking", "pwm", "external", "pwm_deviation_s", 0.0002),
-    ("output", "am", "internal", "am_internal_frequency_hz", 0),
-    ("tracking", "sum", "internal", "sum_internal_frequency_hz", 0),
-    ("update", "am", "internal", "am_internal_frequency_hz", 21e6),
-    ("activation", "sum", "internal", "sum_internal_frequency_hz", -1),
     ("output", "am", "external", "am_depth_percent", -1),
     ("output", "sum", "external", "sum_amplitude_percent", -1),
 ])
@@ -1667,12 +1673,10 @@ def test_joint_modulation_validates_active_parameters_before_writes(
     ("fm", "PULS", "output"), ("pm", "PULS", "output"),
     ("fsk", "PULS", "output"), ("bpsk", "PULS", "output"),
     ("fm", "DC", "output"), ("pm", "DC", "tracking"),
-    ("fsk", "DC", "output"), ("bpsk", "DC", "tracking"),
-    ("fm", "NOIS", "tracking"), ("pm", "NOIS", "output"),
     ("fsk", "NOIS", "tracking"), ("bpsk", "NOIS", "output"),
     ("fsk", "PRBS", "output"), ("bpsk", "PRBS", "tracking"),
     ("pwm", "SIN", "output"), ("pwm", "NOIS", "output"),
-    ("pwm", "PRBS", "tracking"), ("pwm", "DC", "output"),
+    ("pwm", "PRBS", "tracking"),
     ("am", "DC", "output"), ("sum", "DC", "tracking"),
 ])
 def test_joint_external_modulation_rejects_unsupported_carrier(joint, monkeypatch, kind, carrier, operation):

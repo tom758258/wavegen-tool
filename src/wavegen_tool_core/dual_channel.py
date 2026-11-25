@@ -306,8 +306,6 @@ def _check_tracking_memory(session, context):
         source = _source(ch)
         if _function_name(_query(session, source + ":FUNCtion?")) == "arbitrary":
             raise WaveformParameterError("Tracking Arbitrary is outside the supported scope.")
-        if visa._canonical_readback_enum(_query(session, source + ":FREQuency:MODE?")) == "LIST":
-            raise WaveformParameterError("Tracking an active frequency list is outside the supported scope.")
         if caps.max_arbitrary_sample_rate_hz is not None:
             # Clearing volatile memory reloads the default built-in waveform.
             catalog = _catalog(session, source)
@@ -337,31 +335,6 @@ def _coupled_modulation_shape(session, prefix, mode, source):
     if shape is None:
         raise WaveformVerificationError("Unknown or unsupported internal modulation shape.")
     return shape
-
-
-def _check_amplitude_modulation_rate(session, ch, carrier, caps):
-    prefix = _source(ch)
-    for mode in ("AM", "SUM"):
-        if not _state(session, f"{prefix}:{mode}:STATe?"):
-            continue
-        if carrier == "dc":
-            raise WaveformParameterError(f"{mode} does not support a DC carrier.")
-        if _modulation_source(session, ch, mode) != "INTERNAL":
-            continue
-        function = visa._canonical_readback_enum(
-            _query(session, f"{prefix}:{mode}:INTernal:FUNCtion?")
-        )
-        shape = visa._MODULATION_SHAPE_READBACK.get(function)
-        if shape is not None:
-            visa._normalize_modulation_shape_and_frequency(
-                shape, _numeric(session, f"{prefix}:{mode}:INTernal:FREQuency?"),
-                modulation=mode, capabilities=caps,
-            )
-        elif function not in {"NOISE", "PRBS", "ARB"}:
-            raise WaveformVerificationError("Unknown internal modulation function.")
-        # Native panel-only shapes remain outside the configuration API.
-        # Noise has no periodic modulation rate; PRBS and Arb have their
-        # own rate/sample-rate rules. Do not apply periodic limits to them.
 
 
 def _checked_trigger_delay(ch, delay, *, label):
@@ -418,7 +391,6 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
             if current:
                 frequency = _numeric(session, prefix + ":FREQuency?")
             _frequency_limit(session, ch, frequency, caps)
-        _check_amplitude_modulation_rate(session, ch, carrier, caps)
         duty_frequency = frequency
         if _state(session, prefix + ":FM:STATe?"):
             source = _modulation_source(session, ch, "FM")
@@ -493,10 +465,6 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
             visa._prepare_square(
                 frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:SQUare:DCYCle?"),
                 50, 0, capabilities=caps, duty_cycle_validation_frequency_hz=duty_frequency,
-            )
-        if carrier == "ramp":
-            visa._prepare_ramp(
-                frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:RAMP:SYMMetry?"), 50, 0,
             )
         pwm_enabled = _state(session, prefix + ":PWM:STATe?")
         if pwm_enabled and carrier != "pulse":
@@ -589,9 +557,10 @@ def _check_current_frequency_settings(session, context, ch):
                     visa._validate_frequency_modulation_carrier(carrier, mode)
         if _state(session, prefix + ":PWM:STATe?"):
             raise WaveformParameterError("PWM requires a Pulse carrier.")
-        _check_amplitude_modulation_rate(
-            session, ch, carrier, visa._capabilities_for_identity(context.identity),
-        )
+        if carrier == "dc":
+            for mode in ("AM", "SUM"):
+                if _state(session, f"{prefix}:{mode}:STATe?"):
+                    raise WaveformParameterError(f"{mode} does not support a DC carrier.")
     if carrier == "arbitrary":
         return
     if carrier == "dc":
