@@ -1444,3 +1444,111 @@ def test_tracked_waveform_rejects_shared_wrong_mode_or_unit(joint, monkeypatch, 
         run("configure-tracked-waveform", **arguments)
     assert state.tracking == "ON"
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+@pytest.mark.parametrize("topology,field,invalid", [
+    ("on", "frequency_hz", -1),
+    ("invert", "frequency_hz", 21e6),
+    ("on", "fm_deviation_hz", 1500),
+    ("voltage", "pm_internal_frequency_hz", 100),
+    ("independent", "pwm_deviation_s", 0.0001),
+    ("independent", "frequency_hz", 0),
+    ("independent", "fsk_hop_frequency_hz", 21e6),
+])
+def test_group_on_rejects_invalid_current_frequency_settings(joint, monkeypatch, topology, field, invalid):
+    state, options, run = joint
+    for ch in (1, 2):
+        if field == "pwm_deviation_s":
+            visa.configure_pulse(frequency_hz=1000, amplitude_vpp=0.1,
+                                 pulse_width_s=0.0001, edge_time_s=1e-8, channel=ch,
+                                 pwm=visa.PWMConfig(10, 1e-6), **options)
+        else:
+            modulation = {}
+            if field == "fm_deviation_hz":
+                modulation["fm"] = visa.FMConfig(10, 100)
+            elif field == "pm_internal_frequency_hz":
+                modulation["pm"] = visa.PMConfig(10, 30)
+            elif field == "fsk_hop_frequency_hz":
+                modulation["fsk"] = visa.FSKConfig(hop_frequency_hz=2000, rate_hz=10)
+            visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, channel=ch,
+                                **modulation, **options)
+    if topology == "voltage":
+        run("configure-voltage-coupling", state="on")
+    elif topology != "independent":
+        run("configure-tracking", mode=topology)
+    run("output", channel="all", enabled=True)
+    run("output", channel="all", enabled=False)
+    # A tracking pair can agree on an invalid setting. Other topologies
+    # must also reject a fault on either channel before either ON write.
+    affected = (state.ch1, state.ch2) if topology in {"on", "invert"} else (state.ch2,)
+    for channel in affected:
+        setattr(channel, field, invalid)
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WavegenError):
+        run("output", channel="all", enabled=True)
+    assert not writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    run("output", channel="all", enabled=False)
+    assert {"OUTPut1 OFF", "OUTPut2 OFF"}.issubset(writes)
+    assert state.tracking == ({"on": "ON", "invert": "INV"}.get(topology, "OFF"))
+    assert state.voltage_coupling == (topology == "voltage")
+
+
+def test_tracking_rejects_invalid_reference_frequency_before_copy(joint, monkeypatch):
+    state, _, run = joint
+    state.ch2.frequency_hz = 21e6
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WavegenError):
+        run("configure-tracking", mode="on", reference_channel=2)
+    assert not writes
+    assert state.tracking == "OFF"
+    state.ch2.frequency_hz = 1000
+    assert run("configure-tracking", mode="on", reference_channel=2)["readback_verified"]
+
+
+@pytest.mark.parametrize("mode", ["SWEEP", "LIST", "noise", "prbs"])
+def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypatch, mode):
+    state, _, run = joint
+    channel = state.ch2
+    if mode == "SWEEP":
+        channel.frequency_mode = "SWEep"
+        field, invalid = "sweep_stop_frequency_hz", 21e6
+    elif mode == "LIST":
+        channel.frequency_mode = "LIST"
+        channel.list_frequencies_hz = (1000, 2000)
+        field, invalid = "list_frequencies_hz", (1000, 21e6)
+    elif mode == "noise":
+        channel.active_function = "NOIS"
+        field, invalid = "noise_bandwidth_hz", 21e6
+    else:
+        channel.active_function = "PRBS"
+        field, invalid = "prbs_bit_rate_bps", 51e6
+    run("output", channel="all", enabled=True)
+    run("output", channel="all", enabled=False)
+    setattr(channel, field, invalid)
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WavegenError):
+        run("output", channel="all", enabled=True)
+    assert not writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled

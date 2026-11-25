@@ -1011,7 +1011,11 @@ The existing `trigger` sends one instrument-wide Bus trigger. Group ON is
 explicit and sequential at the command level; it does not guarantee simultaneous
 hardware output edges. Configuration and coupled updates require both main
 outputs confirmed OFF. Group OFF always attempts both outputs and verifies
-both; a partial ON failure attempts both OFF. Conflicting settings are
+both; a partial ON failure attempts both OFF. Before group ON, Core checks
+current waveform rates and supported frequency-sensitive modulation/timing
+settings, in addition to the topology and voltage checks. Tracking activation
+also checks the reference waveform's current rate settings before copying.
+Conflicting settings are
 rejected rather than implicitly released. Joint configuration readback checks
 the requested topology change and preserves other coupling, tracking and
 Combine states, including the active frequency coupling relation when it is

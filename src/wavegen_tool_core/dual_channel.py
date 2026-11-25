@@ -314,13 +314,16 @@ def _check_tracking_memory(session, context):
                 raise WaveformParameterError("Tracking requires only the default built-in waveform in volatile memory.")
 
 
-def _frequency_limit(session, ch, value):
+def _frequency_limit(session, ch, value, caps):
     prefix = f"SOURce{ch}:FREQuency?"
-    if _function_name(_query(session, f"SOURce{ch}:FUNCtion?")) in {"arbitrary", "dc", "noise", "prbs"}:
+    carrier = _function_name(_query(session, f"SOURce{ch}:FUNCtion?"))
+    if carrier in {"arbitrary", "dc", "noise", "prbs"}:
         raise WaveformParameterError("Selected waveform does not support frequency coupling.")
+    maximum = (visa.RAMP_TRIANGLE_MAX_FREQUENCY_HZ if carrier in {"ramp", "triangle"}
+               else caps.max_sine_square_pulse_noise_frequency_hz)
     low, high = (_numeric(session, f"{prefix} {bound}") for bound in ("MINimum", "MAXimum"))
-    if not low <= value <= high:
-        raise WaveformParameterError(f"Coupled frequency exceeds Channel {ch} limits.")
+    if not 1e-6 <= value <= maximum or not low <= value <= high:
+        raise WaveformParameterError(f"Frequency exceeds Channel {ch} limits.")
 
 
 def _coupled_modulation_shape(session, prefix, mode, source):
@@ -333,51 +336,80 @@ def _coupled_modulation_shape(session, prefix, mode, source):
     return shape
 
 
-def _check_coupled_frequencies(session, values, context):
+def _check_coupled_frequencies(session, values, context, *, current=False):
+    """Validate periodic rates; current settings need not be in coupling's CW mode."""
     caps = visa._capabilities_for_identity(context.identity)
     for ch, frequency in values.items():
-        _frequency_limit(session, ch, frequency)
         prefix = _source(ch)
         carrier = _function_name(_query(session, prefix + ":FUNCtion?"))
-        if visa._canonical_readback_enum(_query(session, prefix + ":FREQuency:MODE?")) != "CW":
-            raise WaveformParameterError("Frequency coupling updates require CW frequency mode.")
+        mode = visa._canonical_readback_enum(_query(session, prefix + ":FREQuency:MODE?"))
+        if mode != "CW":
+            if not current:
+                raise WaveformParameterError("Frequency coupling updates require CW frequency mode.")
+            _, active, settings = visa._read_advanced_mode_session(session, context, ch)
+            if active == "SWEEP":
+                points = (settings["start_frequency_hz"], settings["stop_frequency_hz"])
+            elif active == "LIST":
+                points = visa._normalize_frequency_list(settings["frequencies_hz"], waveform="Group output")
+            else:
+                raise WaveformVerificationError("Unknown current frequency mode.")
+            frequency = max(points)
+            # The extremes bound every list point without a VISA round trip
+            # for each of up to 128 entries.
+            for point in {min(points), frequency}:
+                _frequency_limit(session, ch, point, caps)
+        else:
+            if current:
+                frequency = _numeric(session, prefix + ":FREQuency?")
+            _frequency_limit(session, ch, frequency, caps)
         duty_frequency = frequency
         if _state(session, prefix + ":FM:STATe?"):
             source = _modulation_source(session, ch, "FM")
             if source == "EXTERNAL":
-                raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
-            config = visa.FMConfig(
-                modulation_frequency_hz=(
-                    _numeric(session, prefix + ":FM:INTernal:FREQuency?") if source == "INTERNAL" else None
-                ),
-                deviation_hz=_numeric(session, prefix + ":FM:DEViation?"),
-                shape=_coupled_modulation_shape(session, prefix, "FM", source),
-                source="internal" if source == "INTERNAL" else source.lower(),
-            )
-            visa._prepare_fm(carrier, frequency, config, capabilities=caps)
-            duty_frequency = frequency + config.deviation_hz
+                if not current:
+                    raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+            else:
+                config = visa.FMConfig(
+                    modulation_frequency_hz=(
+                        _numeric(session, prefix + ":FM:INTernal:FREQuency?") if source == "INTERNAL" else None
+                    ),
+                    deviation_hz=_numeric(session, prefix + ":FM:DEViation?"),
+                    shape=_coupled_modulation_shape(session, prefix, "FM", source),
+                    source="internal" if source == "INTERNAL" else source.lower(),
+                )
+                visa._prepare_fm(carrier, frequency, config, capabilities=caps)
+                duty_frequency = frequency + config.deviation_hz
         if _state(session, prefix + ":PM:STATe?"):
             source = _modulation_source(session, ch, "PM")
             if source == "EXTERNAL":
-                raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
-            config = visa.PMConfig(
-                modulation_frequency_hz=(
-                    _numeric(session, prefix + ":PM:INTernal:FREQuency?") if source == "INTERNAL" else None
-                ),
-                deviation_deg=_numeric(session, prefix + ":PM:DEViation?"),
-                shape=_coupled_modulation_shape(session, prefix, "PM", source),
-                source="internal" if source == "INTERNAL" else source.lower(),
-            )
-            visa._prepare_pm(carrier, frequency, config, capabilities=caps)
-            if source != "INTERNAL":
-                modulation_frequency = visa._other_channel_pm_source_frequency(
-                    session, context, 3-ch, frequency_hz=values.get(3-ch)
+                if not current:
+                    raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+            else:
+                config = visa.PMConfig(
+                    modulation_frequency_hz=(
+                        _numeric(session, prefix + ":PM:INTernal:FREQuency?") if source == "INTERNAL" else None
+                    ),
+                    deviation_deg=_numeric(session, prefix + ":PM:DEViation?"),
+                    shape=_coupled_modulation_shape(session, prefix, "PM", source),
+                    source="internal" if source == "INTERNAL" else source.lower(),
                 )
-                if frequency <= 20 * modulation_frequency:
-                    raise WaveformParameterError("PM carrier frequency must be greater than 20 times the modulation frequency.")
+                visa._prepare_pm(carrier, frequency, config, capabilities=caps)
+                if source != "INTERNAL":
+                    modulation_frequency = visa._other_channel_pm_source_frequency(
+                        session, context, 3-ch, frequency_hz=values.get(3-ch)
+                    )
+                    if frequency <= 20 * modulation_frequency:
+                        raise WaveformParameterError("PM carrier frequency must be greater than 20 times the modulation frequency.")
+        if _state(session, prefix + ":FSKey:STATe?"):
+            hop = _numeric(session, prefix + ":FSKey:FREQuency?")
+            if visa._canonical_readback_enum(_query(session, prefix + ":FSKey:SOURce?")) == "INTERNAL":
+                visa._prepare_fsk(
+                    carrier, visa.FSKConfig(hop_frequency_hz=hop,
+                                           rate_hz=_numeric(session, prefix + ":FSKey:INTernal:RATE?")),
+                    capabilities=caps,
+                )
+            duty_frequency = max(duty_frequency, hop)
         if carrier == "square":
-            if _state(session, prefix + ":FSKey:STATe?"):
-                duty_frequency = max(duty_frequency, _numeric(session, prefix + ":FSKey:FREQuency?"))
             visa._prepare_square(
                 frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:SQUare:DCYCle?"),
                 50, 0, capabilities=caps, duty_cycle_validation_frequency_hz=duty_frequency,
@@ -392,16 +424,18 @@ def _check_coupled_frequencies(session, values, context):
             if _state(session, prefix + ":PWM:STATe?"):
                 source = _modulation_source(session, ch, "PWM")
                 if source == "EXTERNAL":
-                    raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
-                config = visa.PWMConfig(
-                    modulation_frequency_hz=(
-                        _numeric(session, prefix + ":PWM:INTernal:FREQuency?") if source == "INTERNAL" else None
-                    ),
-                    deviation_s=_numeric(session, prefix + ":PWM:DEViation?"),
-                    shape=_coupled_modulation_shape(session, prefix, "PWM", source),
-                    source="internal" if source == "INTERNAL" else source.lower(),
-                )
-                visa._prepare_pwm(frequency, width, leading, trailing, config, capabilities=caps)
+                    if not current:
+                        raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+                else:
+                    config = visa.PWMConfig(
+                        modulation_frequency_hz=(
+                            _numeric(session, prefix + ":PWM:INTernal:FREQuency?") if source == "INTERNAL" else None
+                        ),
+                        deviation_s=_numeric(session, prefix + ":PWM:DEViation?"),
+                        shape=_coupled_modulation_shape(session, prefix, "PWM", source),
+                        source="internal" if source == "INTERNAL" else source.lower(),
+                    )
+                    visa._prepare_pwm(frequency, width, leading, trailing, config, capabilities=caps)
         if _state(session, prefix + ":BURSt:STATe?"):
             mode = visa._canonical_readback_enum(_query(session, prefix + ":BURSt:MODE?"))
             if mode == "TRIGGERED":
@@ -417,6 +451,31 @@ def _check_coupled_frequencies(session, values, context):
                 visa._prepare_counted_burst(carrier, frequency, config)
             elif mode != "GATED":
                 raise WaveformVerificationError("Unknown Burst mode.")
+
+
+def _check_current_frequency_settings(session, context, ch):
+    """Check present rates before joint ON or copying a tracking reference.
+
+    Keep non-periodic waveforms out of frequency-coupling's CW-only rules.
+    Native Arbitrary playback and external modulation are not reconfigured here.
+    """
+    prefix = _source(ch)
+    carrier = _function_name(_query(session, prefix + ":FUNCtion?"))
+    if carrier in {"dc", "arbitrary"}:
+        return
+    if carrier == "noise":
+        visa._prepare_noise(
+            0.1, _numeric(session, prefix + ":FUNCtion:NOISe:BANDwidth?"), 0, 50,
+            capabilities=visa._capabilities_for_identity(context.identity),
+        )
+    elif carrier == "prbs":
+        visa._prepare_prbs(
+            _numeric(session, prefix + ":FUNCtion:PRBS:BRATe?"), 0.1,
+            _query(session, prefix + ":FUNCtion:PRBS:DATA?"), 0,
+            _numeric(session, prefix + ":FUNCtion:PRBS:TRANsition:BOTH?"), 50,
+        )
+    else:
+        _check_coupled_frequencies(session, {ch: None}, context, current=True)
 
 
 def _check_other_channel_frequency(session, context, ch):
@@ -813,7 +872,7 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
                 _verify_tracking_pair(session, context, status, tracking[0] in {"INV", "INVERTED"})
         for ch in (1, 2):
             if not frequency:
-                _check_other_channel_frequency(session, context, ch)
+                _check_current_frequency_settings(session, context, ch)
             _check_levels(session, ch, *_signal_levels(session, ch))
             if combined[ch-1] != "NONE":
                 _check_combine(session, ch, 3-ch)
@@ -937,6 +996,7 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
         _require_status_off(status, channels)
         _equal(_status_topology(status), (frequency, voltage, tracking, combine), "Tracking topology")
         tracking_reference = status["channel_status"][str(ref)]
+        _check_current_frequency_settings(session, context, ref)
         tracking_reference_settings = _tracking_settings(session, context, ref, tracking_reference["function"])
     elif action == "configure-combine" and plan["source"] != "none":
         ch = plan["channel"]
