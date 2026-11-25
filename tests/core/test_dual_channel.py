@@ -1582,20 +1582,37 @@ def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypa
     ("output", "bpsk", "external", "bpsk_phase_shift_deg", 361),
     ("output", "fsk", "external", "fsk_hop_frequency_hz", 21e6),
     ("update", "fsk", "external", "fsk_hop_frequency_hz", 0),
+    ("output", "fm", "external", "fm_deviation_hz", 2000),
+    ("tracking", "fm", "external", "fm_deviation_hz", 2000),
+    ("output", "pm", "external", "pm_deviation_deg", 361),
+    ("tracking", "pm", "external", "pm_deviation_deg", 361),
+    ("output", "pwm", "external", "pwm_deviation_s", 0.0002),
+    ("tracking", "pwm", "external", "pwm_deviation_s", 0.0002),
 ])
-def test_joint_keying_validates_active_parameters_before_writes(
+def test_joint_modulation_validates_active_parameters_before_writes(
     joint, monkeypatch, operation, kind, source, field, invalid,
 ):
     state, options, run = joint
-    config = (visa.BPSKConfig(phase_shift_deg=180, rate_hz=10) if kind == "bpsk"
-              else visa.FSKConfig(hop_frequency_hz=2000, rate_hz=10))
-    visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, channel=2,
-                        **{kind: config}, **options)
+    config = {
+        "bpsk": visa.BPSKConfig(phase_shift_deg=180, rate_hz=10),
+        "fsk": visa.FSKConfig(hop_frequency_hz=2000, rate_hz=10),
+        "fm": visa.FMConfig(10, 100),
+        "pm": visa.PMConfig(10, 30),
+        "pwm": visa.PWMConfig(10, 1e-6),
+    }[kind]
+    if kind == "pwm":
+        visa.configure_pulse(frequency_hz=1000, amplitude_vpp=0.1,
+                             pulse_width_s=0.0001, edge_time_s=1e-8,
+                             channel=2, pwm=config, **options)
+    else:
+        visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, channel=2,
+                            **{kind: config}, **options)
     channel = state.ch2
     setattr(channel, kind + "_source", source)
     if source == "external":
-        # The programmed internal rate is unused by external keying.
-        setattr(channel, kind + "_rate_hz", 2e6)
+        # An external source does not use the programmed internal rate.
+        rate_field = "_rate_hz" if kind in {"fsk", "bpsk"} else "_internal_frequency_hz"
+        setattr(channel, kind + rate_field, 2e6)
     if operation == "update":
         run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
     action, arguments = {
@@ -1623,6 +1640,146 @@ def test_joint_keying_validates_active_parameters_before_writes(
     setattr(channel, field, valid)
     assert run(action, **arguments)["executed"]
     run("output", channel="all", enabled=False)
+
+
+@pytest.mark.parametrize("kind", ["fm", "pm", "fsk", "bpsk", "pwm"])
+def test_joint_external_modulation_rejects_unsupported_carrier(joint, monkeypatch, kind):
+    state, _, run = joint
+    channel = state.ch2
+    setattr(channel, kind + "_enabled", True)
+    setattr(channel, kind + "_source", "external")
+    channel.active_function = "SIN" if kind == "pwm" else "PULS"
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WavegenError):
+        run("output", channel="all", enabled=True)
+    assert not writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    channel.active_function = "PULS" if kind == "pwm" else "SIN"
+    assert run("output", channel="all", enabled=True)["output_state"] == "on"
+    run("output", channel="all", enabled=False)
+    if kind in {"fm", "pm", "pwm"}:
+        writes.clear()
+        with pytest.raises(WavegenError):
+            run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
+        assert not writes
+        assert not state.frequency_coupling
+
+
+def test_external_fm_joint_on_checks_square_duty_at_peak_frequency(joint, monkeypatch):
+    state, _, run = joint
+    channel = state.ch2
+    channel.active_function = "SQU"
+    channel.frequency_hz = 10e6
+    channel.fm_enabled = True
+    channel.fm_source = "external"
+    channel.fm_deviation_hz = 5e6
+    channel.square_duty_cycle_percent = 20
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WavegenError):
+        run("output", channel="all", enabled=True)
+    assert not writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    channel.square_duty_cycle_percent = 30
+    assert run("output", channel="all", enabled=True)["output_state"] == "on"
+    run("output", channel="all", enabled=False)
+
+
+@pytest.mark.parametrize("operation,carrier,mode,field,valid,invalid", [
+    ("output", "SIN", "triggered", "burst_phase_deg", 45.1, 361),
+    ("tracking", "SIN", "triggered", "trigger_delay_s", 4e-9, 2e-9),
+    ("activation", "SIN", "triggered", "burst_trigger_slope", "negative", "unknown"),
+    ("update", "SIN", "triggered", "trigger_delay_s", 0.1, 1001),
+    ("output", "SIN", "gated", "burst_phase_deg", -45.1, 45.15),
+    ("output", "SIN", "gated", "burst_gate_polarity", "inverted", "unknown"),
+    ("output", "PRBS", "triggered", "trigger_delay_s", 4e-9, 2e-9),
+    ("output", "NOIS", "gated", "burst_gate_polarity", "normal", "unknown"),
+])
+def test_joint_burst_validates_active_parameters_before_writes(
+    joint, monkeypatch, operation, carrier, mode, field, valid, invalid,
+):
+    state, _, run = joint
+    channel = state.ch2
+    channel.active_function = carrier
+    channel.burst_enabled = True
+    channel.burst_mode = mode
+    channel.burst_count = 5
+    channel.burst_phase_deg = 45.1
+    channel.trigger_source = "external" if field == "burst_trigger_slope" else "bus"
+    setattr(channel, field, valid)
+    if operation == "update":
+        run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
+    action, arguments = {
+        "tracking": ("configure-tracking", {"mode": "on", "reference_channel": 2}),
+        "activation": ("configure-frequency-coupling", {"state": "on", "mode": "ratio", "ratio": 1}),
+        "update": ("update-coupled-frequency", {"channel": 2, "frequency_hz": 2000}),
+        "output": ("output", {"channel": "all", "enabled": True}),
+    }[operation]
+    setattr(channel, field, invalid)
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WavegenError):
+        run(action, **arguments)
+    assert not writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert state.tracking == "OFF"
+    assert state.frequency_coupling == (operation == "update")
+    setattr(channel, field, valid)
+    assert run(action, **arguments)["executed"]
+    run("output", channel="all", enabled=False)
+
+
+def test_joint_burst_phase_uses_current_angle_unit(joint, monkeypatch):
+    import math
+
+    state, _, run = joint
+    state.ch2.burst_enabled = True
+    state.ch2.trigger_source = "bus"
+    state.ch2.burst_phase_deg = 45.1
+    query = SimulatedResource.query
+    writes = []
+    write = SimulatedResource.write
+
+    def radians(self, command):
+        if command == "UNIT:ANGLe?":
+            return "RAD"
+        if command == "SOURce2:BURSt:PHASe?":
+            return str(math.radians(state.ch2.burst_phase_deg))
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", radians)
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    assert run("output", channel="all", enabled=True)["output_state"] == "on"
+    run("output", channel="all", enabled=False)
+    writes.clear()
+    state.ch2.burst_phase_deg = 45.15
+    with pytest.raises(WavegenError):
+        run("output", channel="all", enabled=True)
+    assert not writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
 
 
 @pytest.mark.parametrize("fail_recovery", [False, True])

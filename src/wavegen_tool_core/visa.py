@@ -5297,33 +5297,17 @@ def _prepare_am(
     return normalized, commands
 
 
-def _prepare_fm(
-    carrier: str,
-    carrier_frequency_hz: object,
-    config: FMConfig | None,
-    *,
-    capabilities: WavegenCapabilities,
-) -> tuple[FMConfig | None, tuple[str, ...]]:
-    if config is None:
-        return None, ()
-    if not isinstance(config, FMConfig):
-        raise WaveformParameterError("FM configuration must use FMConfig.")
+def _validate_frequency_modulation_carrier(carrier: str, mode: str) -> None:
     if carrier not in {"sine", "square", "ramp", "triangle"}:
         raise WaveformParameterError(
-            f"{carrier.upper()} carrier is not supported for FM configuration."
+            f"{carrier.upper()} carrier is not supported for {mode} configuration."
         )
 
-    carrier_frequency = _normalize_finite_number(
-        carrier_frequency_hz,
-        "carrier frequency",
-        waveform="FM",
-    )
-    source, shape, modulation_frequency = _modulation_inputs(config, "FM", capabilities)
-    deviation = _normalize_finite_number(
-        config.deviation_hz,
-        "deviation",
-        waveform="FM",
-    )
+
+def _validate_fm_deviation(
+    carrier: str, carrier_frequency: float, deviation: float,
+    capabilities: WavegenCapabilities,
+) -> None:
     function_maximum = (
         capabilities.max_sine_square_pulse_noise_frequency_hz
         if carrier in {"sine", "square"}
@@ -5341,6 +5325,33 @@ def _prepare_fm(
             "selected function maximum plus 100000 Hz minus the carrier frequency."
         )
 
+
+def _prepare_fm(
+    carrier: str,
+    carrier_frequency_hz: object,
+    config: FMConfig | None,
+    *,
+    capabilities: WavegenCapabilities,
+) -> tuple[FMConfig | None, tuple[str, ...]]:
+    if config is None:
+        return None, ()
+    if not isinstance(config, FMConfig):
+        raise WaveformParameterError("FM configuration must use FMConfig.")
+    _validate_frequency_modulation_carrier(carrier, "FM")
+
+    carrier_frequency = _normalize_finite_number(
+        carrier_frequency_hz,
+        "carrier frequency",
+        waveform="FM",
+    )
+    source, shape, modulation_frequency = _modulation_inputs(config, "FM", capabilities)
+    deviation = _normalize_finite_number(
+        config.deviation_hz,
+        "deviation",
+        waveform="FM",
+    )
+    _validate_fm_deviation(carrier, carrier_frequency, deviation, capabilities)
+
     normalized = FMConfig(
         modulation_frequency_hz=modulation_frequency,
         shape=shape,
@@ -5356,6 +5367,13 @@ def _prepare_fm(
     return normalized, commands
 
 
+def _validate_pm_deviation(deviation: float) -> None:
+    if not 0 <= deviation <= 360:
+        raise WaveformParameterError(
+            "PM deviation must be between 0 and 360 degrees."
+        )
+
+
 def _prepare_pm(
     carrier: str,
     carrier_frequency_hz: object,
@@ -5367,10 +5385,7 @@ def _prepare_pm(
         return None, ()
     if not isinstance(config, PMConfig):
         raise WaveformParameterError("PM configuration must use PMConfig.")
-    if carrier not in {"sine", "square", "ramp", "triangle"}:
-        raise WaveformParameterError(
-            f"{carrier.upper()} carrier is not supported for PM configuration."
-        )
+    _validate_frequency_modulation_carrier(carrier, "PM")
 
     carrier_frequency = _normalize_finite_number(
         carrier_frequency_hz,
@@ -5383,10 +5398,7 @@ def _prepare_pm(
         "deviation",
         waveform="PM",
     )
-    if not 0 <= deviation <= 360:
-        raise WaveformParameterError(
-            "PM deviation must be between 0 and 360 degrees."
-        )
+    _validate_pm_deviation(deviation)
     if modulation_frequency is not None and carrier_frequency <= 20 * modulation_frequency:
         raise WaveformParameterError(
             "PM carrier frequency must be greater than 20 times the modulation frequency."
@@ -5432,10 +5444,7 @@ def _prepare_fsk(
         return None, ()
     if not isinstance(config, FSKConfig):
         raise WaveformParameterError("FSK configuration must use FSKConfig.")
-    if carrier not in {"sine", "square", "ramp", "triangle"}:
-        raise WaveformParameterError(
-            f"{carrier.upper()} carrier is not supported for FSK configuration."
-        )
+    _validate_frequency_modulation_carrier(carrier, "FSK")
 
     hop_frequency = _normalize_finite_number(
         config.hop_frequency_hz,
@@ -5474,10 +5483,7 @@ def _prepare_bpsk(
         return None, ()
     if not isinstance(config, BPSKConfig):
         raise WaveformParameterError("BPSK configuration must use BPSKConfig.")
-    if carrier not in {"sine", "square", "ramp", "triangle"}:
-        raise WaveformParameterError(
-            f"{carrier.upper()} carrier is not supported for BPSK configuration."
-        )
+    _validate_frequency_modulation_carrier(carrier, "BPSK")
 
     phase_shift = _normalize_finite_number(
         config.phase_shift_deg,
@@ -5501,6 +5507,30 @@ def _prepare_bpsk(
     return normalized, commands
 
 
+def _validate_pwm_deviation(
+    carrier_frequency_hz: float, pulse_width_s: float,
+    leading_edge_s: float, trailing_edge_s: float, deviation: float,
+) -> None:
+    if not 0 <= deviation <= PWM_MAX_DEVIATION_S:
+        raise WaveformParameterError(
+            "PWM width deviation must be between 0 and 500000 seconds."
+        )
+
+    period = 1 / carrier_frequency_hz
+    edge_allowance = 0.8 * leading_edge_s + 0.8 * trailing_edge_s
+    maximum_deviation = min(
+        pulse_width_s - PULSE_MIN_WIDTH_S,
+        period - pulse_width_s - PULSE_MIN_WIDTH_S,
+        pulse_width_s - edge_allowance,
+        period - pulse_width_s - edge_allowance,
+    )
+    if maximum_deviation <= 0 or deviation >= maximum_deviation:
+        raise WaveformParameterError(
+            "PWM width deviation must be strictly less than the available "
+            "pulse width, period, and edge-time margin."
+        )
+
+
 def _prepare_pwm(
     carrier_frequency_hz: float,
     pulse_width_s: float,
@@ -5521,24 +5551,9 @@ def _prepare_pwm(
         "width deviation",
         waveform="PWM",
     )
-    if not 0 <= deviation <= PWM_MAX_DEVIATION_S:
-        raise WaveformParameterError(
-            "PWM width deviation must be between 0 and 500000 seconds."
-        )
-
-    period = 1 / carrier_frequency_hz
-    edge_allowance = 0.8 * leading_edge_s + 0.8 * trailing_edge_s
-    maximum_deviation = min(
-        pulse_width_s - PULSE_MIN_WIDTH_S,
-        period - pulse_width_s - PULSE_MIN_WIDTH_S,
-        pulse_width_s - edge_allowance,
-        period - pulse_width_s - edge_allowance,
+    _validate_pwm_deviation(
+        carrier_frequency_hz, pulse_width_s, leading_edge_s, trailing_edge_s, deviation,
     )
-    if maximum_deviation <= 0 or deviation >= maximum_deviation:
-        raise WaveformParameterError(
-            "PWM width deviation must be strictly less than the available "
-            "pulse width, period, and edge-time margin."
-        )
 
     normalized = PWMConfig(
         modulation_frequency_hz=modulation_frequency,

@@ -1018,7 +1018,13 @@ frequency-sensitive modulation/timing settings, in addition to the topology
 and voltage checks. Tracking activation also checks the reference waveform's
 current rate settings before copying. Keying checks validate the programmed
 FSK hop frequency and BPSK phase shift; the internal keying rate is checked
-only when the internal source is selected.
+only when the internal source is selected. For an existing external FM, PM
+or PWM source, joint ON and Tracking reference checks validate the programmed
+deviation, not the external input signal. Coupled frequency changes still
+reject these external modulation sources. Active Burst checks validate the
+applicable programmed start phase, delay, trigger slope or gate polarity
+alongside count and timing; angle readback uses the current degree/radian
+unit. These checks do not change trigger configuration.
 Conflicting settings are
 rejected rather than implicitly released. Joint configuration readback checks
 the requested topology change and preserves other coupling, tracking and

@@ -371,6 +371,10 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
             if source == "EXTERNAL":
                 if not current:
                     raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+                visa._validate_frequency_modulation_carrier(carrier, "FM")
+                deviation = _numeric(session, prefix + ":FM:DEViation?")
+                visa._validate_fm_deviation(carrier, frequency, deviation, caps)
+                duty_frequency = frequency + deviation
             else:
                 config = visa.FMConfig(
                     modulation_frequency_hz=(
@@ -387,6 +391,8 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
             if source == "EXTERNAL":
                 if not current:
                     raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+                visa._validate_frequency_modulation_carrier(carrier, "PM")
+                visa._validate_pm_deviation(_numeric(session, prefix + ":PM:DEViation?"))
             else:
                 config = visa.PMConfig(
                     modulation_frequency_hz=(
@@ -413,6 +419,7 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
                 )
             else:
                 # External FSK still uses the programmed hop, not the internal rate.
+                visa._validate_frequency_modulation_carrier(carrier, "FSK")
                 visa._validate_fsk_hop_frequency(carrier, hop, caps)
             duty_frequency = max(duty_frequency, hop)
         if _state(session, prefix + ":BPSK:STATe?"):
@@ -426,12 +433,16 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
                 )
             else:
                 # The external trigger selects the programmed alternate phase.
+                visa._validate_frequency_modulation_carrier(carrier, "BPSK")
                 visa._validate_bpsk_phase_shift(phase)
         if carrier == "square":
             visa._prepare_square(
                 frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:SQUare:DCYCle?"),
                 50, 0, capabilities=caps, duty_cycle_validation_frequency_hz=duty_frequency,
             )
+        pwm_enabled = _state(session, prefix + ":PWM:STATe?")
+        if pwm_enabled and carrier != "pulse":
+            raise WaveformParameterError("PWM requires a Pulse carrier.")
         if carrier == "pulse":
             pulse = prefix + ":FUNCtion:PULSe:"
             width = _numeric(session, pulse + "WIDTh?")
@@ -439,11 +450,15 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
             trailing = _numeric(session, pulse + "TRANsition:TRAiling?")
             visa._prepare_pulse(frequency, 0.1, width, 0, None, 50, 0,
                                 leading, trailing, capabilities=caps)
-            if _state(session, prefix + ":PWM:STATe?"):
+            if pwm_enabled:
                 source = _modulation_source(session, ch, "PWM")
                 if source == "EXTERNAL":
                     if not current:
                         raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+                    visa._validate_pwm_deviation(
+                        frequency, width, leading, trailing,
+                        _numeric(session, prefix + ":PWM:DEViation?"),
+                    )
                 else:
                     config = visa.PWMConfig(
                         modulation_frequency_hz=(
@@ -454,21 +469,55 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
                         source="internal" if source == "INTERNAL" else source.lower(),
                     )
                     visa._prepare_pwm(frequency, width, leading, trailing, config, capabilities=caps)
-        if _state(session, prefix + ":BURSt:STATe?"):
-            mode = visa._canonical_readback_enum(_query(session, prefix + ":BURSt:MODE?"))
-            if mode == "TRIGGERED":
-                trigger = visa._canonical_readback_enum(_query(session, f"TRIGger{ch}:SOURce?")).lower()
-                count = _numeric(session, prefix + ":BURSt:NCYCles?")
-                if not count.is_integer():
-                    raise WaveformVerificationError("Unknown Burst count.")
-                config = visa.CountedBurstConfig(
-                    count=int(count), trigger_source=trigger,
-                    period_s=_numeric(session, prefix + ":BURSt:INTernal:PERiod?") if trigger == "immediate" else None,
-                    trigger_timer_s=_numeric(session, f"TRIGger{ch}:TIMer?") if trigger == "timer" else None,
-                )
-                visa._prepare_counted_burst(carrier, frequency, config)
-            elif mode != "GATED":
-                raise WaveformVerificationError("Unknown Burst mode.")
+        _check_burst_settings(session, context, ch, carrier, frequency)
+
+
+def _check_burst_settings(session, context, ch, carrier, rate):
+    """Validate active Burst readback without changing the current angle unit."""
+    if not _state(session, _source(ch) + ":BURSt:STATe?"):
+        return
+    _, mode, settings = visa._read_advanced_mode_session(session, context, ch)
+    if mode != "BURST" or carrier == "dc":
+        raise WaveformVerificationError("Invalid active Burst configuration.")
+    # Noise can use gated Burst, but its start phase has no effect.
+    phase = 0.0
+    if carrier != "noise":
+        unit = _query(session, "UNIT:ANGLe?")
+        phase = settings["phase_deg"]
+        if unit in {"RAD", "RADIAN"}:
+            phase = math.degrees(phase)
+        elif unit not in {"DEG", "DEGREE"}:
+            raise WaveformVerificationError("Unknown phase angle unit.")
+        # Convert a numeric readback to the programmed 0.1-degree grid,
+        # allowing only floating-point noise (including radians conversion).
+        rounded_phase = round(phase, 1)
+        if not math.isclose(phase, rounded_phase, rel_tol=0.0, abs_tol=1e-8):
+            raise WaveformVerificationError("Invalid Burst start phase readback.")
+        phase = rounded_phase
+    if settings["burst_mode"] == "gated":
+        config = visa.GatedBurstConfig(
+            polarity=settings["gate_polarity"], start_phase_deg=phase,
+        )
+    else:
+        if carrier == "noise":
+            raise WaveformParameterError("Noise only supports gated Burst.")
+        delay = settings["trigger_delay_s"]
+        if not 0 <= delay <= 1000:
+            raise WaveformVerificationError("Invalid Burst trigger delay readback.")
+        # Match the existing 1 ns delay readback tolerance before validating
+        # the canonical programmed 4 ns grid value.
+        rounded_delay = round(delay * 250_000_000) * 4 / 1e9
+        if not visa._configuration_readback_matches(
+            f"TRIGger{ch}:DELay", str(rounded_delay), str(delay),
+        ):
+            raise WaveformVerificationError("Invalid Burst trigger delay readback.")
+        config = visa.CountedBurstConfig(
+            count=settings["count"], trigger_source=settings["trigger_source"],
+            period_s=settings.get("period_s"), trigger_timer_s=settings.get("trigger_timer_s"),
+            trigger_slope=settings.get("trigger_slope"),
+            start_phase_deg=phase, trigger_delay_s=rounded_delay,
+        )
+    visa._prepare_counted_burst(carrier, rate, config)
 
 
 def _check_current_frequency_settings(session, context, ch):
@@ -479,19 +528,25 @@ def _check_current_frequency_settings(session, context, ch):
     """
     prefix = _source(ch)
     carrier = _function_name(_query(session, prefix + ":FUNCtion?"))
-    if carrier in {"dc", "arbitrary"}:
+    if carrier == "arbitrary":
+        return
+    if carrier == "dc":
+        _check_burst_settings(session, context, ch, carrier, None)
         return
     if carrier == "noise":
+        bandwidth = _numeric(session, prefix + ":FUNCtion:NOISe:BANDwidth?")
         visa._prepare_noise(
-            0.1, _numeric(session, prefix + ":FUNCtion:NOISe:BANDwidth?"), 0, 50,
+            0.1, bandwidth, 0, 50,
             capabilities=visa._capabilities_for_identity(context.identity),
         )
+        _check_burst_settings(session, context, ch, carrier, bandwidth)
     elif carrier == "prbs":
+        rate = _numeric(session, prefix + ":FUNCtion:PRBS:BRATe?")
         visa._prepare_prbs(
-            _numeric(session, prefix + ":FUNCtion:PRBS:BRATe?"), 0.1,
-            _query(session, prefix + ":FUNCtion:PRBS:DATA?"), 0,
+            rate, 0.1, _query(session, prefix + ":FUNCtion:PRBS:DATA?"), 0,
             _numeric(session, prefix + ":FUNCtion:PRBS:TRANsition:BOTH?"), 50,
         )
+        _check_burst_settings(session, context, ch, carrier, rate)
     else:
         _check_coupled_frequencies(session, {ch: None}, context, current=True)
 
