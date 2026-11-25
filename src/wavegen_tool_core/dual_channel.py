@@ -323,6 +323,16 @@ def _frequency_limit(session, ch, value):
         raise WaveformParameterError(f"Coupled frequency exceeds Channel {ch} limits.")
 
 
+def _coupled_modulation_shape(session, prefix, mode, source):
+    if source != "INTERNAL":
+        return None
+    function = visa._canonical_readback_enum(_query(session, f"{prefix}:{mode}:INTernal:FUNCtion?"))
+    shape = visa._MODULATION_SHAPE_READBACK.get(function)
+    if shape is None:
+        raise WaveformVerificationError("Unknown or unsupported internal modulation shape.")
+    return shape
+
+
 def _check_coupled_frequencies(session, values, context):
     caps = visa._capabilities_for_identity(context.identity)
     for ch, frequency in values.items():
@@ -341,6 +351,7 @@ def _check_coupled_frequencies(session, values, context):
                     _numeric(session, prefix + ":FM:INTernal:FREQuency?") if source == "INTERNAL" else None
                 ),
                 deviation_hz=_numeric(session, prefix + ":FM:DEViation?"),
+                shape=_coupled_modulation_shape(session, prefix, "FM", source),
                 source="internal" if source == "INTERNAL" else source.lower(),
             )
             visa._prepare_fm(carrier, frequency, config, capabilities=caps)
@@ -354,6 +365,7 @@ def _check_coupled_frequencies(session, values, context):
                     _numeric(session, prefix + ":PM:INTernal:FREQuency?") if source == "INTERNAL" else None
                 ),
                 deviation_deg=_numeric(session, prefix + ":PM:DEViation?"),
+                shape=_coupled_modulation_shape(session, prefix, "PM", source),
                 source="internal" if source == "INTERNAL" else source.lower(),
             )
             visa._prepare_pm(carrier, frequency, config, capabilities=caps)
@@ -386,6 +398,7 @@ def _check_coupled_frequencies(session, values, context):
                         _numeric(session, prefix + ":PWM:INTernal:FREQuency?") if source == "INTERNAL" else None
                     ),
                     deviation_s=_numeric(session, prefix + ":PWM:DEViation?"),
+                    shape=_coupled_modulation_shape(session, prefix, "PWM", source),
                     source="internal" if source == "INTERNAL" else source.lower(),
                 )
                 visa._prepare_pwm(frequency, width, leading, trailing, config, capabilities=caps)

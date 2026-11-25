@@ -5066,6 +5066,53 @@ def test_frequency_step_ctrl_c_during_final_off_reports_interruption(interrupt_a
     assert error["channel"] == 1 and error["code"] == "visa_cleanup_error"
 
 
+@pytest.mark.parametrize(
+    ("environment_resource", "explicit_resource", "expected_resource"),
+    [
+        (USB_RESOURCE, None, USB_RESOURCE),
+        (USB_RESOURCE, TCPIP_RESOURCE, TCPIP_RESOURCE),
+        (None, USB_RESOURCE, USB_RESOURCE),
+        (USB_RESOURCE, "", None),
+        (USB_RESOURCE, " ", None),
+        (" ", None, None),
+        (None, None, None),
+    ],
+)
+def test_dual_channel_live_resource_precedence(
+    environment_resource, explicit_resource, expected_resource, monkeypatch, capsys
+):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
+    if environment_resource is not None:
+        monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", environment_resource)
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+    dispatched = []
+
+    def fake_run(action, arguments, **kwargs):
+        dispatched.append(kwargs["resource"])
+        return {"executed": True, "identity": {"manufacturer": "Keysight Technologies"}}
+
+    monkeypatch.setattr(cli_module, "run_dual_channel", fake_run)
+    argv = [
+        "phase-sync", "--model", "keysight-33512b",
+        "--validation-allow-pending-live-support", "--json",
+    ]
+    if explicit_resource is not None:
+        argv.extend(["--resource", explicit_resource])
+    if expected_resource is None:
+        with pytest.raises(SystemExit) as error:
+            main(argv)
+        assert error.value.code == ExitCode.CLI_USAGE
+        assert dispatched == []
+        assert not capsys.readouterr().out
+    else:
+        assert main(argv) == ExitCode.SUCCESS
+        assert dispatched == [expected_resource]
+        assert json.loads(capsys.readouterr().out)["success"] is True
+    assert calls == []
+    assert manager.opened_resources == []
+
+
 def test_dual_channel_direct_cli_plans_and_simulates(capsys):
     assert main(["phase-sync", "--dry-run", "--model", "keysight-33521b", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)

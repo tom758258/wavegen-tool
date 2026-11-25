@@ -3967,8 +3967,9 @@ def _run_dual_channel(args: argparse.Namespace, parser: argparse.ArgumentParser)
     elif not (args.dry_run or args.simulate) and args.model is not None:
         parser.error("--model requires hardware-free execution or Contributor validation")
     if not (args.dry_run or args.simulate):
-        args.resource = args.resource or os.environ.get("WAVEGEN_TOOL_RESOURCE")
-        if not args.resource:
+        if args.resource is None:
+            args.resource = os.environ.get("WAVEGEN_TOOL_RESOURCE")
+        if not args.resource or not args.resource.strip():
             parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
 
     def operation():

@@ -445,6 +445,70 @@ def test_joint_pm_rejects_invalid_deviation(joint, monkeypatch, reading):
     run("output", channel="all", enabled=False)
 
 
+@pytest.mark.parametrize("kind", ["fm", "pm", "pwm"])
+@pytest.mark.parametrize(
+    ("shape", "frequency"),
+    [("RAMP", 300000), ("TRI", 300000), ("NRAMP", 300000), ("UNKNOWN", 100000)],
+)
+def test_coupled_frequency_validates_internal_modulation_shape(joint, monkeypatch, kind, shape, frequency):
+    state, options, run = joint
+    if kind == "pwm":
+        carrier = 1000
+        visa.configure_pulse(
+            frequency_hz=carrier, amplitude_vpp=0.1, pulse_width_s=0.0001,
+            edge_time_s=1e-8,
+            pwm=visa.PWMConfig(modulation_frequency_hz=100000, deviation_s=1e-6, shape="up-ramp"),
+            **options,
+        )
+    else:
+        carrier = 10000000
+        config = (
+            visa.FMConfig(modulation_frequency_hz=100000, deviation_hz=50, shape="up-ramp")
+            if kind == "fm" else
+            visa.PMConfig(modulation_frequency_hz=100000, deviation_deg=30, shape="up-ramp")
+        )
+        visa.configure_sine(frequency_hz=carrier, amplitude_vpp=0.1, **{kind: config}, **options)
+    query = SimulatedResource.query
+    write = SimulatedResource.write
+    writes = []
+    prefix = f"SOURce1:{kind.upper()}:INTernal:"
+
+    def invalid_shape(self, command):
+        if command == prefix + "FUNCtion?":
+            return shape
+        if command == prefix + "FREQuency?":
+            return str(frequency)
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "query", invalid_shape)
+        patch.setattr(SimulatedResource, "write", record)
+        with pytest.raises(WavegenError):
+            run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
+        assert writes == []
+        assert not state.frequency_coupling
+    # The genuine supported non-sine configuration is a positive control.
+    run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "query", invalid_shape)
+        patch.setattr(SimulatedResource, "write", record)
+        with pytest.raises(WavegenError):
+            run("update-coupled-frequency", channel=1, frequency_hz=carrier + 1)
+        with pytest.raises(WavegenError):
+            run("output", channel="all", enabled=True)
+        assert writes == []
+        assert state.frequency_coupling
+        assert state.ch1.frequency_hz == state.ch2.frequency_hz == carrier
+        assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    run("update-coupled-frequency", channel=1, frequency_hz=carrier + 1)
+    run("output", channel="all", enabled=True)
+    run("output", channel="all", enabled=False)
+
+
 def test_other_channel_pm_allows_dc_source(joint):
     state, options, run = joint
     visa.configure_dc(voltage_v=0.1, channel=2, **options)
