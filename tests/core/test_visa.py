@@ -5327,22 +5327,22 @@ def test_status_validation_policy_accepts_matching_33512b():
 
 
 @pytest.mark.parametrize(
-    ("frequency_response", "query_error"),
+    ("query", "response", "query_error"),
     [
-        ("not-a-number", None),
-        ("1000", TimeoutError("private status timeout")),
+        ("SOURce1:FREQuency?", "not-a-number", None),
+        ("SOURce1:FREQuency?", "1000", TimeoutError("private status timeout")),
+        ("OUTPut1:LOAD?", "-100", None),
+        ("OUTPut1:LOAD?", "0", None),
+        ("OUTPut1:LOAD?", "10001", None),
+        ("OUTPut1:LOAD?", "9e37", None),
     ],
 )
 def test_status_query_or_numeric_parse_failure_is_domain_error_and_closes(
-    frequency_response, query_error
+    query, response, query_error
 ):
     responses = dict(STATUS_RESPONSES)
-    responses["SOURce1:FREQuency?"] = frequency_response
-    query_errors = (
-        {"SOURce1:FREQuency?": query_error}
-        if query_error is not None
-        else {}
-    )
+    responses[query] = response
+    query_errors = {query: query_error} if query_error is not None else {}
     session = FakeSession(
         responses_by_command=responses,
         query_errors_by_command=query_errors,

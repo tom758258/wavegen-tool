@@ -719,9 +719,9 @@ def run_software_sequence(
     finally:
         # Preflight confirmed both outputs OFF. A failed joint write can still
         # leave an unexpected output state even without an explicit ON step.
-        group = dual_writes and capabilities.channel_count == 2 and (
-            bool(attempted) or (failure is not None and dual_write_attempted)
-        )
+        if failure is not None and dual_write_attempted:
+            attempted.update(all_channels)
+        group = dual_writes and capabilities.channel_count == 2 and bool(attempted)
         cleanup, cleanup_interrupted = _cleanup(
             resource, backend, options, all_channels if group else attempted, group=group
         )

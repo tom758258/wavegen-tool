@@ -453,6 +453,56 @@ def test_combine_rejects_excessive_output(joint):
     assert state.ch1.combine_source == "NONE"
 
 
+@pytest.mark.parametrize(
+    ("action", "arguments", "load_response", "allowed"),
+    [
+        ("output", {"channel": "all", "enabled": True}, "1", True),
+        ("output", {"channel": "all", "enabled": True}, "10000", True),
+        ("output", {"channel": "all", "enabled": True}, "9.9E+37", True),
+        ("output", {"channel": "all", "enabled": True}, "-100", False),
+        ("output", {"channel": "all", "enabled": True}, "-51", False),
+        ("output", {"channel": "all", "enabled": True}, "0", False),
+        ("output", {"channel": "all", "enabled": True}, "10001", False),
+        ("output", {"channel": "all", "enabled": True}, "1e308", False),
+        ("configure-combine", {"channel": 1, "source": "ch2"}, "-100", False),
+    ],
+)
+def test_joint_operation_validates_load_before_writes(action, arguments, load_response, allowed):
+    state = Simulated33521BState(model_id=MODEL)
+    writes = []
+
+    class FaultyResource(SimulatedResource):
+        def query(self, command):
+            if command == "OUTPut2:LOAD?":
+                return load_response
+            return super().query(command)
+
+        def write(self, command):
+            writes.append(command)
+            return super().write(command)
+
+    class FaultyManager(SimulatedResourceManager):
+        def open_resource(self, _resource_name):
+            return FaultyResource(state)
+
+    options = dict(
+        resource=state.resource_name, expected_model_id=MODEL,
+        support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        resource_manager_factory=lambda _: FaultyManager(state),
+    )
+    if allowed:
+        try:
+            assert run_dual_channel(action, arguments, **options)["output_states"] == {"1": "on", "2": "on"}
+        finally:
+            run_dual_channel("output", {"channel": "all", "enabled": False}, **options)
+    else:
+        with pytest.raises(visa.StatusQueryError):
+            run_dual_channel(action, arguments, **options)
+        assert writes == []
+        assert state.ch1.combine_source == "NONE"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
 @pytest.mark.parametrize("enabled", [True, False])
 def test_group_output_readback_failure_cleans_both_outputs(enabled):
     state = Simulated33521BState(model_id=MODEL)

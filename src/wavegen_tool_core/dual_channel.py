@@ -453,6 +453,9 @@ def _check_combine(session, receiver, source):
     for ch in (receiver, source):
         if _query(session, f"SOURce{ch}:FUNCtion?") == "DC":
             raise WaveformParameterError("DC cannot be combined.")
+    # Validate both load readbacks before enabling Combine, including the
+    # source whose load is otherwise only read by the post-write status query.
+    visa._parse_status_load(session.query(f"OUTPut{source}:LOAD?"))
     low, high = _signal_levels(session, receiver)
     other_low, other_high = _signal_levels(session, source)
     offset = _numeric(session, f"SOURce{source}:VOLTage:OFFSet?")

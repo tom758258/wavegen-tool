@@ -1911,9 +1911,12 @@ def _parse_status_unit(response: object) -> str:
 
 def _parse_status_load(response: object) -> str:
     load = _parse_status_number(response, "output-load setting")
-    if load >= 9e37:
+    if load == 9.9e37:
         return "high-z"
-    return _format_scpi_number(load)
+    try:
+        return _normalize_output_load(load)
+    except WaveformParameterError as exc:
+        raise StatusQueryError("Malformed status response for output-load setting.") from exc
 
 
 def configure_sine(
