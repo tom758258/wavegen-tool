@@ -5134,3 +5134,34 @@ def test_dual_channel_direct_cli_plans_and_simulates(capsys):
     output = capsys.readouterr().out
     assert "AM modulation source: CH1" in output
     assert "AM modulation frequency" not in output and "AM modulation shape" not in output
+
+
+@pytest.mark.parametrize(("field", "token", "accepted"), [
+    ("start_phase_deg", "45.1", True),
+    ("start_phase_deg", "45.10000000000000001", False),
+    ("trigger_delay_s", "0.000000004", True),
+    ("trigger_delay_s", "0.00000000400000000000000001", False),
+    ("trigger_delay_s", "0", True),
+    ("trigger_delay_s", "1e-400", False),
+])
+def test_tracked_waveform_preserves_exact_burst_json(field, token, accepted, monkeypatch, capsys):
+    monkeypatch.setattr(visa, "create_resource_manager", lambda _: pytest.fail("Dry-run opened VISA"))
+    arguments = (
+        '{"frequency_hz":1000,"amplitude_vpp":0.1,'
+        '"burst":{"mode":"counted","count":3,"trigger_source":"bus",'
+        f'"{field}":{token}' + '}}'
+    )
+    code = main([
+        "configure-tracked-waveform", "--waveform", "sine", "--arguments-json", arguments,
+        "--model", "keysight-33512b", "--dry-run", "--json",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    if accepted:
+        assert code == ExitCode.SUCCESS
+        assert payload["executed"] is False
+        header = "SOURce1:BURSt:PHASe " if field == "start_phase_deg" else "TRIGger1:DELay "
+        assert any(command.startswith(header) and float(command[len(header):]) == float(token)
+                   for command in payload["commands"])
+    else:
+        assert code == ExitCode.CLI_USAGE
+        assert payload["error"]["code"] == "waveform_parameter_error"

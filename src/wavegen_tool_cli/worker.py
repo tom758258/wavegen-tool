@@ -1275,11 +1275,16 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             payload = json.loads(body)
             if preserve_stepped_values and isinstance(payload, dict):
                 command = payload.get("command")
-                if isinstance(command, str) and command in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
+                if isinstance(command, str) and command in BASIC_WORKFLOW_COMMANDS | {
+                    SOFTWARE_SEQUENCE_ACTION, "configure-tracked-waveform",
+                }:
                     try:
                         return parse_software_sequence_json(body), None
                     except (ValueError, RecursionError, ArithmeticError):
-                        label = "software sequence" if command == SOFTWARE_SEQUENCE_ACTION else "workflow"
+                        label = {
+                            SOFTWARE_SEQUENCE_ACTION: "software sequence",
+                            "configure-tracked-waveform": "tracked waveform",
+                        }.get(command, "workflow")
                         return None, f"Request body must contain valid {label} JSON."
                 arguments = payload.get("arguments")
                 if isinstance(arguments, dict):

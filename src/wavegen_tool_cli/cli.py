@@ -21,6 +21,7 @@ from wavegen_tool_core.software_sequence import (
     SOFTWARE_SEQUENCE_ACTION,
     SoftwareSequenceError,
     SoftwareSequenceInterrupted,
+    parse_software_sequence_json,
     read_software_sequence_file,
     run_software_sequence,
 )
@@ -3981,8 +3982,8 @@ def _run_dual_channel(args: argparse.Namespace, parser: argparse.ArgumentParser)
             values = {"channel": "all", "enabled": args.state == "on"}
         elif args.command == "configure-tracked-waveform":
             try:
-                values["arguments"] = json.loads(values.pop("arguments_json"))
-            except (ValueError, TypeError) as exc:
+                values["arguments"] = parse_software_sequence_json(values.pop("arguments_json"))
+            except (ValueError, TypeError, RecursionError, ArithmeticError) as exc:
                 raise WaveformParameterError("Tracked waveform arguments must be JSON.") from exc
         if args.dry_run:
             return run_dual_channel(args.command, values, model=model)

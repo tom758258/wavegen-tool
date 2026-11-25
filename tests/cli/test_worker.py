@@ -1949,3 +1949,69 @@ def test_worker_dual_channel_simulated_state_round_trip():
     finally:
         runtime.request_stop()
         assert runtime.wait(timeout=2.0)
+
+
+def test_worker_tracked_waveform_preserves_nested_burst_precision(monkeypatch, capsys):
+    monkeypatch.setattr("wavegen_tool_core.visa.create_resource_manager",
+                        lambda _: pytest.fail("Hardware-free request opened VISA"))
+    runtime = WorkerRuntime(_worker_config())
+    runtime.start()
+    try:
+        model = "keysight-33512b"
+        arguments = {
+            "waveform": "sine",
+            "arguments": {**_sine_arguments(), "burst": {
+                "mode": "counted", "count": 3, "trigger_source": "bus",
+                "start_phase_deg": 45.1, "trigger_delay_s": 4e-9,
+            }},
+        }
+        payload = _payload("configure-tracked-waveform", arguments, mode="dry_run", model_id=model)
+        code, accepted = _request(runtime, "POST", "/command", payload)
+        assert code == 202
+        result = _wait_for_job(runtime, accepted["worker_job_id"], "succeeded")["result"]
+        assert result["executed"] is False
+        assert "SOURce1:BURSt:PHASe 45.1" in result["commands"]
+        assert any(command.startswith("TRIGger1:DELay ") and float(command.split()[-1]) == 4e-9
+                   for command in result["commands"])
+
+        payload["context"]["mode"] = "simulate"
+        raw = json.dumps(payload)
+        for invalid in (
+            raw.replace('"start_phase_deg": 45.1', '"start_phase_deg": 45.10000000000000001'),
+            raw.replace('"trigger_delay_s": 4e-09', '"trigger_delay_s": 1e-400'),
+        ):
+            assert invalid != raw
+            code, rejected = _request(runtime, "POST", "/command", raw_body=invalid)
+            assert code == 400
+            assert rejected["error"]["code"] == "invalid_arguments"
+            assert runtime.simulator_state is None
+
+        # The lifecycle client must forward the original nested numeric tokens.
+        raw_arguments = json.dumps(arguments).replace('"trigger_delay_s": 4e-09',
+                                                      '"trigger_delay_s": 4.00000000000000001e-9')
+        assert raw_arguments != json.dumps(arguments)
+        exit_code = cli_module.main([
+            "send-command", "--port", str(runtime.control_port),
+            "--command", "configure-tracked-waveform", "--arguments-json", raw_arguments,
+            "--context-json", json.dumps({"mode": "dry_run", "planning_model_id": model}), "--json",
+        ])
+        response = json.loads(capsys.readouterr().out.splitlines()[-1])
+        assert exit_code == 2
+        assert response["http_status"] == 400
+        assert response["worker_response"]["error"]["code"] == "invalid_arguments"
+
+        # The already-exact Software Sequence path must still reject the same
+        # nested tracked-waveform request with its step location.
+        sequence = _payload("run-software-sequence", {"document": {"version": 1, "steps": [
+            {"action": "configure-tracked-waveform", "arguments": arguments},
+        ]}}, mode="dry_run", model_id=model)
+        raw_sequence = json.dumps(sequence).replace('"start_phase_deg": 45.1',
+                                                    '"start_phase_deg": 45.10000000000000001')
+        code, rejected = _request(runtime, "POST", "/command", raw_body=raw_sequence)
+        assert code == 400
+        assert rejected["error"]["code"] == "invalid_arguments"
+        assert rejected["error"]["details"]["domain_error"]["sequence"]["failed_step"]["step"] == 1
+        assert runtime.simulator_state is None
+    finally:
+        runtime.request_stop()
+        assert runtime.wait(5)
