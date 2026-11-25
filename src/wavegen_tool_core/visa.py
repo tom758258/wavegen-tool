@@ -5407,6 +5407,21 @@ def _prepare_pm(
     return normalized, commands
 
 
+def _validate_fsk_hop_frequency(
+    carrier: str, hop_frequency: float, capabilities: WavegenCapabilities,
+) -> None:
+    maximum_frequency = (
+        capabilities.max_sine_square_pulse_noise_frequency_hz
+        if carrier not in {"ramp", "triangle"}
+        else RAMP_TRIANGLE_MAX_FREQUENCY_HZ
+    )
+    if not MODULATION_MIN_FREQUENCY_HZ <= hop_frequency <= maximum_frequency:
+        raise WaveformParameterError(
+            "FSK hop frequency must be between 0.000001 Hz and "
+            f"{_format_scpi_number(maximum_frequency)} Hz."
+        )
+
+
 def _prepare_fsk(
     carrier: str,
     config: FSKConfig | None,
@@ -5428,16 +5443,7 @@ def _prepare_fsk(
         waveform="FSK",
     )
     rate = _normalize_finite_number(config.rate_hz, "rate", waveform="FSK")
-    maximum_frequency = (
-        capabilities.max_sine_square_pulse_noise_frequency_hz
-        if carrier in {"sine", "square"}
-        else RAMP_TRIANGLE_MAX_FREQUENCY_HZ
-    )
-    if not MODULATION_MIN_FREQUENCY_HZ <= hop_frequency <= maximum_frequency:
-        raise WaveformParameterError(
-            "FSK hop frequency must be between 0.000001 Hz and "
-            f"{_format_scpi_number(maximum_frequency)} Hz."
-        )
+    _validate_fsk_hop_frequency(carrier, hop_frequency, capabilities)
     if not FSK_MIN_RATE_HZ <= rate <= FSK_MAX_RATE_HZ:
         raise WaveformParameterError(
             "FSK rate must be between 0.000125 Hz and 1000000 Hz."
@@ -5451,6 +5457,13 @@ def _prepare_fsk(
         "SOURce1:FSKey:STATe ON",
     )
     return normalized, commands
+
+
+def _validate_bpsk_phase_shift(phase_shift: float) -> None:
+    if not 0 <= phase_shift <= 360:
+        raise WaveformParameterError(
+            "BPSK phase shift must be between 0 and 360 degrees."
+        )
 
 
 def _prepare_bpsk(
@@ -5472,10 +5485,7 @@ def _prepare_bpsk(
         waveform="BPSK",
     )
     rate = _normalize_finite_number(config.rate_hz, "rate", waveform="BPSK")
-    if not 0 <= phase_shift <= 360:
-        raise WaveformParameterError(
-            "BPSK phase shift must be between 0 and 360 degrees."
-        )
+    _validate_bpsk_phase_shift(phase_shift)
     if not BPSK_MIN_RATE_HZ <= rate <= BPSK_MAX_RATE_HZ:
         raise WaveformParameterError(
             "BPSK rate must be between 0.001 Hz and 1000000 Hz."

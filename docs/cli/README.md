@@ -1011,10 +1011,14 @@ The existing `trigger` sends one instrument-wide Bus trigger. Group ON is
 explicit and sequential at the command level; it does not guarantee simultaneous
 hardware output edges. Configuration and coupled updates require both main
 outputs confirmed OFF. Group OFF always attempts both outputs and verifies
-both; a partial ON failure attempts both OFF. Before group ON, Core checks
-current waveform rates and supported frequency-sensitive modulation/timing
-settings, in addition to the topology and voltage checks. Tracking activation
-also checks the reference waveform's current rate settings before copying.
+both; a partial ON failure attempts both OFF. An ON failure still fails the
+command; the error reports output OFF only if both outputs and cleanup were
+confirmed. Before group ON, Core checks current waveform rates and supported
+frequency-sensitive modulation/timing settings, in addition to the topology
+and voltage checks. Tracking activation also checks the reference waveform's
+current rate settings before copying. Keying checks validate the programmed
+FSK hop frequency and BPSK phase shift; the internal keying rate is checked
+only when the internal source is selected.
 Conflicting settings are
 rejected rather than implicitly released. Joint configuration readback checks
 the requested topology change and preserves other coupling, tracking and

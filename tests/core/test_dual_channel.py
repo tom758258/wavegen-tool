@@ -187,7 +187,9 @@ def test_software_sequence_preserves_coupling_and_cleans_both_outputs(joint):
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
 
 
-@pytest.mark.parametrize("failed_command", ["OUTPut2 ON", "OUTPut1 OFF", "cleanup-error-queue"])
+@pytest.mark.parametrize("failed_command", [
+    "OUTPut2 ON", "OUTPut1 OFF", "partial-on-off-failure", "cleanup-error-queue",
+])
 def test_group_output_failure_attempts_both_off(failed_command):
     state = Simulated33521BState(model_id=MODEL)
     writes = []
@@ -195,7 +197,12 @@ def test_group_output_failure_attempts_both_off(failed_command):
     class FaultyResource(SimulatedResource):
         def write(self, command):
             writes.append(command)
-            if command == failed_command or (failed_command == "cleanup-error-queue" and command == "OUTPut2 ON"):
+            if (
+                command == failed_command
+                or (failed_command in {"partial-on-off-failure", "cleanup-error-queue"}
+                    and command == "OUTPut2 ON")
+                or (failed_command == "partial-on-off-failure" and command == "OUTPut1 OFF")
+            ):
                 raise OSError("injected failure")
             result = super().write(command)
             if failed_command == "cleanup-error-queue" and command == "OUTPut2 OFF":
@@ -216,6 +223,15 @@ def test_group_output_failure_attempts_both_off(failed_command):
                          resource_manager_factory=lambda _: FaultyManager(state))
     assert "OUTPut1 OFF" in writes and "OUTPut2 OFF" in writes
     assert not state.ch2.output_enabled
+    if failed_command == "OUTPut2 ON":
+        assert caught.value.output_state == "off"
+        assert not caught.value.cleanup_errors and not state.ch1.output_enabled
+    else:
+        assert caught.value.output_state is None
+        assert caught.value.cleanup_errors
+    if failed_command == "partial-on-off-failure":
+        assert state.ch1.output_enabled
+        assert any("Channel 1 OFF" in message for message in caught.value.cleanup_errors)
     if failed_command == "cleanup-error-queue":
         assert caught.value.code == "visa_write_error"
         assert any("-221" in message for message in caught.value.cleanup_errors)
@@ -1454,6 +1470,8 @@ def test_tracked_waveform_rejects_shared_wrong_mode_or_unit(joint, monkeypatch, 
     ("independent", "pwm_deviation_s", 0.0001),
     ("independent", "frequency_hz", 0),
     ("independent", "fsk_hop_frequency_hz", 21e6),
+    ("on", "bpsk_rate_hz", 2e6),
+    ("independent", "bpsk_phase_shift_deg", 361),
 ])
 def test_group_on_rejects_invalid_current_frequency_settings(joint, monkeypatch, topology, field, invalid):
     state, options, run = joint
@@ -1470,6 +1488,8 @@ def test_group_on_rejects_invalid_current_frequency_settings(joint, monkeypatch,
                 modulation["pm"] = visa.PMConfig(10, 30)
             elif field == "fsk_hop_frequency_hz":
                 modulation["fsk"] = visa.FSKConfig(hop_frequency_hz=2000, rate_hz=10)
+            elif field.startswith("bpsk_"):
+                modulation["bpsk"] = visa.BPSKConfig(phase_shift_deg=180, rate_hz=10)
             visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, channel=ch,
                                 **modulation, **options)
     if topology == "voltage":
@@ -1552,3 +1572,98 @@ def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypa
         run("output", channel="all", enabled=True)
     assert not writes
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+@pytest.mark.parametrize("operation,kind,source,field,invalid", [
+    ("tracking", "bpsk", "internal", "bpsk_rate_hz", 2e6),
+    ("tracking", "bpsk", "external", "bpsk_phase_shift_deg", 361),
+    ("activation", "bpsk", "internal", "bpsk_phase_shift_deg", -1),
+    ("update", "bpsk", "internal", "bpsk_rate_hz", 2e6),
+    ("output", "bpsk", "external", "bpsk_phase_shift_deg", 361),
+    ("output", "fsk", "external", "fsk_hop_frequency_hz", 21e6),
+    ("update", "fsk", "external", "fsk_hop_frequency_hz", 0),
+])
+def test_joint_keying_validates_active_parameters_before_writes(
+    joint, monkeypatch, operation, kind, source, field, invalid,
+):
+    state, options, run = joint
+    config = (visa.BPSKConfig(phase_shift_deg=180, rate_hz=10) if kind == "bpsk"
+              else visa.FSKConfig(hop_frequency_hz=2000, rate_hz=10))
+    visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, channel=2,
+                        **{kind: config}, **options)
+    channel = state.ch2
+    setattr(channel, kind + "_source", source)
+    if source == "external":
+        # The programmed internal rate is unused by external keying.
+        setattr(channel, kind + "_rate_hz", 2e6)
+    if operation == "update":
+        run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
+    action, arguments = {
+        "tracking": ("configure-tracking", {"mode": "on", "reference_channel": 2}),
+        "activation": ("configure-frequency-coupling", {"state": "on", "mode": "ratio", "ratio": 1}),
+        "update": ("update-coupled-frequency", {"channel": 2, "frequency_hz": 2000}),
+        "output": ("output", {"channel": "all", "enabled": True}),
+    }[operation]
+    valid = getattr(channel, field)
+    setattr(channel, field, invalid)
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WavegenError):
+        run(action, **arguments)
+    assert not writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert state.tracking == "OFF"
+    assert state.frequency_coupling == (operation == "update")
+    setattr(channel, field, valid)
+    assert run(action, **arguments)["executed"]
+    run("output", channel="all", enabled=False)
+
+
+@pytest.mark.parametrize("fail_recovery", [False, True])
+def test_group_on_teardown_failure_reports_confirmed_off(fail_recovery):
+    state = Simulated33521BState(model_id=MODEL)
+    writes = []
+    opened = 0
+
+    class FaultyResource(SimulatedResource):
+        def __init__(self, first):
+            super().__init__(state)
+            self.first = first
+
+        def write(self, command):
+            writes.append(command)
+            if not self.first and fail_recovery and command == "OUTPut1 OFF":
+                raise OSError("injected recovery failure")
+            return super().write(command)
+
+        def close(self):
+            if self.first:
+                raise OSError("injected session close failure")
+            super().close()
+
+    class FaultyManager(SimulatedResourceManager):
+        def open_resource(self, _resource_name):
+            nonlocal opened
+            opened += 1
+            return FaultyResource(opened == 1)
+
+    with pytest.raises(visa.VisaCleanupError) as caught:
+        run_dual_channel(
+            "output", {"channel": "all", "enabled": True},
+            resource=state.resource_name, expected_model_id=MODEL,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+            resource_manager_factory=lambda _: FaultyManager(state),
+        )
+    assert opened == 2
+    assert writes == ["OUTPut1 ON", "OUTPut2 ON", "OUTPut1 OFF", "OUTPut2 OFF"]
+    assert not state.ch2.output_enabled
+    assert state.ch1.output_enabled == fail_recovery
+    assert caught.value.output_state == (None if fail_recovery else "off")
+    if fail_recovery:
+        assert any("Channel 1 OFF" in message for message in caught.value.cleanup_errors)

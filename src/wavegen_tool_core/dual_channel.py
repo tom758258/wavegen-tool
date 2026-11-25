@@ -243,7 +243,10 @@ def _topology(session):
 
 def _modulation_source(session, channel, mode):
     value = visa._canonical_readback_enum(_query(session, f"SOURce{channel}:{mode}:SOURce?"))
-    if value not in {"INTERNAL", "EXTERNAL", f"CH{3-channel}"}:
+    allowed = {"INTERNAL", "EXTERNAL"}
+    if mode not in {"FSKey", "BPSK"}:
+        allowed.add(f"CH{3-channel}")
+    if value not in allowed:
         raise WaveformVerificationError("Unknown or self-referencing modulation source.")
     return value
 
@@ -402,13 +405,28 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
                         raise WaveformParameterError("PM carrier frequency must be greater than 20 times the modulation frequency.")
         if _state(session, prefix + ":FSKey:STATe?"):
             hop = _numeric(session, prefix + ":FSKey:FREQuency?")
-            if visa._canonical_readback_enum(_query(session, prefix + ":FSKey:SOURce?")) == "INTERNAL":
+            if _modulation_source(session, ch, "FSKey") == "INTERNAL":
                 visa._prepare_fsk(
                     carrier, visa.FSKConfig(hop_frequency_hz=hop,
                                            rate_hz=_numeric(session, prefix + ":FSKey:INTernal:RATE?")),
                     capabilities=caps,
                 )
+            else:
+                # External FSK still uses the programmed hop, not the internal rate.
+                visa._validate_fsk_hop_frequency(carrier, hop, caps)
             duty_frequency = max(duty_frequency, hop)
+        if _state(session, prefix + ":BPSK:STATe?"):
+            phase = _numeric(session, prefix + ":BPSK:PHASe?")
+            if _modulation_source(session, ch, "BPSK") == "INTERNAL":
+                visa._prepare_bpsk(
+                    carrier, visa.BPSKConfig(
+                        phase_shift_deg=phase,
+                        rate_hz=_numeric(session, prefix + ":BPSK:INTernal:RATE?"),
+                    ),
+                )
+            else:
+                # The external trigger selects the programmed alternate phase.
+                visa._validate_bpsk_phase_shift(phase)
         if carrier == "square":
             visa._prepare_square(
                 frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:SQUare:DCYCle?"),
@@ -889,10 +907,13 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             try:
                 _off_all(session)
             except WavegenError as cleanup:
+                error.output_state = None
                 error.attach_cleanup_errors(error.cleanup_errors + cleanup.cleanup_errors)
             except KeyboardInterrupt as cleanup:
                 cleanup.cleanup_errors = (str(error), *getattr(cleanup, "cleanup_errors", ()))
                 raise
+            else:
+                error.output_state = "off"
             if isinstance(exc, KeyboardInterrupt):
                 exc.cleanup_errors = error.cleanup_errors
                 exc.args = (str(error) + " " + "; ".join(error.cleanup_errors),)
@@ -1192,10 +1213,14 @@ def run_dual_channel(action: str, arguments: Mapping, *, model: str | None = Non
                 diagnostics = (str(cleanup) or "Group OFF cleanup interrupted.",
                                *getattr(cleanup, "cleanup_errors", ()))
                 if isinstance(error, WavegenError):
+                    error.output_state = None
                     error.attach_cleanup_errors(error.cleanup_errors + diagnostics)
                 else:
                     error.cleanup_errors = (*getattr(error, "cleanup_errors", ()), *diagnostics)
                     error.args = (f"{error}; group OFF cleanup failed: {diagnostics[0]}",)
+            else:
+                if isinstance(error, WavegenError):
+                    error.output_state = "off"
         raise
     return dict(result, resource=context.resource, backend=context.backend, transport=context.transport,
                 identity={"manufacturer": context.identity.manufacturer,
