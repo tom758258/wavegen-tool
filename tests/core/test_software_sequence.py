@@ -645,3 +645,49 @@ def test_software_sequence_cancellation_between_steps_cleans_up(fake_instrument,
     assert details["completed_step_executions"] == 1
     assert details["cleanup"]["confirmed_off_channels"] == [1]
     assert not state.ch1.output_enabled
+
+
+
+@pytest.mark.parametrize("failure", ["step", "cancel", "cleanup"])
+def test_dual_sequence_failure_or_cancel_preserves_topology_and_reports_off(
+    fake_instrument, monkeypatch, failure,
+):
+    from threading import Event
+
+    from wavegen_tool_core import software_sequence
+
+    state, _, _ = fake_instrument
+    event = Event()
+    original = software_sequence.run_dual_channel
+
+    def operation(action, arguments, **options):
+        result = original(action, arguments, **options)
+        if failure == "cancel" and options.get("resource") and action == "output" and arguments["enabled"]:
+            event.set()
+        return result
+
+    monkeypatch.setattr(software_sequence, "run_dual_channel", operation)
+    if failure == "cleanup":
+        write = SimulatedResource.write
+
+        def fail_off(self, command):
+            if command == "OUTPut2 OFF" and state.ch2.output_enabled:
+                raise OSError("injected cleanup failure")
+            return write(self, command)
+
+        monkeypatch.setattr(SimulatedResource, "write", fail_off)
+    last = (_step("configure-frequency-coupling", state="off") if failure == "step"
+            else _step("dual-channel-status"))
+    with pytest.raises(SoftwareSequenceError) as caught:
+        run_software_sequence(
+            _document(_step("configure-frequency-coupling", state="on", mode="ratio", ratio=2),
+                      _step("output", channel="all", enabled=True), last),
+            resource=state.resource_name, expected_model_id=MODEL,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION, cancel_event=event,
+        )
+    cleanup = caught.value.details["cleanup"]
+    assert cleanup["attempted_channels"] == [1, 2]
+    assert cleanup["confirmed_off_channels"] == ([1] if failure == "cleanup" else [1, 2])
+    assert bool(cleanup["errors"]) == (failure == "cleanup")
+    assert state.frequency_coupling and not state.ch1.output_enabled
+    assert state.ch2.output_enabled == (failure == "cleanup")

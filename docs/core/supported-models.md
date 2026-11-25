@@ -142,7 +142,7 @@ coupling, Channel 1 tracking, and Channel 2 tracking to be reported off before
 an independent state-changing operation. In Core's contributor validation mode,
 Arbitrary waveform and sequence playback configuration also require Arbitrary
 sample rate coupling to be reported off on a two-channel instrument. Core does
-not disable coupling or tracking automatically. Independent writes also reject active Combine or other-channel modulation routes. Explicit contributor-only joint operations check both affected outputs and topology; the receiver's waveform may be reconfigured with both outputs OFF to release its other-channel modulation route. Joint OFF attempts both outputs even if one fails and confirms both states.
+not disable coupling or tracking automatically. Independent configuration and output-on writes also reject active Combine or other-channel modulation routes. Selected-channel OFF retains the original coupling/tracking guard without the additional cross-channel dependency guard. Tracking requires no active Arbitrary or List waveform and empty volatile Arbitrary catalogs on both channels (when supported). Coupled frequency changes require CW frequency mode and valid resulting modulation and pulse timing. Explicit contributor-only joint operations check both affected outputs and topology; the receiver's waveform may be reconfigured with both outputs OFF to release its other-channel modulation route. Joint OFF attempts both outputs even if one fails and confirms both states.
 
 Configuration leaves the selected output off. Output-on remains an explicit
 operation. The tool does not use `*RST` as part of normal operation.

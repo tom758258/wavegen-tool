@@ -620,3 +620,23 @@ def test_dual_channel_inventory_model_filter():
     assert all(case["steps"][0]["sequence_intent"]["channels"] == [1, 2]
                for case in data["dual"] if case["family"] == "dual-channel")
     assert any(case["name"] == "ch1/static-phase-sync" for case in data["single"])
+
+
+
+def test_joint_sequence_assertion_rejects_mismatched_nested_result():
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$intent = [ordered]@{actions=@('dual-channel-status');output_on=$false;"
+        + "upload_count=0;wait_seconds=0;channels=@(1,2);joint_checks=@("
+        + "@{index=0;path=@('channel_status','2','frequency_hz');value=2000})}; "
+        + "$payload = '{\"step_count\":1,\"loop_count\":1,\"execution_units\":1,"
+        + "\"total_wait_seconds\":0,\"channels\":[1,2],\"executed\":true,"
+        + "\"status\":\"completed\",\"completed_loops\":1,\"completed_step_executions\":1,"
+        + "\"results\":[{\"action\":\"dual-channel-status\",\"channel_status\":{\"2\":{\"frequency_hz\":2000}}}],"
+        + "\"cleanup\":{\"errors\":[],\"attempted_channels\":[],\"confirmed_off_channels\":[]}}' | ConvertFrom-Json; "
+        + "Assert-SoftwareSequenceResult -Payload $payload -Intent $intent -Channel 1; "
+        + "$payload.results[0].channel_status.'2'.frequency_hz = 1000; "
+        + "try { Assert-SoftwareSequenceResult -Payload $payload -Intent $intent -Channel 1 } "
+        + "catch { Write-Output 'rejected'; exit 0 }; exit 1"
+    )
+    assert result.stdout.strip() == "rejected"

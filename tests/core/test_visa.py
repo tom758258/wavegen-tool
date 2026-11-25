@@ -4999,8 +4999,8 @@ def test_output_validation_policy_accepts_matching_33512b(state):
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
-        *[query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
-            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))],
+        *([query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))] if state == "on" else []),
     ]
     assert session.writes == [f"OUTPut1 {state.upper()}"]
     assert result.identity.canonical_model_id == "keysight-33512b"

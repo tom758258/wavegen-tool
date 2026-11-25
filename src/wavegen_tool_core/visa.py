@@ -144,6 +144,7 @@ def _check_independent_channel_guard(
     capabilities: WavegenCapabilities,
     context: IdentificationResult,
     *, recover_modulation_receiver: int | None = None,
+    check_cross_dependencies: bool = True,
 ) -> None:
     if capabilities.channel_count <= 1:
         return
@@ -201,7 +202,8 @@ def _check_independent_channel_guard(
             )
 
 
-    _check_cross_channel_dependencies(session, recover_modulation_receiver)
+    if check_cross_dependencies:
+        _check_cross_channel_dependencies(session, recover_modulation_receiver)
 
 
 def _check_cross_channel_dependencies(session, recover_modulation_receiver=None):
@@ -9451,7 +9453,10 @@ def _write_to_supported_instrument(
             context.identity.model,
         )
         if independent_channel_guard:
-            _check_independent_channel_guard(session, capabilities, context)
+            _check_independent_channel_guard(
+                session, capabilities, context,
+                check_cross_dependencies=commands != ("OUTPut1 OFF",),
+            )
         if verify_readback:
             _advanced_mode_readback_fields(commands)
         _check_trigger_delay_configuration(session, commands, before_writes=True)

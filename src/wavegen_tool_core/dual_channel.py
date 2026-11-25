@@ -238,22 +238,152 @@ def _topology(session):
     return frequency, voltage, tracking, combine
 
 
+def _modulation_source(session, channel, mode):
+    value = visa._canonical_readback_enum(_query(session, f"SOURce{channel}:{mode}:SOURce?"))
+    if value not in {"INTERNAL", "EXTERNAL", f"CH{3-channel}"}:
+        raise WaveformVerificationError("Unknown or self-referencing modulation source.")
+    return value
+
+
 def _active_other_source(session, channel):
-    for mode in ("AM", "FM", "PM", "PWM", "SUM"):
-        prefix = f"SOURce{channel}:{mode}"
-        if _state(session, prefix + ":STATe?"):
-            if _query(session, prefix + ":SOURce?") in {"CH1", "CH2"}:
-                return True
-    return False
+    sources = [
+        _modulation_source(session, channel, mode)
+        for mode in ("AM", "FM", "PM", "PWM", "SUM")
+        if _state(session, f"SOURce{channel}:{mode}:STATe?")
+    ]
+    if len(sources) > 1:
+        raise WaveformVerificationError("Conflicting modulation modes.")
+    return f"CH{3-channel}" in sources
+
+
+def _check_topology(session, topology):
+    frequency, voltage, tracking, combine = topology
+    tracking = [mode.replace("INVERTED", "INV") for mode in tracking]
+    if tracking[0] != tracking[1] or (
+        tracking[0] != "OFF" and (
+            frequency or voltage or combine != ["NONE", "NONE"]
+            or _state(session, "RATE:COUPle:STATe?")
+        )
+    ) or all(source != "NONE" for source in combine):
+        raise WaveformVerificationError("Inconsistent or conflicting dual channel topology.")
+    other_sources = [_active_other_source(session, ch) for ch in (1, 2)]
+    if all(other_sources) or (tracking[0] != "OFF" and any(other_sources)):
+        raise WaveformVerificationError("Conflicting other-channel modulation routes.")
+
+
+def _function_name(value):
+    names = {"SIN": "sine", "SINE": "sine", "SINUSOID": "sine",
+             "SQU": "square", "SQUARE": "square", "RAMP": "ramp",
+             "TRI": "triangle", "TRIANGLE": "triangle", "PULS": "pulse",
+             "PULSE": "pulse", "NOIS": "noise", "NOISE": "noise",
+             "DC": "dc", "PRBS": "prbs", "ARB": "arbitrary"}
+    if value not in names:
+        raise WaveformVerificationError("Unknown waveform function.")
+    return names[value]
+
+
+def _polarity(session, channel):
+    value = visa._canonical_readback_enum(_query(session, f"OUTPut{channel}:POLarity?"))
+    if value not in {"NORMAL", "INVERTED"}:
+        raise WaveformVerificationError("Unknown output polarity.")
+    return "NORM" if value == "NORMAL" else "INV"
+
+
+def _check_tracking_memory(session, context):
+    from .arbitrary import _catalog
+    caps = visa._capabilities_for_identity(context.identity)
+    for ch in (1, 2):
+        source = _source(ch)
+        if _function_name(_query(session, source + ":FUNCtion?")) == "arbitrary":
+            raise WaveformParameterError("Tracking Arbitrary is outside the supported scope.")
+        if visa._canonical_readback_enum(_query(session, source + ":FREQuency:MODE?")) == "LIST":
+            raise WaveformParameterError("Tracking an active frequency list is outside the supported scope.")
+        if caps.max_arbitrary_sample_rate_hz is not None and _catalog(session, source):
+            raise WaveformParameterError("Tracking requires empty volatile Arbitrary catalogs on both channels.")
 
 
 def _frequency_limit(session, ch, value):
     prefix = f"SOURce{ch}:FREQuency?"
-    if _query(session, f"SOURce{ch}:FUNCtion?") in {"ARB", "DC", "NOIS", "NOISE", "PRBS"}:
+    if _function_name(_query(session, f"SOURce{ch}:FUNCtion?")) in {"arbitrary", "dc", "noise", "prbs"}:
         raise WaveformParameterError("Selected waveform does not support frequency coupling.")
     low, high = (_numeric(session, f"{prefix} {bound}") for bound in ("MINimum", "MAXimum"))
     if not low <= value <= high:
         raise WaveformParameterError(f"Coupled frequency exceeds Channel {ch} limits.")
+
+
+def _check_coupled_frequencies(session, values, context):
+    caps = visa._capabilities_for_identity(context.identity)
+    for ch, frequency in values.items():
+        _frequency_limit(session, ch, frequency)
+        prefix = _source(ch)
+        carrier = _function_name(_query(session, prefix + ":FUNCtion?"))
+        if visa._canonical_readback_enum(_query(session, prefix + ":FREQuency:MODE?")) != "CW":
+            raise WaveformParameterError("Frequency coupling updates require CW frequency mode.")
+        duty_frequency = frequency
+        if _state(session, prefix + ":FM:STATe?"):
+            source = _modulation_source(session, ch, "FM")
+            if source == "EXTERNAL":
+                raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+            config = visa.FMConfig(
+                modulation_frequency_hz=(
+                    _numeric(session, prefix + ":FM:INTernal:FREQuency?") if source == "INTERNAL" else None
+                ),
+                deviation_hz=_numeric(session, prefix + ":FM:DEViation?"),
+                source="internal" if source == "INTERNAL" else source.lower(),
+            )
+            visa._prepare_fm(carrier, frequency, config, capabilities=caps)
+            duty_frequency = frequency + config.deviation_hz
+        if _state(session, prefix + ":PM:STATe?"):
+            source = _modulation_source(session, ch, "PM")
+            if source == "EXTERNAL":
+                raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+            modulation_frequency = (
+                _numeric(session, prefix + ":PM:INTernal:FREQuency?")
+                if source == "INTERNAL" else values[3-ch]
+            )
+            if modulation_frequency <= 0 or frequency <= 20 * modulation_frequency:
+                raise WaveformParameterError("PM carrier frequency must be greater than 20 times the modulation frequency.")
+        if carrier == "square":
+            if _state(session, prefix + ":FSKey:STATe?"):
+                duty_frequency = max(duty_frequency, _numeric(session, prefix + ":FSKey:FREQuency?"))
+            visa._prepare_square(
+                frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:SQUare:DCYCle?"),
+                50, 0, capabilities=caps, duty_cycle_validation_frequency_hz=duty_frequency,
+            )
+        if carrier == "pulse":
+            pulse = prefix + ":FUNCtion:PULSe:"
+            width = _numeric(session, pulse + "WIDTh?")
+            leading = _numeric(session, pulse + "TRANsition:LEADing?")
+            trailing = _numeric(session, pulse + "TRANsition:TRAiling?")
+            visa._prepare_pulse(frequency, 0.1, width, 0, None, 50, 0,
+                                leading, trailing, capabilities=caps)
+            if _state(session, prefix + ":PWM:STATe?"):
+                source = _modulation_source(session, ch, "PWM")
+                if source == "EXTERNAL":
+                    raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
+                config = visa.PWMConfig(
+                    modulation_frequency_hz=(
+                        _numeric(session, prefix + ":PWM:INTernal:FREQuency?") if source == "INTERNAL" else None
+                    ),
+                    deviation_s=_numeric(session, prefix + ":PWM:DEViation?"),
+                    source="internal" if source == "INTERNAL" else source.lower(),
+                )
+                visa._prepare_pwm(frequency, width, leading, trailing, config, capabilities=caps)
+        if _state(session, prefix + ":BURSt:STATe?"):
+            mode = visa._canonical_readback_enum(_query(session, prefix + ":BURSt:MODE?"))
+            if mode == "TRIGGERED":
+                trigger = visa._canonical_readback_enum(_query(session, f"TRIGger{ch}:SOURce?")).lower()
+                count = _numeric(session, prefix + ":BURSt:NCYCles?")
+                if not count.is_integer():
+                    raise WaveformVerificationError("Unknown Burst count.")
+                config = visa.CountedBurstConfig(
+                    count=int(count), trigger_source=trigger,
+                    period_s=_numeric(session, prefix + ":BURSt:INTernal:PERiod?") if trigger == "immediate" else None,
+                    trigger_timer_s=_numeric(session, f"TRIGger{ch}:TIMer?") if trigger == "timer" else None,
+                )
+                visa._prepare_counted_burst(carrier, frequency, config)
+            elif mode != "GATED":
+                raise WaveformVerificationError("Unknown Burst mode.")
 
 
 def _levels(session, ch):
@@ -319,6 +449,7 @@ def _status(session):
     for ch in (1, 2):
         prefix = _source(ch)
         function = _query(session, prefix + ":FUNCtion?")
+        _function_name(function)
         low, high = _levels(session, ch)
         channels[str(ch)] = {
             "output_state": _outputs(session, (ch,))[str(ch)],
@@ -332,9 +463,9 @@ def _status(session):
             "load": visa._parse_status_load(session.query(f"OUTPut{ch}:LOAD?")),
             "amplitude_unit": visa._parse_status_unit(session.query(prefix + ":VOLTage:UNIT?")),
             "autorange_enabled": _state(session, prefix + ":VOLTage:RANGe:AUTO?"),
-            "polarity": _query(session, f"OUTPut{ch}:POLarity?"),
+            "polarity": _polarity(session, ch),
             "combine_source": combine[ch-1].lower(),
-            "tracking": tracking[ch-1].lower(),
+            "tracking": tracking[ch-1].replace("INVERTED", "INV").lower(),
         }
     return {
         "frequency_coupling": {"enabled": frequency, "mode": "ratio" if mode.startswith("RAT") else "offset",
@@ -346,8 +477,11 @@ def _status(session):
 
 def _verify_tracking_pair(result, inverted):
     first, second = (result["channel_status"][str(ch)] for ch in (1, 2))
-    for field in ("function", "frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load", "amplitude_unit", "autorange_enabled"):
+    _equal(_function_name(first["function"]), _function_name(second["function"]), "Tracked function")
+    for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load", "amplitude_unit", "autorange_enabled"):
         _equal(first[field], second[field], "Tracked " + field)
+    if any(state["polarity"] not in {"NORM", "INV"} for state in (first, second)):
+        raise WaveformVerificationError("Unknown tracked output polarity.")
     if (first["polarity"] == second["polarity"]) == inverted:
         raise WaveformVerificationError("Tracked output polarity did not match mode.")
 
@@ -380,7 +514,27 @@ def _apply(session, plan, arguments, context):
             _error_free(session)
             return {"output_states": _outputs(session), "output_state": "off"}
         _require_off(session, channels)
-        _, _, _, combined = _topology(session)
+        topology = _topology(session)
+        _check_topology(session, topology)
+        frequency, voltage, tracking, combined = topology
+        if frequency or voltage or tracking[0] != "OFF":
+            status = _status(session)
+            first, second = (status["channel_status"][str(ch)] for ch in (1, 2))
+            if frequency:
+                values = {1: first["frequency_hz"], 2: second["frequency_hz"]}
+                if any(value is None for value in values.values()):
+                    raise WaveformVerificationError("Unsupported coupled frequency state.")
+                settings = status["frequency_coupling"]
+                expected = (values[1] * settings["ratio"] if settings["mode"] == "ratio"
+                            else values[1] + settings["offset_hz"])
+                _equal(values[2], expected, "Coupled frequency relation")
+                _check_coupled_frequencies(session, values, context)
+            if voltage:
+                for field in ("amplitude_vpp", "offset_v", "load", "amplitude_unit", "autorange_enabled"):
+                    _equal(first[field], second[field], "Coupled " + field)
+            if tracking[0] != "OFF":
+                _check_tracking_memory(session, context)
+                _verify_tracking_pair(status, tracking[0] in {"INV", "INVERTED"})
         for ch in (1, 2):
             _check_levels(session, ch, *_signal_levels(session, ch))
             if combined[ch-1] != "NONE":
@@ -417,6 +571,7 @@ def _apply(session, plan, arguments, context):
     frequency, voltage, tracking, combine = _topology(session)
     tracked = any(mode != "OFF" for mode in tracking)
     expected_frequency = {}
+    tracking_reference = None
     if action == "configure-frequency-coupling" and plan["state"] == "on":
         if tracked or frequency:
             raise WaveformParameterError("Disable tracking or existing frequency coupling first.")
@@ -474,12 +629,14 @@ def _apply(session, plan, arguments, context):
         if frequency or voltage or combine != ["NONE", "NONE"] or _state(session, "RATE:COUPle:STATe?"):
             raise WaveformParameterError("Explicitly disable conflicting coupling and combine first.")
         ref = plan["reference_channel"]
+        _check_tracking_memory(session, context)
         if _active_other_source(session, ref):
             raise WaveformParameterError("Tracking cannot copy other-channel modulation.")
         if _state(session, "OUTPut:SYNC?"):
             raise WaveformParameterError("Sync output must be OFF before changing its source by tracking.")
         load = visa._parse_status_load(session.query(f"OUTPut{ref}:LOAD?"))
         _check_levels(session, 3-ref, *_signal_levels(session, ref), load=load)
+        tracking_reference = _status(session)["channel_status"][str(ref)]
     elif action == "configure-combine" and plan["source"] != "none":
         ch = plan["channel"]
         if tracked or combine[2-ch] != "NONE":
@@ -488,18 +645,26 @@ def _apply(session, plan, arguments, context):
     elif action == "configure-tracked-waveform":
         if not tracked or frequency or voltage or combine != ["NONE", "NONE"]:
             raise WaveformParameterError("Tracking must be active without conflicting coupling.")
+        _check_tracking_memory(session, context)
+        _check_topology(session, (frequency, voltage, tracking, combine))
         wave = _tracked_plan(context.identity.canonical_model_id, arguments)
         load = wave.load
         if hasattr(wave, "amplitude_vpp"):
             amp, offset = wave.amplitude_vpp, wave.offset_v
+            am, summation = getattr(wave, "am", None), getattr(wave, "sum", None)
+            if am is not None:
+                amp *= am.depth_percent / 100 + (0 if am.am_type == "dssc" else 1)
+            if summation is not None:
+                amp *= 1 + summation.amplitude_percent / 100
             for ch in (1, 2):
                 _check_levels(session, ch, offset-amp/2, offset+amp/2, load=load)
         elif hasattr(wave, "voltage_v"):
             for ch in (1, 2):
                 _check_levels(session, ch, wave.voltage_v, wave.voltage_v, load=load)
 
-    for ch, value in expected_frequency.items():
-        _frequency_limit(session, ch, value)
+    if expected_frequency:
+        _check_topology(session, (frequency, voltage, tracking, combine))
+        _check_coupled_frequencies(session, expected_frequency, context)
     for command in commands:
         if action == "configure-tracked-waveform" and ":FUNCtion:PULSe:TRANsition:" in command:
             header, _, value = command.partition(" ")
@@ -507,6 +672,8 @@ def _apply(session, plan, arguments, context):
                 edge = "BOTH" if header.endswith(":BOTH") else ("LEADING" if header.endswith(":LEADing") else "TRAILING")
                 for ch in (1, 2):
                     query = header.replace(f"SOURce{plan['channel']}", f"SOURce{ch}")
+                    if edge == "BOTH":
+                        query = query.removesuffix(":BOTH")
                     maximum = _numeric(session, query + "? MAXimum")
                     visa._validate_pulse_edge_maximum(float(value), maximum, edge, context)
         session.write(command)
@@ -531,18 +698,31 @@ def _apply(session, plan, arguments, context):
         _equal([v.replace("INVERTED", "INV") for v in actual], [wanted, wanted], "Tracking")
         if wanted != "OFF":
             _verify_tracking_pair(result, wanted == "INV")
+            reference = result["channel_status"][str(plan["reference_channel"])]
+            _equal(_function_name(reference["function"]), _function_name(tracking_reference["function"]),
+                   "Tracking reference function")
+            for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load",
+                          "amplitude_unit", "autorange_enabled", "polarity"):
+                _equal(reference[field], tracking_reference[field], "Tracking reference " + field)
     elif action == "configure-combine":
         _equal(result["channel_status"][str(plan["channel"])]["combine_source"], plan["source"], "Combine")
+    elif action == "update-coupled-frequency":
+        _equal(result["frequency_coupling"]["enabled"], True, "Frequency coupling")
     elif action == "update-coupled-voltage":
+        _equal(result["voltage_coupling"], True, "Voltage coupling")
         for ch in (1, 2):
             state = result["channel_status"][str(ch)]
             _equal(state["amplitude_vpp"], plan["amplitude_vpp"], "Coupled amplitude")
             _equal(state["offset_v"], plan["offset_v"], "Coupled offset")
+            _equal(state["amplitude_unit"], "VPP", "Coupled amplitude unit")
     elif action == "configure-tracked-waveform":
         _verify_tracking_pair(result, tracking[0] in {"INV", "INVERTED"})
+        actual_tracking = [result["channel_status"][str(ch)]["tracking"].upper().replace("INVERTED", "INV") for ch in (1, 2)]
+        _equal(actual_tracking, [mode.replace("INVERTED", "INV") for mode in tracking], "Tracking state")
         wave = _tracked_plan(context.identity.canonical_model_id, arguments)
         for ch in (1, 2):
             actual = result["channel_status"][str(ch)]
+            _equal(_function_name(actual["function"]), plan["waveform"], f"CH{ch} tracked function")
             for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load"):
                 expected = getattr(wave, field, None)
                 if expected is not None:
@@ -556,12 +736,25 @@ def _apply(session, plan, arguments, context):
         for command in commands:
             header, sep, value = command.partition(" ")
             if sep and header.startswith(f"SOURce{selected}:FUNCtion:") and value not in {"MINimum", "MAXimum"}:
-                if header.endswith((":DUTY", ":SYMMetry", ":WIDTh", ":BANDwidth", ":BITRate", ":PATTern", ":TRANsition:BOTH", ":TRANsition:LEADing", ":TRANsition:TRAiling")):
+                if header.endswith((":DCYCle", ":SYMMetry", ":WIDTh", ":BANDwidth", ":BRATe", ":DATA", ":TRANsition:BOTH", ":TRANsition:LEADing", ":TRANsition:TRAiling")):
+                    if header.endswith(":PULSe:TRANsition:BOTH"):
+                        header = header.removesuffix(":BOTH")
                     fields[header] = value
+        original = tuple(command.replace(f"SOURce{selected}:", "SOURce1:").replace(
+            f"TRIGger{selected}:", "TRIGger1:"
+        ) for command in commands)
         for ch in (1, 2):
             visa._verify_configuration_readback(session, context,
                 {key.replace(f"SOURce{selected}:", f"SOURce{ch}:"): value for key, value in fields.items()},
                 label="Tracked waveform")
+            if any(command.endswith(":STATe ON") for command in original):
+                visa._verify_advanced_mode_configuration(session, context, original, selected_channel=ch)
+            for command in original:
+                if command.endswith(":STATe OFF"):
+                    header = command.split(" ", 1)[0]
+                    if header + " ON" not in original:
+                        _equal(_state(session, header.replace("SOURce1:", f"SOURce{ch}:") + "?"),
+                               False, "Tracked inactive mode")
     for ch, value in expected_frequency.items():
         _equal(result["channel_status"][str(ch)]["frequency_hz"], value, f"Channel {ch} frequency")
     return dict(result, output_state="off", readback_verified=True)

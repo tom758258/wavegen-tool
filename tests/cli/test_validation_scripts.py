@@ -570,7 +570,14 @@ def test_full_plan_inventory_and_privacy(
         "ch1/frequency-step-descending",
     } | ({
         "ch1/sequence-bus-functional", "ch1/sequence-external", "ch1/sequence-external-negative",
-    } if model != "33510b" else set())
+    } if model != "33510b" else set()) | ({
+        "ch1/software-sequence-dual-channel",
+        *(f"ch1/dual-channel-{name}" for name in (
+            "phase-output", "bus-trigger", "frequency-ratio-offset", "voltage-coupling",
+            "tracking-on", "tracking-invert", "modulation-am", "modulation-fm",
+            "modulation-pm", "modulation-pwm", "modulation-sum", "combine-ch1", "combine-ch2",
+        )),
+    } if 2 in channels else set())
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
     for private in (resource, private_token, str(REPO_ROOT), str(run)):

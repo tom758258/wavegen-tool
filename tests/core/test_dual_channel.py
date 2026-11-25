@@ -42,6 +42,10 @@ def test_phase_sync_single_and_dual_preserves_requested_phase(joint):
     result = run_dual_channel("phase-sync", {}, resource=single.resource_name,
                               resource_manager_factory=SimulatedResourceManagerFactory(single))
     assert result["channels"] == [1] and single.phase_sync_count == 1
+    dual = Simulated33521BState(model_id="keysight-33510b")
+    result = run_dual_channel("phase-sync", {}, resource=dual.resource_name,
+                              resource_manager_factory=SimulatedResourceManagerFactory(dual))
+    assert result["channels"] == [1, 2] and dual.phase_sync_count == 1
 
 
 @pytest.mark.parametrize("model", ["keysight-33510b", MODEL])
@@ -99,6 +103,13 @@ def test_voltage_coupling_group_off_and_tracking(joint):
     assert state.ch1.frequency_hz == state.ch2.frequency_hz == 2000
     assert state.ch1.offset_v == state.ch2.offset_v == pytest.approx(0.1)
     assert state.ch1.output_polarity != state.ch2.output_polarity
+    result = run("configure-tracked-waveform", waveform="pulse", arguments={
+        "channel": 2, "frequency_hz": 2000, "amplitude_vpp": 0.3,
+        "pulse_width_s": 0.0001, "edge_time_s": 20e-9,
+    })
+    assert result["readback_verified"]
+    assert state.ch1.pulse_width_s == state.ch2.pulse_width_s == 0.0001
+    assert state.ch1.pulse_edge_time_s == state.ch2.pulse_edge_time_s == pytest.approx(20e-9)
     run("configure-tracking", mode="off")
     assert state.tracking == "OFF"
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
@@ -198,3 +209,179 @@ def test_phase_sync_rejects_active_output(joint):
     with pytest.raises(WaveformVerificationError):
         run("phase-sync")
     assert state.phase_sync_count == 0
+
+
+
+def test_bus_trigger_routes_to_both_channels(joint):
+    state, options, run = joint
+    for channel in (1, 2):
+        visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, channel=channel,
+                            burst=visa.CountedBurstConfig(count=5, trigger_source="bus"), **options)
+    run("output", channel="all", enabled=True)
+    try:
+        visa.send_bus_trigger(**options)
+        assert state.ch1.bus_triggers == state.ch2.bus_triggers == 1
+    finally:
+        run("output", channel="all", enabled=False)
+
+
+def test_independent_off_keeps_original_guard(joint):
+    state, options, run = joint
+    run("configure-combine", channel=1, source="ch2")
+    run("output", channel="all", enabled=True)
+    visa.set_output(state.resource_name, "off", channel=1,
+                    resource_manager_factory=options["resource_manager_factory"])
+    assert not state.ch1.output_enabled and state.ch2.output_enabled
+    with pytest.raises(WavegenError):
+        visa.set_output(state.resource_name, "on", channel=1,
+                        resource_manager_factory=options["resource_manager_factory"])
+    run("output", channel="all", enabled=False)
+
+
+def test_group_on_rejects_inconsistent_topology(joint):
+    state, _, run = joint
+    state.ch1.combine_source, state.ch2.combine_source = "CH2", "CH1"
+    with pytest.raises(WaveformVerificationError):
+        run("output", channel="all", enabled=True)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+@pytest.mark.parametrize("channel", [1, 2])
+def test_tracking_rejects_volatile_memory(joint, channel):
+    state, _, run = joint
+    state.channels[channel].arbitrary_points["existing"] = 16
+    with pytest.raises(WaveformParameterError):
+        run("configure-tracking", mode="on")
+    assert state.tracking == "OFF"
+    assert state.channels[channel].arbitrary_points == {"existing": 16}
+    assert not state.channels[3-channel].arbitrary_points
+
+
+def test_coupled_frequency_preserves_pm_frequency_ratio(joint):
+    state, options, run = joint
+    visa.configure_sine(frequency_hz=100, amplitude_vpp=0.1, channel=2, **options)
+    visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                        pm=visa.PMConfig(deviation_deg=30, source="ch2"), **options)
+    with pytest.raises(WaveformParameterError):
+        run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
+    assert not state.frequency_coupling
+    assert state.ch1.frequency_hz == 10000 and state.ch2.frequency_hz == 100
+    run("configure-frequency-coupling", state="on", mode="offset", offset_hz=-9900)
+    with pytest.raises(WaveformParameterError):
+        run("update-coupled-frequency", channel=2, frequency_hz=1000)
+    assert state.frequency_coupling
+    assert state.ch1.frequency_hz == 10000 and state.ch2.frequency_hz == 100
+
+
+@pytest.mark.parametrize("waveform, settings, ignored", [
+    ("square", {"frequency_hz": 1000, "duty_cycle_percent": 30}, "SOURce1:FUNCtion SQUare"),
+    ("square", {"frequency_hz": 1000, "duty_cycle_percent": 30}, "SOURce1:FUNCtion:SQUare:DCYCle 30"),
+    ("prbs", {"bit_rate_bps": 1000, "pattern": "PN23"}, "SOURce1:FUNCtion:PRBS:BRATe 1000"),
+    ("prbs", {"bit_rate_bps": 1000, "pattern": "PN23"}, "SOURce1:FUNCtion:PRBS:DATA PN23"),
+])
+def test_tracking_rejects_ignored_waveform_write(waveform, settings, ignored):
+    state = Simulated33521BState(model_id=MODEL)
+
+    class FaultyResource(SimulatedResource):
+        def write(self, command):
+            if command != ignored:
+                super().write(command)
+
+    class FaultyManager(SimulatedResourceManager):
+        def open_resource(self, _resource_name):
+            return FaultyResource(state)
+
+    def run(action, **arguments):
+        return run_dual_channel(action, arguments, resource=state.resource_name,
+                                expected_model_id=MODEL,
+                                support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+                                resource_manager_factory=lambda _: FaultyManager(state))
+
+    run("configure-tracking", mode="on")
+    with pytest.raises(WaveformVerificationError):
+        run("configure-tracked-waveform", waveform=waveform,
+            arguments={"amplitude_vpp": 0.1, **settings})
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+
+def test_dual_status_rejects_unknown_polarity():
+    state = Simulated33521BState(model_id=MODEL)
+
+    class FaultyResource(SimulatedResource):
+        def query(self, command):
+            if command == "OUTPut2:POLarity?":
+                return "UNKNOWN"
+            return super().query(command)
+
+    class FaultyManager(SimulatedResourceManager):
+        def open_resource(self, _resource_name):
+            return FaultyResource(state)
+
+    with pytest.raises(WaveformVerificationError):
+        run_dual_channel("dual-channel-status", {}, resource=state.resource_name,
+                         expected_model_id=MODEL, support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+                         resource_manager_factory=lambda _: FaultyManager(state))
+
+
+def test_voltage_coupling_copies_units_load_and_range_with_frequency_coupling(joint):
+    state, _, run = joint
+    state.ch1.output_load = "high-z"
+    state.ch1.voltage_unit = "VRMS"
+    state.ch1.autorange_enabled = False
+    run("configure-frequency-coupling", state="on", mode="ratio", ratio=2)
+    result = run("configure-voltage-coupling", state="on")
+    assert result["frequency_coupling"]["enabled"]
+    for ch in ("1", "2"):
+        actual = result["channel_status"][ch]
+        assert actual["load"] == "high-z"
+        assert actual["amplitude_unit"] == "VRMS"
+        assert actual["autorange_enabled"] is False
+    result = run("update-coupled-voltage", amplitude_vpp=0.2, offset_v=0.05)
+    assert result["voltage_coupling"] and result["frequency_coupling"]["enabled"]
+    assert result["channel_status"]["2"]["amplitude_unit"] == "VPP"
+
+
+def test_combine_rejects_excessive_output(joint):
+    state, options, run = joint
+    for ch in (1, 2):
+        visa.configure_sine(frequency_hz=1000, amplitude_vpp=6, channel=ch, **options)
+    with pytest.raises(WaveformParameterError):
+        run("configure-combine", channel=1, source="ch2")
+    assert state.ch1.combine_source == "NONE"
+
+
+def test_group_on_readback_failure_cleans_both_outputs():
+    state = Simulated33521BState(model_id=MODEL)
+
+    class FaultyResource(SimulatedResource):
+        def query(self, command):
+            if command == "OUTPut2?" and state.ch2.output_enabled:
+                return "UNKNOWN"
+            return super().query(command)
+
+    class FaultyManager(SimulatedResourceManager):
+        def open_resource(self, _resource_name):
+            return FaultyResource(state)
+
+    with pytest.raises(WaveformVerificationError):
+        run_dual_channel("output", {"channel": "all", "enabled": True},
+                         resource=state.resource_name, expected_model_id=MODEL,
+                         support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+                         resource_manager_factory=lambda _: FaultyManager(state))
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+
+def test_tracking_rejects_modulated_envelope_above_other_channel_limit(joint):
+    state, _, run = joint
+    run("configure-tracking", mode="on")
+    state.ch2.voltage_limit_enabled = True
+    state.ch2.voltage_limit_low, state.ch2.voltage_limit_high = -0.2, 0.2
+    with pytest.raises(WaveformParameterError):
+        run("configure-tracked-waveform", waveform="sine", arguments={
+            "frequency_hz": 1000, "amplitude_vpp": 0.3,
+            "am": {"modulation_frequency_hz": 100, "depth_percent": 100},
+        })
+    assert state.ch1.amplitude_vpp == state.ch2.amplitude_vpp == 0.1
+    assert not state.ch1.am_enabled and not state.ch2.am_enabled

@@ -637,6 +637,24 @@ function Assert-SoftwareSequenceResult {
         (@($Payload.cleanup.confirmed_off_channels) -join ',') -cne $expectedCleanupChannel) {
         throw 'Software sequence did not complete in order with confirmed safe cleanup.'
     }
+    if ($Intent -is [System.Collections.IDictionary] -and $Intent.Contains('joint_checks')) {
+        foreach ($check in $Intent.joint_checks) {
+            $actual = $Payload.results[$check.index]
+            foreach ($field in $check.path) {
+                if ($null -eq $actual -or $null -eq $actual.PSObject.Properties[$field]) {
+                    throw "Missing joint sequence readback: $($check.path -join '.')."
+                }
+                $actual = $actual.PSObject.Properties[$field].Value
+            }
+            if ($check.value -is [double] -or $check.value -is [int]) {
+                if ($null -eq $actual -or [Math]::Abs([double]$actual - [double]$check.value) -gt 0.00000001) {
+                    throw "Joint sequence numeric readback mismatch: $($check.path -join '.')."
+                }
+            } elseif ($null -eq $actual -or $actual -cne $check.value) {
+                throw "Joint sequence readback mismatch: $($check.path -join '.')."
+            }
+        }
+    }
     if ($Intent.upload_count -gt 0) {
         $upload = $Payload.results[0]
         $native = $Payload.results[2]
@@ -817,7 +835,70 @@ function Get-FullValidationInventory {
         }
         $step = New-Step $args $Readback
         $intent = Get-SoftwareSequenceIntent $document
-        if ($Dual) { $intent['channels'] = @(1, 2) }
+        if ($Dual) {
+            $intent['channels'] = @(1, 2)
+            $checks = [System.Collections.Generic.List[object]]::new()
+            function Add-JointCheck {
+                param([int]$Index, [string[]]$Path, $Value)
+                $checks.Add(@{ index=$Index; path=$Path; value=$Value })
+            }
+            $statusIndices = @(for ($i=0; $i -lt $Actions.Count; $i++) {
+                $action = $Actions[$i]
+                if ($action.action -eq 'output') {
+                    $expected = if ($action.arguments.enabled) { 'on' } else { 'off' }
+                    foreach ($ch in @('1','2')) { Add-JointCheck $i @('output_states',$ch) $expected }
+                } elseif ($action.action -eq 'phase-sync') {
+                    Add-JointCheck $i @('phase_settings_preserved') $true
+                } elseif ($action.action -eq 'dual-channel-status') {
+                    foreach ($ch in @('1','2')) { Add-JointCheck $i @('channel_status',$ch,'output_state') 'off' }
+                    $i
+                } elseif ($action.action -eq 'configure-frequency-coupling') {
+                    Add-JointCheck $i @('frequency_coupling','enabled') ($action.arguments.state -eq 'on')
+                } elseif ($action.action -eq 'configure-voltage-coupling') {
+                    Add-JointCheck $i @('voltage_coupling') ($action.arguments.state -eq 'on')
+                } elseif ($action.action -eq 'configure-tracking') {
+                    $mode = if ($action.arguments.mode -eq 'invert') { 'inv' } else { $action.arguments.mode }
+                    foreach ($ch in @('1','2')) { Add-JointCheck $i @('channel_status',$ch,'tracking') $mode }
+                } elseif ($action.action -eq 'configure-combine') {
+                    Add-JointCheck $i @('channel_status',([string]$action.arguments.channel),'combine_source') $action.arguments.source
+                } elseif ($action.action -eq 'readback-advanced') {
+                    Add-JointCheck $i @('settings','source') "ch$(3 - $action.arguments.channel)"
+                }
+            })
+            if ($Kind -eq 'phase-output') {
+                Add-JointCheck $statusIndices[0] @('channel_status','1','phase_deg') 0
+                Add-JointCheck $statusIndices[0] @('channel_status','2','phase_deg') 90
+            } elseif ($Kind -eq 'frequency-ratio-offset') {
+                Add-JointCheck $statusIndices[0] @('frequency_coupling','enabled') $true
+                Add-JointCheck $statusIndices[0] @('frequency_coupling','mode') 'ratio'
+                Add-JointCheck $statusIndices[0] @('channel_status','1','frequency_hz') 2000
+                Add-JointCheck $statusIndices[0] @('channel_status','2','frequency_hz') 4000
+                Add-JointCheck $statusIndices[1] @('frequency_coupling','mode') 'offset'
+                Add-JointCheck $statusIndices[1] @('channel_status','1','frequency_hz') 1500
+                Add-JointCheck $statusIndices[1] @('channel_status','2','frequency_hz') 2000
+            } elseif ($Kind -eq 'voltage-coupling' -or $Kind -like 'tracking-*') {
+                foreach ($ch in @('1','2')) {
+                    Add-JointCheck $statusIndices[0] @('channel_status',$ch,'amplitude_vpp') 0.2
+                    Add-JointCheck $statusIndices[0] @('channel_status',$ch,'offset_v') 0.05
+                }
+                if ($Kind -eq 'voltage-coupling') {
+                    Add-JointCheck $statusIndices[0] @('voltage_coupling') $true
+                } else {
+                    $mode = if ($Kind -eq 'tracking-invert') { 'inv' } else { 'on' }
+                    foreach ($ch in @('1','2')) {
+                        Add-JointCheck $statusIndices[0] @('channel_status',$ch,'tracking') $mode
+                        Add-JointCheck $statusIndices[0] @('channel_status',$ch,'frequency_hz') 2000
+                    }
+                    Add-JointCheck $statusIndices[0] @('channel_status','1','polarity') 'NORM'
+                    $polarity = if ($Kind -eq 'tracking-invert') { 'INV' } else { 'NORM' }
+                    Add-JointCheck $statusIndices[0] @('channel_status','2','polarity') $polarity
+                }
+            } elseif ($Kind -like 'combine-ch*') {
+                $receiver = $Kind.Substring($Kind.Length - 1)
+                Add-JointCheck $statusIndices[0] @('channel_status',$receiver,'combine_source') "ch$(3 - [int]$receiver)"
+            }
+            $intent['joint_checks'] = @($checks.ToArray())
+        }
         $step | Add-Member -NotePropertyName sequence_intent -NotePropertyValue $intent
         $recipe = [pscustomobject]@{
             name = "ch$Channel/$name"; family = $Family
@@ -855,11 +936,11 @@ function Get-FullValidationInventory {
             New-SequenceCase 1 'frequency-ratio-offset' @($base + @(
                 (Joint-Step 'configure-frequency-coupling' @{state='on';mode='ratio';ratio=2;reference_channel=1}),
                 (Joint-Step 'update-coupled-frequency' @{channel=2;frequency_hz=4000}),
-                $status, (Joint-Step 'configure-frequency-coupling' @{state='off'}),
+                $on,$wait,$off,$status, (Joint-Step 'configure-frequency-coupling' @{state='off'}),
                 (Joint-Step 'configure-frequency-coupling' @{state='on';mode='offset';offset_hz=500;reference_channel=1}),
                 (Joint-Step 'update-coupled-frequency' @{channel=1;frequency_hz=1500}),
-                $status, (Joint-Step 'configure-frequency-coupling' @{state='off'})
-            )) @{} $null 'dual-channel' $true
+                $on,$wait,$off,$status, (Joint-Step 'configure-frequency-coupling' @{state='off'})
+            )) @{} @{seconds=6;expected='First CH1/CH2 show 2/4 kHz, then 1.5/2 kHz; both turn OFF after each pair.'} 'dual-channel' $true
             New-SequenceCase 1 'voltage-coupling' @($base + @(
                 (Joint-Step 'configure-voltage-coupling' @{state='on'}),
                 (Joint-Step 'update-coupled-voltage' @{channel=2;amplitude_vpp=0.2;offset_v=0.05}),

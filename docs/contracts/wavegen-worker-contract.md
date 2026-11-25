@@ -310,7 +310,7 @@ For AM, FM, PM, PWM and Sum objects, optional `source` defaults to
 `"internal"`. With `"ch1"` or `"ch2"`, omit `modulation_frequency_hz` and
 `shape`, retain the required depth/deviation/amplitude, and use the other
 channel. This is not available in Worker Live. Both affected outputs must
-be OFF for joint configuration or coupled updates. Group output results
+be OFF for joint configuration or coupled updates. Tracking rejects active Arbitrary or List waveform settings and nonempty volatile Arbitrary catalogs on either channel. Coupled frequency changes require CW frequency mode and valid resulting modulation and pulse timing. Group output results
 contain `output_states` keyed by string channel number; joint status and
 topology configuration return `channel_status`, `frequency_coupling` and
 `voltage_coupling`. A dry-run describes commands and intent, not measured

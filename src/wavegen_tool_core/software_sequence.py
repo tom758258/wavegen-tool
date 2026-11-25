@@ -652,7 +652,16 @@ def run_software_sequence(
 
         def preflight(session: visa.VisaSession, context: visa.IdentificationResult) -> None:
             if controlled_channels and not dual_writes:
-                visa._check_independent_channel_guard(session, capabilities, context)
+                # OFF-only sequences retain the pre-existing coupling/tracking
+                # guard, without the new dependency restriction on other writes.
+                check_dependencies = any(
+                    step.action in _CHANNEL_WRITE_ACTIONS and not (
+                        step.action == "output" and not step.arguments["enabled"]
+                    ) for step in sequence.steps
+                )
+                visa._check_independent_channel_guard(
+                    session, capabilities, context, check_cross_dependencies=check_dependencies,
+                )
             if capabilities.channel_count > 1 and any(
                 step.action in _PLAYBACK_ACTIONS for step in sequence.steps
             ):

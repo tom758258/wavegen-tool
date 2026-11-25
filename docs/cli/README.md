@@ -1012,9 +1012,13 @@ explicit and sequential at the command level; it does not guarantee simultaneous
 hardware output edges. Configuration and coupled updates require both main
 outputs confirmed OFF. Group OFF always attempts both outputs and verifies
 both; a partial ON failure attempts both OFF. Conflicting settings are
-rejected rather than implicitly released. Tracking copies the reference
-channel settings, including loaded Arbitrary memory, and may change the Sync
-source; inverted tracking preserves the DC offset. Voltage coupling maintains
+rejected rather than implicitly released. Native tracking copies reference
+channel settings (including frequency list settings and loaded Arbitrary
+memory) and may change the Sync source. To avoid unsupported memory changes,
+the tool rejects active Arbitrary or List waveform settings and requires empty
+volatile Arbitrary catalogs on both channels, when supported. Inverted tracking
+preserves the DC offset. Coupled frequency changes require CW frequency mode
+and valid resulting modulation, duty cycle, pulse and Burst timing. Voltage coupling maintains
 amplitude, offset, range, load and units. Combine adds the source signal to
 the receiver; the source's DC offset is not added.
 
@@ -1035,7 +1039,9 @@ wavegen-tool output --model keysight-33512b --simulate --channel all --state off
 Sequence and Worker arguments are defined in the
 [Worker contract](../contracts/wavegen-worker-contract.md#dual-channel-arguments).
 Sequence cleanup turns affected outputs OFF and leaves topology configured.
-Release topology explicitly before returning to independent writes.
+Release topology explicitly before returning to independent configuration or
+output-on writes. Selected-channel OFF retains the original coupling/tracking
+guard without the additional Combine/other-channel modulation guard.
 
 ## Optional Advanced Mode Readback
 

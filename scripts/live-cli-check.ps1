@@ -684,7 +684,12 @@ function Invoke-FullLiveCases {
             }
             Add-LiveCase -Cases $cases -Name $recipe.name -Evidence $evidence `
                 -Status $(if ($reasons.Count) { 'FAIL' } else { 'PASS' }) -FailureReasons $reasons
-            if ($reasons.Count) { $CanRun = $false }
+            if ($reasons.Count) {
+                $CanRun = $false
+                if ($dualRecipe) {
+                    Write-Warning 'Dual-channel case failed. Later cases are not executed; topology may remain configured. Confirm both outputs OFF before explicitly releasing topology.'
+                }
+            }
         }
     } finally {
         # Recheck unconfirmed main outputs before global Sync (channel 0).
