@@ -573,9 +573,44 @@ def _status_topology(status):
     )
 
 
+def _verify_topology_transition(before, after, plan):
+    frequency, voltage, tracking, combine = before
+    action = plan["action"]
+    if action == "configure-frequency-coupling":
+        frequency = plan["state"] == "on"
+    elif action == "configure-voltage-coupling":
+        voltage = plan["state"] == "on"
+    elif action == "configure-tracking":
+        wanted = {"off": "OFF", "on": "ON", "invert": "INV"}[plan["tracking"]]
+        tracking = [wanted, wanted]
+    elif action == "configure-combine":
+        combine = list(combine)
+        combine[plan["channel"] - 1] = plan["source"].upper()
+    for actual, expected, label in zip(
+        after, (frequency, voltage, tracking, combine),
+        ("Frequency coupling", "Voltage coupling", "Tracking", "Combine"), strict=True,
+    ):
+        _equal(actual, expected, label)
+
+
+def _check_voltage_relation(status):
+    first, second = (status["channel_status"][str(ch)] for ch in (1, 2))
+    for field in ("amplitude_vpp", "offset_v", "load", "amplitude_unit", "autorange_enabled"):
+        _equal(first[field], second[field], "Coupled " + field)
+
+
 def _require_status_off(status, channels):
     for ch in channels:
         _equal(status["channel_status"][str(ch)]["output_state"], "off", f"Channel {ch} status")
+
+
+def _read_frequency_coupling_setting(session, channel=1):
+    mode = _query(session, f"SOURce1:{_FREQ}:MODE?")
+    if mode in {"RAT", "RATIO"}:
+        return "ratio", _numeric(session, f"SOURce{channel}:{_FREQ}:RATio?")
+    if mode in {"OFFS", "OFFSET"}:
+        return "offset", _numeric(session, f"SOURce{channel}:{_FREQ}:OFFSet?")
+    raise WaveformVerificationError("Unknown frequency coupling mode.")
 
 
 def _check_frequency_setting(mode, value, context):
@@ -740,13 +775,11 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             status = _status(session)
             _require_status_off(status, channels)
             _equal(_status_topology(status), topology, "Group output topology")
-            first, second = (status["channel_status"][str(ch)] for ch in (1, 2))
             if frequency:
                 values = _check_frequency_relation(status, context)
                 _check_coupled_frequencies(session, values, context)
             if voltage:
-                for field in ("amplitude_vpp", "offset_v", "load", "amplitude_unit", "autorange_enabled"):
-                    _equal(first[field], second[field], "Coupled " + field)
+                _check_voltage_relation(status)
             if tracking[0] != "OFF":
                 _check_tracking_memory(session, context)
                 _verify_tracking_pair(session, context, status, tracking[0] in {"INV", "INVERTED"})
@@ -821,15 +854,7 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             raise WaveformParameterError("Frequency coupling must be active without tracking.")
         ch = plan["channel"]
         val = plan["frequency_hz"]
-        mode = _query(session, f"SOURce1:{_FREQ}:MODE?")
-        if mode in {"RAT", "RATIO"}:
-            mode = "ratio"
-            value = _numeric(session, f"SOURce{ch}:{_FREQ}:RATio?")
-        elif mode in {"OFFS", "OFFSET"}:
-            mode = "offset"
-            value = _numeric(session, f"SOURce{ch}:{_FREQ}:OFFSet?")
-        else:
-            raise WaveformVerificationError("Unknown frequency coupling mode.")
+        mode, value = _read_frequency_coupling_setting(session, ch)
         _check_frequency_setting(mode, value, context)
         other = val * value if mode == "ratio" else val + value
         expected_frequency = {ch: val, 3-ch: other}
@@ -909,6 +934,10 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             for ch in (1, 2):
                 _check_levels(session, ch, wave.voltage_v, wave.voltage_v, load=load)
 
+    if frequency and action not in {"configure-frequency-coupling", "update-coupled-frequency"}:
+        # Unrelated topology writes must preserve the active relation, not
+        # merely leave some valid frequency coupling enabled.
+        expected_coupling = _read_frequency_coupling_setting(session)
     if expected_frequency:
         _check_coupled_frequencies(session, expected_frequency, context)
     for command in commands:
@@ -928,41 +957,29 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
     _require_off(session, channels)
     result = _status(session)
     _require_status_off(result, channels)
+    actual_topology = _status_topology(result)
+    _verify_topology_transition((frequency, voltage, tracking, combine), actual_topology, plan)
     if not releasing:
-        _check_topology(session, _status_topology(result))
-        if result["frequency_coupling"]["enabled"]:
+        _check_topology(session, actual_topology)
+        if actual_topology[0]:
             _check_frequency_relation(result, context)
+        if actual_topology[1]:
+            _check_voltage_relation(result)
     if expected_coupling is not None:
         mode, value = expected_coupling
         settings = result["frequency_coupling"]
         _equal(settings["mode"], mode, "Coupling mode")
         _equal(settings["ratio" if mode == "ratio" else "offset_hz"], value, "Coupling setting")
-    if action == "configure-frequency-coupling":
-        _equal(result["frequency_coupling"]["enabled"], plan["state"] == "on", "Frequency coupling")
-    elif action == "configure-voltage-coupling":
-        _equal(result["voltage_coupling"], plan["state"] == "on", "Voltage coupling")
-        if plan["state"] == "on":
-            for field in ("amplitude_vpp", "offset_v", "load", "amplitude_unit", "autorange_enabled"):
-                _equal(result["channel_status"]["1"][field], result["channel_status"]["2"][field], field)
-    elif action == "configure-tracking":
-        actual = _status_topology(result)[2]
-        wanted = {"off": "OFF", "on": "ON", "invert": "INV"}[plan["tracking"]]
-        _equal(actual, [wanted, wanted], "Tracking")
-        if wanted != "OFF":
-            settings = _verify_tracking_pair(session, context, result, wanted == "INV")
-            _verify_tracking_settings(settings[plan["reference_channel"]], tracking_reference_settings)
-            reference = result["channel_status"][str(plan["reference_channel"])]
-            _equal(_function_name(reference["function"]), _function_name(tracking_reference["function"]),
-                   "Tracking reference function")
-            for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load",
-                          "amplitude_unit", "autorange_enabled", "polarity"):
-                _equal(reference[field], tracking_reference[field], "Tracking reference " + field)
-    elif action == "configure-combine":
-        _equal(result["channel_status"][str(plan["channel"])]["combine_source"], plan["source"], "Combine")
-    elif action == "update-coupled-frequency":
-        _equal(result["frequency_coupling"]["enabled"], True, "Frequency coupling")
+    if action == "configure-tracking" and plan["tracking"] != "off":
+        settings = _verify_tracking_pair(session, context, result, plan["tracking"] == "invert")
+        _verify_tracking_settings(settings[plan["reference_channel"]], tracking_reference_settings)
+        reference = result["channel_status"][str(plan["reference_channel"])]
+        _equal(_function_name(reference["function"]), _function_name(tracking_reference["function"]),
+               "Tracking reference function")
+        for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load",
+                      "amplitude_unit", "autorange_enabled", "polarity"):
+            _equal(reference[field], tracking_reference[field], "Tracking reference " + field)
     elif action == "update-coupled-voltage":
-        _equal(result["voltage_coupling"], True, "Voltage coupling")
         for ch in (1, 2):
             state = result["channel_status"][str(ch)]
             _equal(state["amplitude_vpp"], plan["amplitude_vpp"], "Coupled amplitude")
@@ -970,8 +987,6 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             _equal(state["amplitude_unit"], "VPP", "Coupled amplitude unit")
     elif action == "configure-tracked-waveform":
         _verify_tracking_pair(session, context, result, tracking[0] in {"INV", "INVERTED"})
-        actual_tracking = [result["channel_status"][str(ch)]["tracking"].upper().replace("INVERTED", "INV") for ch in (1, 2)]
-        _equal(actual_tracking, [mode.replace("INVERTED", "INV") for mode in tracking], "Tracking state")
         wave = _tracked_plan(context.identity.canonical_model_id, arguments)
         for ch in (1, 2):
             actual = result["channel_status"][str(ch)]

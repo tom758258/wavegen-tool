@@ -11,7 +11,7 @@ from wavegen_tool_core.identity import SUPPORT_POLICY_MODE_VALIDATION
 from wavegen_tool_core.simulator import (
     SimulatedResource, SimulatedResourceManager, SimulatedResourceManagerFactory,
 )
-from wavegen_tool_core.software_sequence import run_software_sequence
+from wavegen_tool_core.software_sequence import SoftwareSequenceError, run_software_sequence
 
 
 MODEL = "keysight-33512b"
@@ -1116,3 +1116,104 @@ def test_joint_configuration_rejects_conflicting_final_topology(joint, monkeypat
     # An explicit release must still be possible, including from a conflict.
     run("configure-combine", channel=1, source="none")
     assert state.ch1.combine_source == "NONE"
+
+
+@pytest.mark.parametrize("inject_fault", [False, True])
+@pytest.mark.parametrize("initial,action,arguments,command,attribute,replacement", [
+    (("voltage",), "configure-frequency-coupling", {"state": "on", "mode": "ratio", "ratio": 2},
+     "SOURce1:FREQuency:COUPle:STATe ON", "voltage_coupling", False),
+    (("frequency",), "configure-voltage-coupling", {"state": "on"},
+     "SOURce1:VOLTage:COUPle:STATe ON", "frequency_coupling", False),
+    (("frequency", "voltage"), "update-coupled-frequency", {"frequency_hz": 3000},
+     "SOURce1:FREQuency 3000", "voltage_coupling", False),
+    (("frequency", "voltage"), "update-coupled-voltage", {"amplitude_vpp": 0.2, "offset_v": 0.05},
+     "SOURce1:VOLTage:OFFSet 0.05", "frequency_coupling", False),
+    (("frequency", "voltage"), "configure-frequency-coupling", {"state": "off"},
+     "SOURce1:FREQuency:COUPle:STATe OFF", "voltage_coupling", False),
+    (("frequency", "voltage"), "configure-voltage-coupling", {"state": "off"},
+     "SOURce1:VOLTage:COUPle:STATe OFF", "frequency_coupling", False),
+    (("frequency",), "configure-combine", {"channel": 1, "source": "ch2"},
+     "SOURce1:COMBine:FEED CH2", "frequency_coupling", False),
+    (("frequency", "combine"), "configure-combine", {"channel": 1, "source": "none"},
+     "SOURce1:COMBine:FEED NONE", "frequency_coupling", False),
+    (("frequency", "tracking-conflict"), "configure-tracking", {"mode": "off"},
+     "SOURce1:TRACk OFF", "frequency_coupling", False),
+    (("frequency", "voltage"), "update-coupled-voltage", {"amplitude_vpp": 0.2, "offset_v": 0.05},
+     "SOURce1:VOLTage:OFFSet 0.05", "frequency_coupling_mode", "OFFS"),
+    (("frequency", "voltage"), "configure-voltage-coupling", {"state": "off"},
+     "SOURce1:VOLTage:COUPle:STATe OFF", "frequency_coupling_mode", "OFFS"),
+    (("frequency", "voltage"), "update-coupled-frequency", {"frequency_hz": 3000},
+     "SOURce1:FREQuency 3000", "output_load", "high-z"),
+])
+def test_joint_configuration_preserves_unrequested_topology(
+    joint, monkeypatch, inject_fault, initial, action, arguments, command, attribute, replacement,
+):
+    state, _, run = joint
+    if "frequency" in initial:
+        run("configure-frequency-coupling", state="on", mode="ratio", ratio=2)
+    if "voltage" in initial:
+        run("configure-voltage-coupling", state="on")
+    if "combine" in initial:
+        run("configure-combine", channel=1, source="ch2")
+    if "tracking-conflict" in initial:
+        # Explicit release must work even from a known conflicting topology.
+        state.tracking = "ON"
+    if attribute == "frequency_coupling_mode":
+        # The replacement relation is also valid for the existing frequencies.
+        state.frequency_coupling_offset = state.ch2.frequency_hz - state.ch1.frequency_hz
+    target = state.ch2 if attribute == "output_load" else state
+    original_value = getattr(target, attribute)
+    assert original_value != replacement
+    writes = []
+    write = SimulatedResource.write
+
+    def mutate_after_write(self, sent):
+        result = write(self, sent)
+        writes.append(sent)
+        if inject_fault and sent == command:
+            setattr(target, attribute, replacement)
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", mutate_after_write)
+    if inject_fault:
+        with pytest.raises(WaveformVerificationError) as caught:
+            run(action, **arguments)
+        assert caught.value.output_state == "off"
+        assert {"OUTPut1 OFF", "OUTPut2 OFF"}.issubset(writes)
+        assert getattr(target, attribute) == replacement
+    else:
+        result = run(action, **arguments)
+        assert result["readback_verified"]
+        assert getattr(target, attribute) == original_value
+    assert command in writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+def test_sequence_stops_on_unrequested_coupling_change(joint, monkeypatch):
+    state, options, _ = joint
+    write = SimulatedResource.write
+    writes = []
+
+    def lose_voltage_coupling(self, command):
+        result = write(self, command)
+        writes.append(command)
+        if command == "SOURce1:FREQuency:COUPle:STATe ON":
+            state.voltage_coupling = False
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", lose_voltage_coupling)
+    document = {"version": 1, "steps": [
+        {"action": "configure-voltage-coupling", "arguments": {"state": "on"}},
+        {"action": "configure-frequency-coupling", "arguments": {"state": "on", "mode": "ratio", "ratio": 2}},
+        {"action": "output", "arguments": {"channel": "all", "enabled": True}},
+    ]}
+    with pytest.raises(SoftwareSequenceError) as caught:
+        run_software_sequence(document, **options)
+    details = caught.value.details
+    assert details["failed_step"]["step"] == 2
+    assert details["completed_step_executions"] == 1
+    assert details["cleanup"]["confirmed_off_channels"] == [1, 2]
+    assert not details["cleanup"]["errors"]
+    assert "OUTPut1 ON" not in writes and "OUTPut2 ON" not in writes
+    assert state.frequency_coupling and not state.voltage_coupling
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled

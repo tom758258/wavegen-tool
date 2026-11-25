@@ -1012,7 +1012,12 @@ explicit and sequential at the command level; it does not guarantee simultaneous
 hardware output edges. Configuration and coupled updates require both main
 outputs confirmed OFF. Group OFF always attempts both outputs and verifies
 both; a partial ON failure attempts both OFF. Conflicting settings are
-rejected rather than implicitly released. Native tracking copies reference
+rejected rather than implicitly released. Joint configuration readback checks
+the requested topology change and preserves other coupling, tracking and
+Combine states, including the active frequency coupling relation when it is
+not being changed. Non-release configuration also checks any active voltage
+coupling relation. Explicit release remains available from a conflicting
+topology. Native tracking copies reference
 channel settings (including frequency list settings and loaded Arbitrary
 memory) and may change the Sync source. To avoid unsupported memory changes,
 the tool rejects active Arbitrary or List waveform settings and permits only an empty catalog or the default built-in EXP_RISE entry
