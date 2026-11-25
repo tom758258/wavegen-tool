@@ -110,7 +110,8 @@ def test_voltage_coupling_group_off_and_tracking(joint):
     assert result["readback_verified"]
     assert state.ch1.pulse_width_s == state.ch2.pulse_width_s == 0.0001
     assert state.ch1.pulse_edge_time_s == state.ch2.pulse_edge_time_s == pytest.approx(20e-9)
-    state.ch2.pulse_width_s = 0.00015
+    # A 5 ns mismatch passed the generic tolerance but not Pulse's 100 ps.
+    state.ch2.pulse_width_s = 0.000100005
     with pytest.raises(WaveformVerificationError):
         run("output", channel="all", enabled=True)
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
@@ -590,6 +591,99 @@ def test_tracking_rejects_ignored_waveform_write(waveform, settings, ignored):
                 arguments={"amplitude_vpp": 0.1, **settings})
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
 
+
+
+@pytest.mark.parametrize("advanced, edges, field, delta", [
+    ({}, {"edge_time_s": 20e-9}, "pulse_width_s", 5e-9),
+    ({"pwm": {"modulation_frequency_hz": 100, "deviation_s": 1e-6}},
+     {"edge_time_s": 20e-9}, "frequency_hz", 0.005),
+    ({"burst": {"mode": "counted", "count": 5, "trigger_source": "bus"}},
+     {"leading_edge_s": 20e-9, "trailing_edge_s": 30e-9}, "pulse_trailing_edge_s", 0.5e-9),
+    ({}, {"edge_time_s": 20e-9}, "pulse_trailing_edge_s", 0.5e-9),
+])
+def test_tracked_pulse_rejects_common_readback_error(joint, monkeypatch, advanced, edges, field, delta):
+    state, _, run = joint
+    run("configure-tracking", mode="on")
+    arguments = {"waveform": "pulse", "arguments": {
+        "frequency_hz": 1000, "amplitude_vpp": 0.1, "pulse_width_s": 100e-6,
+        **edges, **advanced,
+    }}
+    assert run("configure-tracked-waveform", **arguments)["readback_verified"]
+    last_write = run_dual_channel("configure-tracked-waveform", arguments, model=MODEL)["commands"][-1]
+    write = SimulatedResource.write
+
+    def change_both_after_configuration(self, command):
+        result = write(self, command)
+        if command == last_write:
+            for channel in (state.ch1, state.ch2):
+                setattr(channel, field, getattr(channel, field) + delta)
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", change_both_after_configuration)
+    with pytest.raises(WaveformVerificationError):
+        run("configure-tracked-waveform", **arguments)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert state.tracking == "ON"
+
+
+def test_tracking_activation_rejects_small_pulse_copy_error(joint, monkeypatch):
+    state, options, run = joint
+    visa.configure_pulse(frequency_hz=1000, amplitude_vpp=0.1,
+                         pulse_width_s=100e-6, edge_time_s=20e-9, **options)
+    write = SimulatedResource.write
+
+    def change_copy(self, command):
+        result = write(self, command)
+        if command == "SOURce1:TRACk ON":
+            state.ch2.pulse_width_s += 5e-9
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", change_copy)
+    with pytest.raises(WaveformVerificationError):
+        run("configure-tracking", mode="on")
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    run("configure-tracking", mode="off")
+    assert state.tracking == "OFF"
+
+
+@pytest.mark.parametrize("mode, fault", [
+    ("on", None), ("invert", None), ("on", "source"), ("invert", "enabled"),
+    ("on", "off-ignored"),
+])
+def test_tracking_verifies_sync_side_effect(joint, monkeypatch, mode, fault):
+    state, options, run = joint
+    assert state.sync_source_channel == 1 and not state.sync_enabled
+    write = SimulatedResource.write
+    writes = []
+
+    def change_sync(self, command):
+        writes.append(command)
+        if fault == "off-ignored" and command == "OUTPut:SYNC OFF":
+            return None
+        result = write(self, command)
+        if command in {"SOURce2:TRACk ON", "SOURce2:TRACk INVerted"}:
+            if fault == "source":
+                state.sync_source_channel = 1
+            elif fault in {"enabled", "off-ignored"}:
+                state.sync_enabled = True
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", change_sync)
+    if fault is None:
+        assert run("configure-tracking", mode=mode, reference_channel=2)["readback_verified"]
+        assert state.sync_source_channel == 2
+    else:
+        with pytest.raises(WaveformVerificationError) as caught:
+            run("configure-tracking", mode=mode, reference_channel=2)
+        assert {"OUTPut1 OFF", "OUTPut2 OFF"}.issubset(writes)
+        if fault == "off-ignored":
+            assert caught.value.cleanup_errors
+    assert state.sync_enabled == (fault == "off-ignored")
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    monkeypatch.setattr(SimulatedResource, "write", write)
+    assert visa.set_sync_output(state="off", **options).readback_verified
+    run("configure-tracking", mode="off")
+    assert state.tracking == "OFF"
 
 
 def test_dual_status_rejects_unknown_polarity():

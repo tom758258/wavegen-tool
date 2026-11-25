@@ -650,12 +650,32 @@ def _tracking_settings(session, context, channel, function):
     return fields, mode, advanced
 
 
-def _verify_tracking_settings(actual, expected):
+def _verify_tracked_pulse_value(field, actual, expected, context):
+    """Use the same timing and phase verification as independent Pulse."""
+    parser = (visa._parse_phase_verification_number if field == "phase_deg"
+              else visa._parse_pulse_verification_number)
+    try:
+        actual, expected = parser(str(actual)), parser(str(expected))
+    except ValueError as exc:
+        raise WaveformVerificationError(f"Invalid tracked Pulse {field} readback.") from exc
+    tolerance = {
+        "frequency_hz": visa.PULSE_FREQUENCY_ABS_TOLERANCE_HZ,
+        "phase_deg": 0.0,
+    }.get(field, visa.PULSE_TIMING_ABS_TOLERANCE_S)
+    visa._verify_pulse_readback(
+        field, expected, actual, rel_tolerance=0.0,
+        abs_tolerance=tolerance, context=context,
+    )
+
+
+def _verify_tracking_settings(actual, expected, context):
     fields, mode, advanced = actual
     wanted_fields, wanted_mode, wanted_advanced = expected
     _equal(fields.keys(), wanted_fields.keys(), "Tracked waveform fields")
     for suffix, value in wanted_fields.items():
-        if not visa._configuration_readback_matches(suffix, value, fields[suffix]):
+        if suffix.startswith("PULSe:"):
+            _verify_tracked_pulse_value(suffix, fields[suffix], value, context)
+        elif not visa._configuration_readback_matches(suffix, value, fields[suffix]):
             raise WaveformVerificationError(f"Tracked {suffix} readback did not match.")
     _equal(mode, wanted_mode, "Tracked advanced mode")
     _equal(advanced.keys(), wanted_advanced.keys(), "Tracked advanced settings")
@@ -667,7 +687,10 @@ def _verify_tracking_pair(session, context, result, inverted):
     first, second = (result["channel_status"][str(ch)] for ch in (1, 2))
     _equal(_function_name(first["function"]), _function_name(second["function"]), "Tracked function")
     for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load", "amplitude_unit", "autorange_enabled"):
-        _equal(first[field], second[field], "Tracked " + field)
+        if _function_name(first["function"]) == "pulse" and field in {"frequency_hz", "phase_deg"}:
+            _verify_tracked_pulse_value(field, second[field], first[field], context)
+        else:
+            _equal(first[field], second[field], "Tracked " + field)
     if any(state["polarity"] not in {"NORM", "INV"} for state in (first, second)):
         raise WaveformVerificationError("Unknown tracked output polarity.")
     if (first["polarity"] == second["polarity"]) == inverted:
@@ -676,7 +699,7 @@ def _verify_tracking_pair(session, context, result, inverted):
         ch: _tracking_settings(session, context, ch, result["channel_status"][str(ch)]["function"])
         for ch in (1, 2)
     }
-    _verify_tracking_settings(settings[2], settings[1])
+    _verify_tracking_settings(settings[2], settings[1], context)
     return settings
 
 
@@ -953,6 +976,18 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
                     visa._validate_pulse_edge_maximum(float(value), maximum, edge, context)
         mark_configuration_write()
         session.write(command)
+    if action == "configure-tracking" and plan["tracking"] != "off":
+        # Native tracking assigns Sync to the reference channel. Verify the
+        # connector is still OFF before accepting the new source.
+        try:
+            visa._verify_sync_reply(session, visa._SYNC_STATE_QUERY, visa._SYNC_STATE_REPLIES, "off")
+        except (WavegenError, KeyboardInterrupt) as error:
+            visa._attempt_sync_off(session, error)
+            raise
+        visa._verify_sync_reply(
+            session, "OUTPut:SYNC:SOURce?", {"CH1": "CH1", "CH2": "CH2"},
+            f"CH{plan['reference_channel']}",
+        )
     _error_free(session)
     _require_off(session, channels)
     result = _status(session)
@@ -972,13 +1007,16 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
         _equal(settings["ratio" if mode == "ratio" else "offset_hz"], value, "Coupling setting")
     if action == "configure-tracking" and plan["tracking"] != "off":
         settings = _verify_tracking_pair(session, context, result, plan["tracking"] == "invert")
-        _verify_tracking_settings(settings[plan["reference_channel"]], tracking_reference_settings)
+        _verify_tracking_settings(settings[plan["reference_channel"]], tracking_reference_settings, context)
         reference = result["channel_status"][str(plan["reference_channel"])]
         _equal(_function_name(reference["function"]), _function_name(tracking_reference["function"]),
                "Tracking reference function")
         for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load",
                       "amplitude_unit", "autorange_enabled", "polarity"):
-            _equal(reference[field], tracking_reference[field], "Tracking reference " + field)
+            if _function_name(reference["function"]) == "pulse" and field in {"frequency_hz", "phase_deg"}:
+                _verify_tracked_pulse_value(field, reference[field], tracking_reference[field], context)
+            else:
+                _equal(reference[field], tracking_reference[field], "Tracking reference " + field)
     elif action == "update-coupled-voltage":
         for ch in (1, 2):
             state = result["channel_status"][str(ch)]
@@ -986,7 +1024,7 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             _equal(state["offset_v"], plan["offset_v"], "Coupled offset")
             _equal(state["amplitude_unit"], "VPP", "Coupled amplitude unit")
     elif action == "configure-tracked-waveform":
-        _verify_tracking_pair(session, context, result, tracking[0] in {"INV", "INVERTED"})
+        settings = _verify_tracking_pair(session, context, result, tracking[0] in {"INV", "INVERTED"})
         wave = _tracked_plan(context.identity.canonical_model_id, arguments)
         for ch in (1, 2):
             actual = result["channel_status"][str(ch)]
@@ -994,27 +1032,37 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             for field in ("frequency_hz", "amplitude_vpp", "offset_v", "phase_deg", "load"):
                 expected = getattr(wave, field, None)
                 if expected is not None:
-                    _equal(actual[field], expected, f"CH{ch} tracked {field}")
+                    if plan["waveform"] == "pulse" and field in {"frequency_hz", "phase_deg"}:
+                        _verify_tracked_pulse_value(field, actual[field], expected, context)
+                    else:
+                        _equal(actual[field], expected, f"CH{ch} tracked {field}")
+            if plan["waveform"] == "pulse":
+                for suffix, field in (
+                    ("PULSe:WIDTh", "pulse_width_s"),
+                    ("PULSe:TRANsition:LEADing", "leading_edge_s"),
+                    ("PULSe:TRANsition:TRAiling", "trailing_edge_s"),
+                ):
+                    _verify_tracked_pulse_value(suffix, settings[ch][0][suffix], getattr(wave, field), context)
             if hasattr(wave, "voltage_v"):
                 _equal(actual["offset_v"], wave.voltage_v, f"CH{ch} tracked DC voltage")
-        # Check waveform-specific programmed values using the existing readback
-        # comparison, independent of the tracking state flag.
+        # Check other waveform-specific values with the existing generic
+        # readback; Pulse's width and both edges were verified above.
         selected = plan["channel"]
         fields = {}
-        for command in commands:
-            header, sep, value = command.partition(" ")
-            if sep and header.startswith(f"SOURce{selected}:FUNCtion:") and value not in {"MINimum", "MAXimum"}:
-                if header.endswith((":DCYCle", ":SYMMetry", ":WIDTh", ":BANDwidth", ":BRATe", ":DATA", ":TRANsition:BOTH", ":TRANsition:LEADing", ":TRANsition:TRAiling")):
-                    if header.endswith(":PULSe:TRANsition:BOTH"):
-                        header = header.removesuffix(":BOTH")
-                    fields[header] = value
+        if plan["waveform"] != "pulse":
+            for command in commands:
+                header, sep, value = command.partition(" ")
+                if sep and header.startswith(f"SOURce{selected}:FUNCtion:") and value not in {"MINimum", "MAXimum"}:
+                    if header.endswith((":DCYCle", ":SYMMetry", ":BANDwidth", ":BRATe", ":DATA", ":TRANsition:BOTH")):
+                        fields[header] = value
         original = tuple(command.replace(f"SOURce{selected}:", "SOURce1:").replace(
             f"TRIGger{selected}:", "TRIGger1:"
         ) for command in commands)
         for ch in (1, 2):
-            visa._verify_configuration_readback(session, context,
-                {key.replace(f"SOURce{selected}:", f"SOURce{ch}:"): value for key, value in fields.items()},
-                label="Tracked waveform")
+            if plan["waveform"] != "pulse":
+                visa._verify_configuration_readback(session, context,
+                    {key.replace(f"SOURce{selected}:", f"SOURce{ch}:"): value for key, value in fields.items()},
+                    label="Tracked waveform")
             if any(command.endswith(":STATe ON") for command in original):
                 visa._verify_advanced_mode_configuration(session, context, original, selected_channel=ch)
             for command in original:

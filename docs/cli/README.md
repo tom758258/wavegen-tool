@@ -1019,7 +1019,10 @@ not being changed. Non-release configuration also checks any active voltage
 coupling relation. Explicit release remains available from a conflicting
 topology. Native tracking copies reference
 channel settings (including frequency list settings and loaded Arbitrary
-memory) and may change the Sync source. To avoid unsupported memory changes,
+memory) and assigns the Sync source to the reference channel. Tracking
+activation verifies that source and that Sync remains OFF. Tracked Pulse
+readback uses the existing Pulse timing and phase checks on both channels.
+To avoid unsupported memory changes,
 the tool rejects active Arbitrary or List waveform settings and permits only an empty catalog or the default built-in EXP_RISE entry
 on both channels, when Arbitrary is supported. No memory is cleared automatically. Inverted tracking
 preserves the DC offset. Coupled frequency changes require CW frequency mode
