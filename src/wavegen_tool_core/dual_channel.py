@@ -249,14 +249,18 @@ def _modulation_source(session, channel, mode):
 
 
 def _active_other_source(session, channel):
-    sources = [
-        _modulation_source(session, channel, mode)
-        for mode in ("AM", "FM", "PM", "PWM", "SUM")
-        if _state(session, f"SOURce{channel}:{mode}:STATe?")
-    ]
-    if len(sources) > 1:
-        raise WaveformVerificationError("Conflicting modulation modes.")
-    return f"CH{3-channel}" in sources
+    def choice(header, allowed):
+        value = visa._canonical_readback_enum(_query(session, header + "?"))
+        if value not in allowed:
+            raise WaveformVerificationError(f"Unknown state for {header}.")
+        return value.lower()
+
+    mode = visa._select_active_advanced_mode(choice, _source(channel) + ":")
+    if mode in {"FSKey", "BPSK"}:
+        choice(f"SOURce{channel}:{mode}:SOURce", frozenset({"INTERNAL", "EXTERNAL"}))
+    return mode in {"AM", "FM", "PM", "PWM", "SUM"} and (
+        _modulation_source(session, channel, mode) == f"CH{3-channel}"
+    )
 
 
 def _check_topology(session, topology):
@@ -345,14 +349,20 @@ def _check_coupled_frequencies(session, values, context):
             source = _modulation_source(session, ch, "PM")
             if source == "EXTERNAL":
                 raise WaveformParameterError("Cannot validate externally modulated coupled frequency.")
-            modulation_frequency = (
-                _numeric(session, prefix + ":PM:INTernal:FREQuency?")
-                if source == "INTERNAL" else visa._other_channel_pm_source_frequency(
+            config = visa.PMConfig(
+                modulation_frequency_hz=(
+                    _numeric(session, prefix + ":PM:INTernal:FREQuency?") if source == "INTERNAL" else None
+                ),
+                deviation_deg=_numeric(session, prefix + ":PM:DEViation?"),
+                source="internal" if source == "INTERNAL" else source.lower(),
+            )
+            visa._prepare_pm(carrier, frequency, config, capabilities=caps)
+            if source != "INTERNAL":
+                modulation_frequency = visa._other_channel_pm_source_frequency(
                     session, context, 3-ch, frequency_hz=values.get(3-ch)
                 )
-            )
-            if modulation_frequency <= 0 or frequency <= 20 * modulation_frequency:
-                raise WaveformParameterError("PM carrier frequency must be greater than 20 times the modulation frequency.")
+                if frequency <= 20 * modulation_frequency:
+                    raise WaveformParameterError("PM carrier frequency must be greater than 20 times the modulation frequency.")
         if carrier == "square":
             if _state(session, prefix + ":FSKey:STATe?"):
                 duty_frequency = max(duty_frequency, _numeric(session, prefix + ":FSKey:FREQuency?"))
@@ -404,11 +414,8 @@ def _check_other_channel_frequency(session, context, ch):
             continue
         if _modulation_source(session, ch, mode) != f"CH{3-ch}":
             continue
-        if mode == "PM":
-            visa._verify_other_channel_pm_frequency(session, context, ch)
-        else:
-            # Reuse the existing current/proposed frequency and timing checks.
-            _check_coupled_frequencies(session, {ch: _numeric(session, prefix + ":FREQuency?")}, context)
+        # Reuse the current/proposed frequency, modulation and timing checks.
+        _check_coupled_frequencies(session, {ch: _numeric(session, prefix + ":FREQuency?")}, context)
 
 
 def _levels(session, ch):

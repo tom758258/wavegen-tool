@@ -8951,6 +8951,18 @@ class AdvancedModeReadbackResult:
     settings: dict[str, object]
 
 
+def _select_active_advanced_mode(choice, prefix: str) -> str:
+    """Read mutually exclusive mode flags using the caller's strict enum reader."""
+    modes = [
+        name for name in _ADVANCED_MODULATION_PREFIXES
+        if choice(prefix + name + ":STATe", frozenset({"ON", "OFF"})) == "on"
+    ]
+    frequency_mode = choice(prefix + "FREQuency:MODE", frozenset({"CW", "LIST", "SWEEP"}))
+    if len(modes) > 1 or (modes and frequency_mode != "cw"):
+        raise WaveformVerificationError("Advanced Mode instrument state is ambiguous.")
+    return modes[0] if modes else frequency_mode.upper()
+
+
 def _read_advanced_mode_session(
     session: VisaSession, context: IdentificationResult, channel: int,
 ) -> tuple[int, str, dict[str, object]]:
@@ -9011,27 +9023,15 @@ def _read_advanced_mode_session(
             )
         return value
 
-    modes = [
-        prefix_name
-        for prefix_name in _ADVANCED_MODULATION_PREFIXES
-        if choice(prefix + prefix_name + ":STATe", frozenset({"ON", "OFF"}))
-        == "on"
-    ]
-    frequency_mode = choice(
-        prefix + "FREQuency:MODE", frozenset({"CW", "LIST", "SWEEP"})
-    )
-    if len(modes) > 1 or (modes and frequency_mode != "cw"):
+    try:
+        active = _select_active_advanced_mode(choice, prefix)
+    except WaveformVerificationError as exc:
         raise StatusQueryError(
-            "Advanced Mode instrument state is ambiguous.",
-            backend=context.backend,
-            transport=context.transport,
+            str(exc), backend=context.backend, transport=context.transport,
             identity=context.identity,
-        )
-    active = modes[0] if modes else None
-    if active is None:
-        if frequency_mode == "cw":
-            return selected, "CW", fields
-        active = frequency_mode.upper()
+        ) from exc
+    if active == "CW":
+        return selected, "CW", fields
 
     if active in {"AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM"}:
         source_values = frozenset({"INTERNAL", "EXTERNAL"})
@@ -9514,30 +9514,37 @@ def _other_channel_pm_source_frequency(session, context, source, *, frequency_hz
     """Use the source's configured frequency range, not just a nominal carrier."""
     from .dual_channel import _function_name, _numeric, _query
 
+    def positive(value):
+        if not math.isfinite(value) or value <= 0:
+            raise WaveformVerificationError("Invalid other-channel PM source frequency readback.")
+        return value
+
     prefix = f"SOURce{source}:"
     waveform = _function_name(_query(session, prefix + "FUNCtion?"))
     if waveform == "dc":
         return 0.0
     if waveform == "noise":
-        return _numeric(session, prefix + "FUNCtion:NOISe:BANDwidth?")
+        return positive(_numeric(session, prefix + "FUNCtion:NOISe:BANDwidth?"))
     if waveform == "prbs":
-        return _numeric(session, prefix + "FUNCtion:PRBS:BRATe?")
+        return positive(_numeric(session, prefix + "FUNCtion:PRBS:BRATe?"))
     if waveform == "arbitrary":
-        return _numeric(session, prefix + "FUNCtion:ARBitrary:FREQuency?")
-    frequency = _numeric(session, prefix + "FREQuency?") if frequency_hz is None else frequency_hz
+        return positive(_numeric(session, prefix + "FUNCtion:ARBitrary:FREQuency?"))
+    frequency = positive(
+        _numeric(session, prefix + "FREQuency?") if frequency_hz is None else frequency_hz
+    )
     _, mode, settings = _read_advanced_mode_session(session, context, source)
     if mode == "SWEEP":
-        return max(settings["start_frequency_hz"], settings["stop_frequency_hz"])
+        return max(positive(settings["start_frequency_hz"]), positive(settings["stop_frequency_hz"]))
     if mode == "LIST":
-        return max(settings["frequencies_hz"])
+        return max(positive(value) for value in settings["frequencies_hz"])
     if settings.get("source") == "external" or mode in {"PM", "BPSK"}:
         raise WaveformParameterError("Cannot confirm the other-channel PM source frequency range.")
     if mode == "FM":
-        return frequency + settings["deviation_hz"]
+        return positive(frequency + positive(settings["deviation_hz"]))
     if mode == "FSK":
-        return max(frequency, settings["hop_frequency_hz"])
+        return max(frequency, positive(settings["hop_frequency_hz"]))
     if mode == "SUM":
-        frequency = max(frequency, settings.get("internal_frequency_hz", frequency))
+        frequency = max(frequency, positive(settings.get("internal_frequency_hz", frequency)))
     return frequency
 
 

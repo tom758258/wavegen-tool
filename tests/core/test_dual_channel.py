@@ -336,6 +336,127 @@ def test_coupled_frequency_preserves_pm_frequency_ratio(joint, monkeypatch):
     assert state.ch1.frequency_hz == 10000 and state.ch2.frequency_hz == 100
 
 
+@pytest.mark.parametrize("fault", ["FSKey:STATe", "BPSK:STATe", "BURSt:STATe", "FREQuency:MODE"])
+def test_group_on_rejects_conflicting_advanced_modes(joint, monkeypatch, fault):
+    state, options, run = joint
+    visa.configure_sine(frequency_hz=100, amplitude_vpp=0.1, channel=2, **options)
+    visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                        am=visa.AMConfig(depth_percent=40, source="ch2"), **options)
+    query = SimulatedResource.query
+    write = SimulatedResource.write
+    writes = []
+
+    def conflicting_mode(self, command):
+        if command == f"SOURce1:{fault}?":
+            return "SWE" if fault == "FREQuency:MODE" else "1"
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "query", conflicting_mode)
+        patch.setattr(SimulatedResource, "write", record)
+        with pytest.raises(visa.StatusQueryError):
+            visa.query_advanced_mode(**options)
+        with pytest.raises(WaveformVerificationError):
+            run("output", channel="all", enabled=True)
+        assert writes == []
+        assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    # Normal single AM still passes; the existing dual Burst test covers normal Burst.
+    run("output", channel="all", enabled=True)
+    run("output", channel="all", enabled=False)
+
+
+@pytest.mark.parametrize("reading", [-100, 0])
+def test_other_channel_pm_rejects_invalid_source_frequency(joint, monkeypatch, reading):
+    state, options, run = joint
+    visa.configure_sine(frequency_hz=100, amplitude_vpp=0.1, channel=2, **options)
+    carrier = dict(frequency_hz=10000, amplitude_vpp=0.1,
+                   pm=visa.PMConfig(deviation_deg=30, source="ch2"))
+    query = SimulatedResource.query
+    write = SimulatedResource.write
+    writes = []
+
+    def invalid_frequency(self, command):
+        if command == "SOURce2:FREQuency?":
+            return str(reading)
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "query", invalid_frequency)
+        patch.setattr(SimulatedResource, "write", record)
+        with pytest.raises(WaveformVerificationError):
+            visa.configure_sine(**carrier, **options)
+        assert writes == []
+    visa.configure_sine(**carrier, **options)
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "query", invalid_frequency)
+        patch.setattr(SimulatedResource, "write", record)
+        with pytest.raises(WaveformVerificationError):
+            run("output", channel="all", enabled=True)
+        assert writes == []
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    run("output", channel="all", enabled=True)
+    run("output", channel="all", enabled=False)
+
+
+@pytest.mark.parametrize("reading", [-1, 361])
+def test_joint_pm_rejects_invalid_deviation(joint, monkeypatch, reading):
+    state, options, run = joint
+    visa.configure_sine(frequency_hz=100, amplitude_vpp=0.1, channel=2, **options)
+    visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                        pm=visa.PMConfig(deviation_deg=30, source="ch2"), **options)
+    query = SimulatedResource.query
+    write = SimulatedResource.write
+    writes = []
+
+    def invalid_deviation(self, command):
+        if command == "SOURce1:PM:DEViation?":
+            return str(reading)
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "query", invalid_deviation)
+        patch.setattr(SimulatedResource, "write", record)
+        with pytest.raises(WaveformParameterError):
+            run("output", channel="all", enabled=True)
+        with pytest.raises(WaveformParameterError):
+            run("configure-frequency-coupling", state="on", mode="offset", offset_hz=-9900)
+        assert writes == []
+    run("configure-frequency-coupling", state="on", mode="offset", offset_hz=-9900)
+    with monkeypatch.context() as patch:
+        patch.setattr(SimulatedResource, "query", invalid_deviation)
+        patch.setattr(SimulatedResource, "write", record)
+        with pytest.raises(WaveformParameterError):
+            run("update-coupled-frequency", channel=1, frequency_hz=10001)
+        assert writes == []
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    run("output", channel="all", enabled=True)
+    run("output", channel="all", enabled=False)
+
+
+def test_other_channel_pm_allows_dc_source(joint):
+    state, options, run = joint
+    visa.configure_dc(voltage_v=0.1, channel=2, **options)
+    visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                        pm=visa.PMConfig(deviation_deg=30, source="ch2"), **options)
+    try:
+        assert run("output", channel="all", enabled=True)["output_states"] == {"1": "on", "2": "on"}
+    finally:
+        run("output", channel="all", enabled=False)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
 @pytest.mark.parametrize("kind,config,ignored", [
     ("am", visa.AMConfig(depth_percent=40, source="ch2"), "SOURce1:VOLTage 0.1"),
     ("fm", visa.FMConfig(deviation_hz=2000, source="ch2"), "SOURce1:FREQuency 10000"),
