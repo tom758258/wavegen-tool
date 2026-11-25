@@ -1444,4 +1444,3 @@ def test_tracked_waveform_rejects_shared_wrong_mode_or_unit(joint, monkeypatch, 
         run("configure-tracked-waveform", **arguments)
     assert state.tracking == "ON"
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
-
