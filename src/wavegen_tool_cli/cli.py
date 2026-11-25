@@ -4417,9 +4417,10 @@ def _am_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "am_enabled": True,
-        **({ "am_source": am.source } if am.source != "internal" else {}),
-        "am_frequency_hz": am.modulation_frequency_hz,
-        "am_shape": am.shape,
+        **({"am_source": am.source} if am.source != "internal" else {
+            "am_frequency_hz": am.modulation_frequency_hz,
+            "am_shape": am.shape,
+        }),
         "am_depth_percent": am.depth_percent,
         "am_type": am.am_type,
     }
@@ -4431,9 +4432,10 @@ def _fm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "fm_enabled": True,
-        **({ "fm_source": fm.source } if fm.source != "internal" else {}),
-        "fm_frequency_hz": fm.modulation_frequency_hz,
-        "fm_shape": fm.shape,
+        **({"fm_source": fm.source} if fm.source != "internal" else {
+            "fm_frequency_hz": fm.modulation_frequency_hz,
+            "fm_shape": fm.shape,
+        }),
         "fm_deviation_hz": fm.deviation_hz,
     }
 
@@ -4444,9 +4446,10 @@ def _pm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "pm_enabled": True,
-        **({ "pm_source": pm.source } if pm.source != "internal" else {}),
-        "pm_frequency_hz": pm.modulation_frequency_hz,
-        "pm_shape": pm.shape,
+        **({"pm_source": pm.source} if pm.source != "internal" else {
+            "pm_frequency_hz": pm.modulation_frequency_hz,
+            "pm_shape": pm.shape,
+        }),
         "pm_deviation_deg": pm.deviation_deg,
     }
 
@@ -4479,9 +4482,10 @@ def _pwm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "pwm_enabled": True,
-        **({ "pwm_source": pwm.source } if pwm.source != "internal" else {}),
-        "pwm_frequency_hz": pwm.modulation_frequency_hz,
-        "pwm_shape": pwm.shape,
+        **({"pwm_source": pwm.source} if pwm.source != "internal" else {
+            "pwm_frequency_hz": pwm.modulation_frequency_hz,
+            "pwm_shape": pwm.shape,
+        }),
         "pwm_deviation_s": pwm.deviation_s,
     }
 
@@ -4492,9 +4496,10 @@ def _sum_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "sum_enabled": True,
-        **({ "sum_source": sum_config.source } if sum_config.source != "internal" else {}),
-        "sum_frequency_hz": sum_config.modulation_frequency_hz,
-        "sum_shape": sum_config.shape,
+        **({"sum_source": sum_config.source} if sum_config.source != "internal" else {
+            "sum_frequency_hz": sum_config.modulation_frequency_hz,
+            "sum_shape": sum_config.shape,
+        }),
         "sum_amplitude_percent": sum_config.amplitude_percent,
     }
 
@@ -5546,8 +5551,10 @@ def _human_am_lines(result: Any) -> tuple[str, ...]:
         return ()
     return (
         f"AM type: {am.am_type}",
-        f"AM modulation shape: {am.shape}",
-        f"AM modulation frequency (Hz): {am.modulation_frequency_hz}",
+        *((f"AM modulation source: {am.source.upper()}",) if am.source != "internal" else (
+            f"AM modulation shape: {am.shape}",
+            f"AM modulation frequency (Hz): {am.modulation_frequency_hz}",
+        )),
         f"AM depth (percent): {am.depth_percent}",
     )
 
@@ -5557,8 +5564,10 @@ def _human_fm_lines(result: Any) -> tuple[str, ...]:
     if fm is None:
         return ()
     return (
-        f"FM modulation shape: {fm.shape}",
-        f"FM modulation frequency (Hz): {fm.modulation_frequency_hz}",
+        *((f"FM modulation source: {fm.source.upper()}",) if fm.source != "internal" else (
+            f"FM modulation shape: {fm.shape}",
+            f"FM modulation frequency (Hz): {fm.modulation_frequency_hz}",
+        )),
         f"FM deviation (Hz): {fm.deviation_hz}",
     )
 
@@ -5568,8 +5577,10 @@ def _human_pm_lines(result: Any) -> tuple[str, ...]:
     if pm is None:
         return ()
     return (
-        f"PM modulation shape: {pm.shape}",
-        f"PM modulation frequency (Hz): {pm.modulation_frequency_hz}",
+        *((f"PM modulation source: {pm.source.upper()}",) if pm.source != "internal" else (
+            f"PM modulation shape: {pm.shape}",
+            f"PM modulation frequency (Hz): {pm.modulation_frequency_hz}",
+        )),
         f"PM deviation (degrees): {pm.deviation_deg}",
     )
 
@@ -5599,8 +5610,10 @@ def _human_pwm_lines(result: Any) -> tuple[str, ...]:
     if pwm is None:
         return ()
     return (
-        f"PWM modulation shape: {pwm.shape}",
-        f"PWM modulation frequency (Hz): {pwm.modulation_frequency_hz}",
+        *((f"PWM modulation source: {pwm.source.upper()}",) if pwm.source != "internal" else (
+            f"PWM modulation shape: {pwm.shape}",
+            f"PWM modulation frequency (Hz): {pwm.modulation_frequency_hz}",
+        )),
         f"PWM width deviation (seconds): {pwm.deviation_s}",
     )
 
@@ -5610,8 +5623,10 @@ def _human_sum_lines(result: Any) -> tuple[str, ...]:
     if sum_config is None:
         return ()
     return (
-        f"Sum modulation shape: {sum_config.shape}",
-        f"Sum modulation frequency (Hz): {sum_config.modulation_frequency_hz}",
+        *((f"Sum modulation source: {sum_config.source.upper()}",) if sum_config.source != "internal" else (
+            f"Sum modulation shape: {sum_config.shape}",
+            f"Sum modulation frequency (Hz): {sum_config.modulation_frequency_hz}",
+        )),
         f"Sum amplitude (percent): {sum_config.amplitude_percent}",
     )
 

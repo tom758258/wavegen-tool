@@ -559,6 +559,15 @@ def _off_all(session):
             if isinstance(exc, KeyboardInterrupt):
                 interruption = exc
             failures.append(f"Channel {ch} OFF was not confirmed.")
+    # Even a successful OFF write/readback can leave a settings conflict in
+    # the instrument queue. Check it on every group cleanup path.
+    try:
+        _error_free(session)
+    except (Exception, KeyboardInterrupt) as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            interruption = exc
+        diagnostic = str(exc) if isinstance(exc, WavegenError) else "Error queue query failed."
+        failures.append(f"Group OFF: {diagnostic}")
     if interruption is not None:
         interruption.cleanup_errors = tuple(failures)
         raise interruption
@@ -575,7 +584,6 @@ def _apply(session, plan, arguments, context):
     if action == "output":
         if plan["requested_output_state"] == "off":
             _off_all(session)
-            _error_free(session)
             actual = _outputs(session)
             _equal(actual, {"1": "off", "2": "off"}, "Group output OFF")
             return {"output_states": actual, "output_state": "off"}
@@ -618,7 +626,7 @@ def _apply(session, plan, arguments, context):
             try:
                 _off_all(session)
             except WavegenError as cleanup:
-                error.attach_cleanup_errors(cleanup.cleanup_errors)
+                error.attach_cleanup_errors(error.cleanup_errors + cleanup.cleanup_errors)
             except KeyboardInterrupt as cleanup:
                 cleanup.cleanup_errors = (str(error), *getattr(cleanup, "cleanup_errors", ()))
                 raise

@@ -697,3 +697,29 @@ def test_dual_sequence_failure_or_cancel_preserves_topology_and_reports_off(
         assert any(error.get("cleanup_errors") for error in cleanup["errors"])
     assert state.frequency_coupling and not state.ch1.output_enabled
     assert state.ch2.output_enabled == off_failed
+
+
+
+def test_failed_joint_configuration_without_output_on_still_cleans_both_channels(fake_instrument, monkeypatch):
+    state, writes, _ = fake_instrument
+    original_write = SimulatedResource.write
+
+    def unexpected_output(self, command):
+        result = original_write(self, command)
+        if command == "SOURce1:FREQuency:COUPle:STATe ON":
+            state.ch2.output_enabled = True
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", unexpected_output)
+    with pytest.raises(SoftwareSequenceError) as caught:
+        run_software_sequence(
+            _document(_step("configure-frequency-coupling", state="on", mode="ratio", ratio=2)),
+            resource=state.resource_name, expected_model_id=MODEL,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        )
+    cleanup = caught.value.details["cleanup"]
+    assert cleanup["attempted_channels"] == cleanup["confirmed_off_channels"] == [1, 2]
+    assert not cleanup["errors"]
+    assert "OUTPut1 OFF" in writes and "OUTPut2 OFF" in writes
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert state.frequency_coupling

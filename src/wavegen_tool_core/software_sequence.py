@@ -678,6 +678,7 @@ def run_software_sequence(
             raise SoftwareSequenceError(exc, details) from exc
 
     attempted = set(controlled_channels) if _workflow_action is not None else set()
+    dual_write_attempted = False
     results = []
     failure = None
     loop, index, step = 1, 1, sequence.steps[0]
@@ -685,6 +686,9 @@ def run_software_sequence(
         for loop in range(1, sequence.loop_count + 1):
             for index, step in enumerate(sequence.steps, 1):
                 _check_cancellation(cancel_event)
+                if (is_dual_action(step.action, step.arguments) and step.action != "dual-channel-status"
+                        or uses_other_channel_modulation(step.arguments)):
+                    dual_write_attempted = True
                 if step.enables_output:
                     if step.arguments["channel"] == "all":
                         attempted.update(all_channels)
@@ -713,7 +717,11 @@ def run_software_sequence(
             cause = WavegenError("Unexpected software sequence step failure.")
         failure = (step.action, index, loop, cause)
     finally:
-        group = dual_writes and capabilities.channel_count == 2 and bool(attempted)
+        # Preflight confirmed both outputs OFF. A failed joint write can still
+        # leave an unexpected output state even without an explicit ON step.
+        group = dual_writes and capabilities.channel_count == 2 and (
+            bool(attempted) or (failure is not None and dual_write_attempted)
+        )
         cleanup, cleanup_interrupted = _cleanup(
             resource, backend, options, all_channels if group else attempted, group=group
         )

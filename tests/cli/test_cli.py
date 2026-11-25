@@ -5079,3 +5079,11 @@ def test_dual_channel_direct_cli_plans_and_simulates(capsys):
                  "--dry-run", "--model", "keysight-33512b", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert "SOURce2:AM:SOURce CH1" in payload["commands"]
+    assert payload["am_source"] == "ch1"
+    assert "am_shape" not in payload and "am_frequency_hz" not in payload
+    assert main(["configure-sine", "--channel", "2", "--frequency-hz", "10000",
+                 "--amplitude-vpp", "0.1", "--am-source", "ch1", "--am-depth", "40",
+                 "--dry-run", "--model", "keysight-33512b"]) == 0
+    output = capsys.readouterr().out
+    assert "AM modulation source: CH1" in output
+    assert "AM modulation frequency" not in output and "AM modulation shape" not in output

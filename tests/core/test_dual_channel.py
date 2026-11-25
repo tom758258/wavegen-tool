@@ -186,7 +186,7 @@ def test_software_sequence_preserves_coupling_and_cleans_both_outputs(joint):
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
 
 
-@pytest.mark.parametrize("failed_command", ["OUTPut2 ON", "OUTPut1 OFF"])
+@pytest.mark.parametrize("failed_command", ["OUTPut2 ON", "OUTPut1 OFF", "cleanup-error-queue"])
 def test_group_output_failure_attempts_both_off(failed_command):
     state = Simulated33521BState(model_id=MODEL)
     writes = []
@@ -194,24 +194,55 @@ def test_group_output_failure_attempts_both_off(failed_command):
     class FaultyResource(SimulatedResource):
         def write(self, command):
             writes.append(command)
-            if command == failed_command:
+            if command == failed_command or (failed_command == "cleanup-error-queue" and command == "OUTPut2 ON"):
                 raise OSError("injected failure")
-            return super().write(command)
+            result = super().write(command)
+            if failed_command == "cleanup-error-queue" and command == "OUTPut2 OFF":
+                state.error_queue.append('-221,"Settings conflict"')
+            return result
 
     class FaultyManager(SimulatedResourceManager):
         def open_resource(self, _resource_name):
             return FaultyResource(state)
 
-    enabling = failed_command.endswith("ON")
+    enabling = failed_command != "OUTPut1 OFF"
     if not enabling:
         state.ch1.output_enabled = state.ch2.output_enabled = True
-    with pytest.raises(WavegenError):
+    with pytest.raises(WavegenError) as caught:
         run_dual_channel("output", {"channel": "all", "enabled": enabling},
                          resource=state.resource_name, expected_model_id=MODEL,
                          support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
                          resource_manager_factory=lambda _: FaultyManager(state))
     assert "OUTPut1 OFF" in writes and "OUTPut2 OFF" in writes
     assert not state.ch2.output_enabled
+    if failed_command == "cleanup-error-queue":
+        assert caught.value.code == "visa_write_error"
+        assert any("-221" in message for message in caught.value.cleanup_errors)
+        assert not state.error_queue and not state.ch1.output_enabled
+
+
+@pytest.mark.parametrize("model,channel,mode,source,allowed", [
+    ("keysight-33521b", 1, "am", "ch2", False),
+    (MODEL, 1, "am", "ch1", False),
+    (MODEL, 2, "am", "ch2", False),
+    (MODEL, 1, "fsk", "ch2", False),
+    (MODEL, 1, "bpsk", "ch2", False),
+    (MODEL, 1, "am", "ch2", True),
+    (MODEL, 2, "am", "ch1", True),
+    ("keysight-33521b", 1, "am", "external", True),
+])
+def test_advanced_readback_source_matches_model_mode_and_channel(model, channel, mode, source, allowed):
+    state = Simulated33521BState(model_id=model)
+    selected = state.channels[channel]
+    setattr(selected, mode + "_enabled", True)
+    setattr(selected, mode + "_source", source)
+    options = dict(resource=state.resource_name, channel=channel,
+                   resource_manager_factory=SimulatedResourceManagerFactory(state))
+    if allowed:
+        assert visa.query_advanced_mode(**options).settings["source"] == source
+    else:
+        with pytest.raises(visa.StatusQueryError):
+            visa.query_advanced_mode(**options)
 
 
 def test_phase_sync_rejects_active_output(joint):

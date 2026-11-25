@@ -8996,7 +8996,6 @@ def _read_advanced_mode_session(
             )
         return value
 
-    source_values = frozenset({"INTERNAL", "EXTERNAL", "CH1", "CH2"})
     modes = [
         prefix_name
         for prefix_name in _ADVANCED_MODULATION_PREFIXES
@@ -9020,6 +9019,9 @@ def _read_advanced_mode_session(
         active = frequency_mode.upper()
 
     if active in {"AM", "FM", "PM", "FSKey", "BPSK", "PWM", "SUM"}:
+        source_values = frozenset({"INTERNAL", "EXTERNAL"})
+        if capabilities.channel_count == 2 and active in {"AM", "FM", "PM", "PWM", "SUM"}:
+            source_values |= {f"CH{3-selected}"}
         source = choice(prefix + active + ":SOURce", source_values)
         fields["source"] = source
         if source == "internal":
