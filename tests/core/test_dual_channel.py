@@ -697,3 +697,112 @@ def test_interrupted_joint_preflight_does_not_write(joint, monkeypatch, operatio
         run(operation, **({"channel": "all", "enabled": True} if operation == "output" else {}))
     assert writes == []
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+@pytest.mark.parametrize("operation,fault", [
+    ("output", "output"), ("configure-tracking", "output"), ("output", "topology"),
+])
+def test_joint_preflight_rejects_changed_status(joint, monkeypatch, operation, fault):
+    state, _, run = joint
+    if operation == "output":
+        run("configure-frequency-coupling", state="on", mode="ratio", ratio=2)
+    query = SimulatedResource.query
+    write = SimulatedResource.write
+    reads = 0
+    writes = []
+
+    def changed_status(self, command):
+        nonlocal reads
+        if fault == "output" and command == "OUTPut2?":
+            reads += 1
+            if reads == 2:
+                state.ch2.output_enabled = True
+        elif fault == "topology" and command == "SOURce2:COMBine:FEED?":
+            reads += 1
+            if reads == 2:
+                state.ch2.combine_source = "CH1"
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", changed_status)
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    arguments = ({"channel": "all", "enabled": True} if operation == "output"
+                 else {"mode": "on"})
+    with pytest.raises(WaveformVerificationError):
+        run(operation, **arguments)
+    assert writes == []
+    assert not state.ch1.output_enabled
+    assert state.ch2.output_enabled is (fault == "output")
+    if fault == "topology":
+        assert state.ch2.combine_source == "CH1"
+
+
+@pytest.mark.parametrize("operation", ["output", "update-coupled-frequency"])
+def test_joint_operation_rejects_invalid_active_ratio(joint, monkeypatch, operation):
+    state, _, run = joint
+    run("configure-frequency-coupling", state="on", mode="ratio", ratio=2)
+    # Both carrier frequencies are legal, but the coupling ratio is not.
+    state.frequency_coupling_ratio = 2000
+    state.ch2.frequency_hz = 2e6
+    writes = []
+    write = SimulatedResource.write
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    arguments = ({"channel": "all", "enabled": True} if operation == "output"
+                 else {"channel": 1, "frequency_hz": 2000})
+    with pytest.raises(WaveformVerificationError):
+        run(operation, **arguments)
+    assert writes == []
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    run("configure-frequency-coupling", state="off")
+    assert not state.frequency_coupling
+
+
+def test_joint_frequency_update_rejects_changed_coupling_mode(joint, monkeypatch):
+    state, _, run = joint
+    run("configure-frequency-coupling", state="on", mode="ratio", ratio=2)
+    write = SimulatedResource.write
+
+    def change_mode(self, command):
+        result = write(self, command)
+        if command.startswith("SOURce1:FREQuency "):
+            # The requested frequencies still match, but the active relation changed.
+            state.frequency_coupling_mode = "OFFS"
+            state.frequency_coupling_offset = 2000
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", change_mode)
+    with pytest.raises(WaveformVerificationError) as caught:
+        run("update-coupled-frequency", channel=1, frequency_hz=2000)
+    assert caught.value.output_state == "off"
+    assert (state.ch1.frequency_hz, state.ch2.frequency_hz) == (2000, 4000)
+    assert state.frequency_coupling and state.frequency_coupling_mode == "OFFS"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+def test_joint_configuration_rejects_conflicting_final_topology(joint, monkeypatch):
+    state, _, run = joint
+    write = SimulatedResource.write
+
+    def conflicting_combine(self, command):
+        result = write(self, command)
+        if command == "SOURce1:COMBine:FEED CH2":
+            state.ch2.combine_source = "CH1"
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", conflicting_combine)
+    with pytest.raises(WaveformVerificationError) as caught:
+        run("configure-combine", channel=1, source="ch2")
+    assert caught.value.output_state == "off"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert (state.ch1.combine_source, state.ch2.combine_source) == ("CH2", "CH1")
+    # An explicit release must still be possible, including from a conflict.
+    run("configure-combine", channel=1, source="none")
+    assert state.ch1.combine_source == "NONE"

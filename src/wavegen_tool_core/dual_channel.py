@@ -25,6 +25,7 @@ _TRACK = {"off": "OFF", "on": "ON", "invert": "INVerted"}
 _STATIC = frozenset({"sine", "square", "ramp", "triangle", "pulse", "dc", "noise", "prbs"})
 _FREQ = "FREQuency:COUPle"
 _VOLT = "VOLTage:COUPle"
+_RATIO_MIN, _RATIO_MAX = 0.001, 1000
 
 
 def is_dual_action(action: str, arguments: Mapping) -> bool:
@@ -126,7 +127,7 @@ def plan_dual_channel(action: str, arguments: Mapping, model: str) -> dict:
             ch = visa._validate_channel(args.get("reference_channel", 1), caps)
             value = _number(args[key], key)
             maximum = caps.max_sine_square_pulse_noise_frequency_hz
-            if mode == "ratio" and not 0.001 <= value <= 1000:
+            if mode == "ratio" and not _RATIO_MIN <= value <= _RATIO_MAX:
                 raise WaveformParameterError("Frequency ratio must be between 0.001 and 1000.")
             if mode == "offset" and abs(value) > maximum:
                 raise WaveformParameterError("Frequency offset exceeds model limits.")
@@ -237,7 +238,7 @@ def _topology(session):
     combine = [_query(session, f"SOURce{ch}:COMBine:FEED?") for ch in (1, 2)]
     if combine[0] not in {"NONE", "CH2"} or combine[1] not in {"NONE", "CH1"}:
         raise WaveformVerificationError("Unknown combine source.")
-    return frequency, voltage, tracking, combine
+    return frequency, voltage, [value.replace("INVERTED", "INV") for value in tracking], combine
 
 
 def _modulation_source(session, channel, mode):
@@ -519,6 +520,43 @@ def _status(session):
     }
 
 
+def _status_topology(status):
+    channels = [status["channel_status"][str(ch)] for ch in (1, 2)]
+    return (
+        status["frequency_coupling"]["enabled"], status["voltage_coupling"],
+        [state["tracking"].upper() for state in channels],
+        [state["combine_source"].upper() for state in channels],
+    )
+
+
+def _require_status_off(status, channels):
+    for ch in channels:
+        _equal(status["channel_status"][str(ch)]["output_state"], "off", f"Channel {ch} status")
+
+
+def _check_frequency_setting(mode, value, context):
+    if mode == "ratio":
+        if not _RATIO_MIN <= value <= _RATIO_MAX:
+            raise WaveformVerificationError("Invalid frequency coupling ratio readback.")
+    else:
+        caps = visa._capabilities_for_identity(context.identity)
+        if not abs(value) <= caps.max_sine_square_pulse_noise_frequency_hz:
+            raise WaveformVerificationError("Invalid frequency coupling offset readback.")
+
+
+def _check_frequency_relation(status, context):
+    values = {ch: status["channel_status"][str(ch)]["frequency_hz"] for ch in (1, 2)}
+    if any(value is None for value in values.values()):
+        raise WaveformVerificationError("Unsupported coupled frequency state.")
+    settings = status["frequency_coupling"]
+    mode = settings["mode"]
+    value = settings["ratio"] if mode == "ratio" else settings["offset_hz"]
+    _check_frequency_setting(mode, value, context)
+    expected = values[1] * value if mode == "ratio" else values[1] + value
+    _equal(values[2], expected, "Coupled frequency relation")
+    return values
+
+
 def _tracking_settings(session, context, channel, function):
     suffixes = {
         "square": ("SQUare:DCYCle",),
@@ -656,15 +694,11 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
         frequency, voltage, tracking, combined = topology
         if frequency or voltage or tracking[0] != "OFF":
             status = _status(session)
+            _require_status_off(status, channels)
+            _equal(_status_topology(status), topology, "Group output topology")
             first, second = (status["channel_status"][str(ch)] for ch in (1, 2))
             if frequency:
-                values = {1: first["frequency_hz"], 2: second["frequency_hz"]}
-                if any(value is None for value in values.values()):
-                    raise WaveformVerificationError("Unsupported coupled frequency state.")
-                settings = status["frequency_coupling"]
-                expected = (values[1] * settings["ratio"] if settings["mode"] == "ratio"
-                            else values[1] + settings["offset_hz"])
-                _equal(values[2], expected, "Coupled frequency relation")
+                values = _check_frequency_relation(status, context)
                 _check_coupled_frequencies(session, values, context)
             if voltage:
                 for field in ("amplitude_vpp", "offset_v", "load", "amplitude_unit", "autorange_enabled"):
@@ -678,6 +712,7 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             _check_levels(session, ch, *_signal_levels(session, ch))
             if combined[ch-1] != "NONE":
                 _check_combine(session, ch, 3-ch)
+        _require_off(session, channels)
         try:
             mark_output_write()
             for command in commands:
@@ -725,14 +760,18 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
     if not releasing:
         _check_topology(session, (frequency, voltage, tracking, combine))
     expected_frequency = {}
+    expected_coupling = None
     tracking_reference = None
     if action == "configure-frequency-coupling" and plan["state"] == "on":
         if tracked or frequency:
             raise WaveformParameterError("Disable tracking or existing frequency coupling first.")
         ref = plan["reference_channel"]
         original = _numeric(session, f"SOURce{ref}:FREQuency?")
-        other = original * plan["ratio"] if plan["coupling_mode"] == "ratio" else original + plan["offset_hz"]
+        mode = plan["coupling_mode"]
+        value = plan["ratio"] if mode == "ratio" else plan["offset_hz"]
+        other = original * value if mode == "ratio" else original + value
         expected_frequency = {ref: original, 3-ref: other}
+        expected_coupling = (mode, value if ref == 1 else (1 / value if mode == "ratio" else -value))
     elif action == "update-coupled-frequency":
         if not frequency or tracked:
             raise WaveformParameterError("Frequency coupling must be active without tracking.")
@@ -740,12 +779,17 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
         val = plan["frequency_hz"]
         mode = _query(session, f"SOURce1:{_FREQ}:MODE?")
         if mode in {"RAT", "RATIO"}:
-            other = val * _numeric(session, f"SOURce{ch}:{_FREQ}:RATio?")
+            mode = "ratio"
+            value = _numeric(session, f"SOURce{ch}:{_FREQ}:RATio?")
         elif mode in {"OFFS", "OFFSET"}:
-            other = val + _numeric(session, f"SOURce{ch}:{_FREQ}:OFFSet?")
+            mode = "offset"
+            value = _numeric(session, f"SOURce{ch}:{_FREQ}:OFFSet?")
         else:
             raise WaveformVerificationError("Unknown frequency coupling mode.")
+        _check_frequency_setting(mode, value, context)
+        other = val * value if mode == "ratio" else val + value
         expected_frequency = {ch: val, 3-ch: other}
+        expected_coupling = (mode, value if ch == 1 else (1 / value if mode == "ratio" else -value))
     elif action == "configure-voltage-coupling" and plan["state"] == "on":
         if tracked:
             raise WaveformParameterError("Disable tracking first.")
@@ -790,7 +834,10 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
             raise WaveformParameterError("Sync output must be OFF before changing its source by tracking.")
         load = visa._parse_status_load(session.query(f"OUTPut{ref}:LOAD?"))
         _check_levels(session, 3-ref, *_signal_levels(session, ref), load=load)
-        tracking_reference = _status(session)["channel_status"][str(ref)]
+        status = _status(session)
+        _require_status_off(status, channels)
+        _equal(_status_topology(status), (frequency, voltage, tracking, combine), "Tracking topology")
+        tracking_reference = status["channel_status"][str(ref)]
         tracking_reference_settings = _tracking_settings(session, context, ref, tracking_reference["function"])
     elif action == "configure-combine" and plan["source"] != "none":
         ch = plan["channel"]
@@ -834,24 +881,27 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
     _error_free(session)
     _require_off(session, channels)
     result = _status(session)
-    for ch in channels:
-        _equal(result["channel_status"][str(ch)]["output_state"], "off", f"Channel {ch} final status")
+    _require_status_off(result, channels)
+    if not releasing:
+        _check_topology(session, _status_topology(result))
+        if result["frequency_coupling"]["enabled"]:
+            _check_frequency_relation(result, context)
+    if expected_coupling is not None:
+        mode, value = expected_coupling
+        settings = result["frequency_coupling"]
+        _equal(settings["mode"], mode, "Coupling mode")
+        _equal(settings["ratio" if mode == "ratio" else "offset_hz"], value, "Coupling setting")
     if action == "configure-frequency-coupling":
         _equal(result["frequency_coupling"]["enabled"], plan["state"] == "on", "Frequency coupling")
-        if plan["state"] == "on":
-            _equal(result["frequency_coupling"]["mode"], plan["coupling_mode"], "Coupling mode")
-            key = "RATio" if plan["coupling_mode"] == "ratio" else "OFFSet"
-            value = plan["ratio"] if plan["coupling_mode"] == "ratio" else plan["offset_hz"]
-            _equal(_numeric(session, f"SOURce{plan['reference_channel']}:{_FREQ}:{key}?"), value, "Coupling setting")
     elif action == "configure-voltage-coupling":
         _equal(result["voltage_coupling"], plan["state"] == "on", "Voltage coupling")
         if plan["state"] == "on":
             for field in ("amplitude_vpp", "offset_v", "load", "amplitude_unit", "autorange_enabled"):
                 _equal(result["channel_status"]["1"][field], result["channel_status"]["2"][field], field)
     elif action == "configure-tracking":
-        actual = [_query(session, f"SOURce{ch}:TRACk?") for ch in (1, 2)]
+        actual = _status_topology(result)[2]
         wanted = {"off": "OFF", "on": "ON", "invert": "INV"}[plan["tracking"]]
-        _equal([v.replace("INVERTED", "INV") for v in actual], [wanted, wanted], "Tracking")
+        _equal(actual, [wanted, wanted], "Tracking")
         if wanted != "OFF":
             settings = _verify_tracking_pair(session, context, result, wanted == "INV")
             _verify_tracking_settings(settings[plan["reference_channel"]], tracking_reference_settings)
