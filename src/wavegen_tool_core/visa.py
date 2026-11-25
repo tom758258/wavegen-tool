@@ -145,9 +145,9 @@ def _check_independent_channel_guard(
     context: IdentificationResult,
     *, recover_modulation_receiver: int | None = None,
     check_cross_dependencies: bool = True,
-) -> None:
+) -> bool:
     if capabilities.channel_count <= 1:
-        return
+        return False
 
     try:
         freq_coup = session.query("SOURce1:FREQuency:COUPle:STATe?").strip().upper()
@@ -203,7 +203,8 @@ def _check_independent_channel_guard(
 
 
     if check_cross_dependencies:
-        _check_cross_channel_dependencies(session, recover_modulation_receiver)
+        return _check_cross_channel_dependencies(session, recover_modulation_receiver)
+    return False
 
 
 def _check_cross_channel_dependencies(session, recover_modulation_receiver=None):
@@ -211,6 +212,7 @@ def _check_cross_channel_dependencies(session, recover_modulation_receiver=None)
     # other connector. Only explicit contributor receiver reconfiguration may
     # remove an existing other-channel modulation route with both outputs OFF.
     from .dual_channel import _query, _state, _require_off
+    recovering = False
     for ch in (1, 2):
         combine = _query(session, f"SOURce{ch}:COMBine:FEED?")
         if combine != "NONE":
@@ -226,6 +228,8 @@ def _check_cross_channel_dependencies(session, recover_modulation_receiver=None)
                 if recover_modulation_receiver != ch:
                     raise WaveformVerificationError("Independent channel operation rejected: other-channel modulation is active.")
                 _require_off(session, (1, 2))
+                recovering = True
+    return recovering
 
 
 def _channelize_commands(commands: tuple[str, ...], channel: int) -> tuple[str, ...]:
@@ -6832,9 +6836,11 @@ def configure_pulse(
         _preflight_capabilities_for_configuration(resource_manager_factory)
     )
 
+    @_guard_other_channel_configuration
     def operate(
         session: VisaSession,
         context: IdentificationResult,
+        mark_joint_write,
     ) -> tuple[object, ...]:
         capabilities = _capabilities_for_identity(context.identity)
         selected_channel = _validate_channel(
@@ -6846,7 +6852,9 @@ def configure_pulse(
             support_policy_mode == SUPPORT_POLICY_MODE_VALIDATION
             or isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
         ) else None
-        _check_independent_channel_guard(session, capabilities, context, recover_modulation_receiver=recover)
+        recovering = _check_independent_channel_guard(
+            session, capabilities, context, recover_modulation_receiver=recover
+        )
         (
             frequency,
             amplitude,
@@ -6884,6 +6892,8 @@ def configure_pulse(
                 ) from exc
 
         _check_trigger_delay_configuration(session, advanced_commands, before_writes=True)
+        if other or recovering:
+            mark_joint_write()
         write_pulse_command(commands[0], None)
         for command in commands[1:18]:
             write_pulse_command(command, "off")
@@ -7067,6 +7077,8 @@ def configure_pulse(
                 advanced_commands,
                 selected_channel=selected_channel,
             )
+        if recovering and not other:
+            _verify_other_channel_release(session, selected_channel)
         return (
             amplitude,
             offset,
@@ -9538,6 +9550,22 @@ def _verify_other_channel_pm_frequency(session, context, channel, *, carrier_hz=
         raise WaveformParameterError("PM carrier frequency must be greater than 20 times the source frequency.")
 
 
+def _guard_other_channel_configuration(operation):
+    def run(session, context):
+        from .dual_channel import _joint_configuration_cleanup
+
+        with _joint_configuration_cleanup(session, (1, 2)) as mark_joint_write:
+            return operation(session, context, mark_joint_write)
+    return run
+
+
+def _verify_other_channel_release(session, channel):
+    from .dual_channel import _active_other_source
+
+    if _active_other_source(session, channel):
+        raise WaveformVerificationError("Other-channel modulation was not released.")
+
+
 def _other_channel_modulation_precheck(session, commands, channel, context):
     """Check a requested cross-channel source before any configuration write."""
     sources = [(cmd.split(":")[1], cmd[-1]) for cmd in commands
@@ -9632,9 +9660,11 @@ def _prepare_and_write_to_supported_instrument(
     if verify_readback:
         _advanced_mode_readback_fields(preflight[1])
 
+    @_guard_other_channel_configuration
     def prepare_and_write(
         session: VisaSession,
         context: IdentificationResult,
+        mark_joint_write,
     ) -> tuple[object, ...]:
         capabilities = _capabilities_for_identity(context.identity)
         selected_channel = _validate_channel(
@@ -9642,16 +9672,21 @@ def _prepare_and_write_to_supported_instrument(
             capabilities,
             context.identity.model,
         )
+        recovering = False
         if independent_channel_guard:
             recover = selected_channel if (
                 support_policy_mode == SUPPORT_POLICY_MODE_VALIDATION
                 or isinstance(resource_manager_factory, SimulatedResourceManagerFactory)
             ) and any(cmd == "SOURce1:AM:STATe OFF" for cmd in preflight[1]) else None
-            _check_independent_channel_guard(session, capabilities, context, recover_modulation_receiver=recover)
+            recovering = _check_independent_channel_guard(
+                session, capabilities, context, recover_modulation_receiver=recover
+            )
         values, commands = prepare_configuration(capabilities)
         channel_commands = _channelize_commands(commands, selected_channel)
         other = _other_channel_modulation_precheck(session, channel_commands, selected_channel, context)
         _check_trigger_delay_configuration(session, commands, before_writes=True)
+        if other or recovering:
+            mark_joint_write()
         for command in channel_commands:
             session.write(command)
         _check_trigger_delay_configuration(session, commands, before_writes=False)
@@ -9665,6 +9700,8 @@ def _prepare_and_write_to_supported_instrument(
             _verify_waveform_configuration(
                 session, context, commands, waveform_readback_headers, selected_channel
             )
+        if recovering and not other:
+            _verify_other_channel_release(session, selected_channel)
         return values
 
     context, values = _run_on_supported_instrument(

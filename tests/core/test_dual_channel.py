@@ -545,3 +545,155 @@ def test_tracking_rejects_modulated_envelope_above_other_channel_limit(joint):
         })
     assert state.ch1.amplitude_vpp == state.ch2.amplitude_vpp == 0.1
     assert not state.ch1.am_enabled and not state.ch2.am_enabled
+
+
+
+@pytest.mark.parametrize("mode,reading,allowed", [
+    ("am", -200, False), ("dssc", -100, False), ("sum", -200, False),
+    ("am", 121, False), ("sum", 101, False),
+    ("am", 120, True), ("sum", 100, True),
+])
+def test_group_on_validates_modulation_readback(joint, monkeypatch, mode, reading, allowed):
+    state, _, run = joint
+    state.ch1.amplitude_vpp = 8 if reading < 0 else 0.1
+    state.ch1.am_enabled = mode != "sum"
+    state.ch1.am_type = "dssc" if mode == "dssc" else "normal"
+    state.ch1.sum_enabled = mode == "sum"
+    query = SimulatedResource.query
+    write = SimulatedResource.write
+    writes = []
+    header = "SOURce1:SUM:AMPLitude?" if mode == "sum" else "SOURce1:AM:DEPTh?"
+
+    def bad_readback(self, command):
+        if command == header:
+            return str(reading)
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", bad_readback)
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    if allowed:
+        try:
+            assert run("output", channel="all", enabled=True)["output_states"] == {"1": "on", "2": "on"}
+        finally:
+            run("output", channel="all", enabled=False)
+    else:
+        with pytest.raises(WaveformVerificationError):
+            run("output", channel="all", enabled=True)
+        assert writes == []
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+@pytest.mark.parametrize("operation,model,trigger,fail_off", [
+    ("phase", "keysight-33521b", "PHASe:SYNChronize", False),
+    ("phase", MODEL, "PHASe:SYNChronize", False),
+    ("coupling", MODEL, "SOURce1:FREQuency:COUPle:STATe ON", True),
+    ("am", MODEL, "SOURce1:AM:STATe ON", False),
+    ("pwm", MODEL, "SOURce1:PWM:STATe ON", False),
+    ("release", MODEL, "SOURce1:AM:STATe OFF", False),
+])
+def test_direct_joint_configuration_failure_cleans_affected_outputs(
+    monkeypatch, operation, model, trigger, fail_off,
+):
+    state = Simulated33521BState(model_id=model)
+    options = dict(resource=state.resource_name,
+                   resource_manager_factory=SimulatedResourceManagerFactory(state))
+    channels = [1] if model == "keysight-33521b" else [1, 2]
+    if operation == "release":
+        visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                            am=visa.AMConfig(depth_percent=40, source="ch2"), **options)
+    write = SimulatedResource.write
+    writes = []
+
+    def unexpected_output(self, command):
+        writes.append(command)
+        if fail_off and command == "OUTPut2 OFF":
+            raise OSError("injected OFF failure")
+        result = write(self, command)
+        if command == trigger:
+            state.channels[channels[-1]].output_enabled = True
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", unexpected_output)
+    with pytest.raises(WaveformVerificationError) as caught:
+        if operation == "phase":
+            run_dual_channel("phase-sync", {}, **options)
+        elif operation == "coupling":
+            run_dual_channel("configure-frequency-coupling",
+                             {"state": "on", "mode": "ratio", "ratio": 2}, **options)
+        elif operation == "am":
+            visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                                am=visa.AMConfig(depth_percent=40, source="ch2"), **options)
+        elif operation == "pwm":
+            visa.configure_pulse(frequency_hz=10000, amplitude_vpp=0.1,
+                                 pulse_width_s=25e-6, edge_time_s=10e-9,
+                                 pwm=visa.PWMConfig(deviation_s=1e-6, source="ch2"), **options)
+        else:
+            visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, **options)
+    assert {command for command in writes if command in {"OUTPut1 OFF", "OUTPut2 OFF"}} == {
+        f"OUTPut{channel} OFF" for channel in channels
+    }
+    assert not state.ch1.output_enabled
+    if fail_off:
+        assert state.ch2.output_enabled and state.frequency_coupling
+        assert caught.value.cleanup_errors and caught.value.output_state is None
+    else:
+        assert all(not state.channels[channel].output_enabled for channel in channels)
+        assert caught.value.output_state == "off"
+    if operation == "am":
+        assert state.ch1.am_enabled and state.ch1.am_source == "ch2"
+    elif operation == "pwm":
+        assert state.ch1.pwm_enabled and state.ch1.pwm_source == "ch2"
+
+
+def test_joint_configuration_rejects_late_output_on(joint, monkeypatch):
+    state, _, run = joint
+    run("configure-combine", channel=1, source="ch2")
+    query = SimulatedResource.query
+    reads = 0
+
+    def late_on(self, command):
+        nonlocal reads
+        if command == "OUTPut2?" and state.ch1.combine_source == "NONE":
+            reads += 1
+            if reads == 2:
+                state.ch2.output_enabled = True
+        return query(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", late_on)
+    with pytest.raises(WaveformVerificationError) as caught:
+        run("configure-combine", channel=1, source="none")
+    assert caught.value.output_state == "off"
+    assert state.ch1.combine_source == "NONE"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    # Read-only status must still report an actual ON without writing OFF.
+    state.ch2.output_enabled = True
+    assert run("dual-channel-status")["channel_status"]["2"]["output_state"] == "on"
+    assert state.ch2.output_enabled
+
+
+@pytest.mark.parametrize("operation", ["phase-sync", "output"])
+def test_interrupted_joint_preflight_does_not_write(joint, monkeypatch, operation):
+    state, _, run = joint
+    query = SimulatedResource.query
+    write = SimulatedResource.write
+    writes = []
+
+    def interrupted(self, command):
+        if command == "OUTPut2?":
+            raise KeyboardInterrupt
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", interrupted)
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(KeyboardInterrupt):
+        run(operation, **({"channel": "all", "enabled": True} if operation == "output" else {}))
+    assert writes == []
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled

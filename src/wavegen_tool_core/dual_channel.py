@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 import math
 
 from . import visa
@@ -422,6 +423,8 @@ def _levels(session, ch):
 
 
 def _check_levels(session, ch, low, high, load=None):
+    if not math.isfinite(low) or not math.isfinite(high) or low > high:
+        raise WaveformVerificationError("Invalid signal voltage range.")
     source = _source(ch)
     if load is None:
         load = visa._parse_status_load(session.query(f"OUTPut{ch}:LOAD?"))
@@ -431,20 +434,35 @@ def _check_levels(session, ch, low, high, load=None):
     if _state(session, f"{source}:VOLTage:LIMit:STATe?"):
         minimum = _numeric(session, f"{source}:VOLTage:LIMit:LOW?")
         maximum = _numeric(session, f"{source}:VOLTage:LIMit:HIGH?")
+        if minimum > maximum:
+            raise WaveformVerificationError("Invalid programmed voltage limit range.")
         if low < minimum or high > maximum:
             raise WaveformParameterError(f"Voltage exceeds Channel {ch} programmed limits.")
 
 
 def _signal_levels(session, ch, levels=None):
     low, high = _levels(session, ch) if levels is None else levels
+    if not math.isfinite(low) or not math.isfinite(high) or low > high:
+        raise WaveformVerificationError("Invalid carrier voltage range.")
     offset = (low + high) / 2
     prefix = _source(ch)
     factor = 1.0
-    if _state(session, f"{prefix}:AM:STATe?"):
-        depth = _numeric(session, f"{prefix}:AM:DEPTh?") / 100
+    am = _state(session, f"{prefix}:AM:STATe?")
+    summation = _state(session, f"{prefix}:SUM:STATe?")
+    if am and summation:
+        raise WaveformVerificationError("Conflicting amplitude modulation states.")
+    if am:
+        depth = _numeric(session, f"{prefix}:AM:DEPTh?")
+        # The instrument may have been set from its panel, where AM permits 120%.
+        if not 0 <= depth <= 120:
+            raise WaveformVerificationError("Invalid AM depth readback.")
+        depth /= 100
         factor = depth if _state(session, f"{prefix}:AM:DSSC?") else 1 + depth
-    if _state(session, f"{prefix}:SUM:STATe?"):
-        factor = 1 + _numeric(session, f"{prefix}:SUM:AMPLitude?") / 100
+    if summation:
+        percent = _numeric(session, f"{prefix}:SUM:AMPLitude?")
+        if not 0 <= percent <= 100:
+            raise WaveformVerificationError("Invalid Sum amplitude readback.")
+        factor = 1 + percent / 100
     half = (high - low) / 2 * factor
     return offset - half, offset + half
 
@@ -545,17 +563,18 @@ def _verify_tracking_pair(session, context, result, inverted):
     return settings
 
 
-def _off_all(session):
+def _off_all(session, channels=(1, 2)):
     failures = []
     interruption = None
-    for ch in (1, 2):
+    label = "Group OFF" if len(channels) == 2 else f"Channel {channels[0]} OFF"
+    for ch in channels:
         try:
             session.write(f"OUTPut{ch} OFF")
         except (Exception, KeyboardInterrupt) as exc:
             if isinstance(exc, KeyboardInterrupt):
                 interruption = exc
             failures.append(f"Channel {ch} OFF write failed.")
-    for ch in (1, 2):
+    for ch in channels:
         try:
             _equal(_outputs(session, (ch,))[str(ch)], "off", f"Channel {ch} OFF")
         except (Exception, KeyboardInterrupt) as exc:
@@ -570,15 +589,56 @@ def _off_all(session):
         if isinstance(exc, KeyboardInterrupt):
             interruption = exc
         diagnostic = str(exc) if isinstance(exc, WavegenError) else "Error queue query failed."
-        failures.append(f"Group OFF: {diagnostic}")
+        failures.append(f"{label}: {diagnostic}")
     if interruption is not None:
         interruption.cleanup_errors = tuple(failures)
         raise interruption
     if failures:
-        raise VisaCleanupError("Group output OFF failed.").attach_cleanup_errors(tuple(failures))
+        message = "Group output OFF failed." if len(channels) == 2 else f"{label} failed."
+        raise VisaCleanupError(message).attach_cleanup_errors(tuple(failures))
 
 
-def _apply(session, plan, arguments, context):
+@contextmanager
+def _joint_configuration_cleanup(session, channels):
+    """Recover affected outputs only after a preflighted joint write starts."""
+    started = False
+
+    def mark_started():
+        nonlocal started
+        started = True
+
+    try:
+        yield mark_started
+        if started:
+            _require_off(session, channels)
+    except (Exception, KeyboardInterrupt) as error:
+        if not started:
+            raise
+        try:
+            _off_all(session, channels)
+        except (WavegenError, KeyboardInterrupt) as cleanup:
+            diagnostics = getattr(cleanup, "cleanup_errors", ()) or (str(cleanup) or "OFF cleanup interrupted.",)
+            if isinstance(cleanup, KeyboardInterrupt):
+                cleanup.cleanup_errors = (str(error) or "Configuration interrupted.",
+                                          *getattr(error, "cleanup_errors", ()), *diagnostics)
+                raise
+            if isinstance(error, WavegenError):
+                error.output_state = None
+                error.attach_cleanup_errors(error.cleanup_errors + diagnostics)
+            elif isinstance(error, KeyboardInterrupt):
+                error.cleanup_errors = (*getattr(error, "cleanup_errors", ()), *diagnostics)
+                error.args = (f"{error}; configuration OFF cleanup failed: {'; '.join(diagnostics)}",)
+            else:
+                raise VisaWriteError(
+                    "Could not apply the requested instrument control write."
+                ).attach_cleanup_errors(diagnostics) from error
+        else:
+            if isinstance(error, WavegenError):
+                error.output_state = "off"
+        raise
+
+
+def _apply(session, plan, arguments, context, mark_configuration_write, mark_output_write):
     action = plan["action"]
     channels = plan["channels"]
     commands = plan["commands"]
@@ -619,6 +679,7 @@ def _apply(session, plan, arguments, context):
             if combined[ch-1] != "NONE":
                 _check_combine(session, ch, 3-ch)
         try:
+            mark_output_write()
             for command in commands:
                 session.write(command)
             actual = _outputs(session)
@@ -644,11 +705,11 @@ def _apply(session, plan, arguments, context):
         # There is no instrument query that proves physical phase alignment.
         phases = {ch: _numeric(session, f"SOURce{ch}:PHASe?") for ch in channels
                   if _query(session, f"SOURce{ch}:FUNCtion?") not in {"DC", "NOIS", "NOISE", "PRBS", "ARB"}}
+        mark_configuration_write()
         session.write(commands[0])
         _error_free(session)
         for ch, expected in phases.items():
             _equal(_numeric(session, f"SOURce{ch}:PHASe?"), expected, "Phase setting")
-        _require_off(session, channels)
         return {"output_state": "off", "phase_settings_preserved": True}
 
     frequency, voltage, tracking, combine = _topology(session)
@@ -768,10 +829,13 @@ def _apply(session, plan, arguments, context):
                         query = query.removesuffix(":BOTH")
                     maximum = _numeric(session, query + "? MAXimum")
                     visa._validate_pulse_edge_maximum(float(value), maximum, edge, context)
+        mark_configuration_write()
         session.write(command)
     _error_free(session)
     _require_off(session, channels)
     result = _status(session)
+    for ch in channels:
+        _equal(result["channel_status"][str(ch)]["output_state"], "off", f"Channel {ch} final status")
     if action == "configure-frequency-coupling":
         _equal(result["frequency_coupling"]["enabled"], plan["state"] == "on", "Frequency coupling")
         if plan["state"] == "on":
@@ -871,11 +935,15 @@ def run_dual_channel(action: str, arguments: Mapping, *, model: str | None = Non
         plan_dual_channel(action, arguments, expected_model_id)
     attempted_on = False
 
-    def operation(session, context):
+    def mark_output_write():
         nonlocal attempted_on
+        attempted_on = True
+
+    def operation(session, context):
         plan = plan_dual_channel(action, arguments, context.identity.canonical_model_id)
-        attempted_on = action == "output" and plan.get("requested_output_state") == "on"
-        result = _apply(session, plan, arguments, context)
+        with _joint_configuration_cleanup(session, plan["channels"]) as mark_configuration_write:
+            result = _apply(session, plan, arguments, context,
+                            mark_configuration_write, mark_output_write)
         return dict(plan, executed=True, **result)
 
     try:
