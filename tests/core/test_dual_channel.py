@@ -1311,3 +1311,137 @@ def test_sequence_stops_on_unrequested_coupling_change(joint, monkeypatch):
     assert "OUTPut1 ON" not in writes and "OUTPut2 ON" not in writes
     assert state.frequency_coupling and not state.voltage_coupling
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+@pytest.mark.parametrize("channel,delay,fault", [
+    (1, 0, "before"),
+    (2, 4e-9, "before"),
+    (2, 4e-9, "after"),
+    (2, 4e-9, None),
+    (1, None, None),
+])
+def test_tracked_burst_trigger_delay_checks_error_queue(joint, monkeypatch, channel, delay, fault):
+    state, _, run = joint
+    run("configure-tracking", mode="on")
+    burst = {"mode": "counted", "count": 3, "trigger_source": "bus"}
+    if delay is not None:
+        burst["trigger_delay_s"] = delay
+    arguments = {"waveform": "sine", "arguments": {
+        "channel": channel, "frequency_hz": 1000, "amplitude_vpp": 0.1, "burst": burst,
+    }}
+    last_write = run_dual_channel("configure-tracked-waveform", arguments, model=MODEL)["commands"][-1]
+    write, query = SimulatedResource.write, SimulatedResource.query
+    events = []
+    queued_error = '-221,"Settings conflict"'
+
+    def record_write(self, command):
+        events.append(("write", command))
+        result = write(self, command)
+        if fault == "after" and command == last_write:
+            state.error_queue.append(queued_error)
+        return result
+
+    def record_query(self, command):
+        if command == "SYSTem:ERRor?":
+            events.append(("query", command))
+        return query(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record_write)
+    monkeypatch.setattr(SimulatedResource, "query", record_query)
+    if fault == "before":
+        remaining = '-222,"Data out of range"'
+        state.error_queue.extend([queued_error, remaining])
+        with pytest.raises(WavegenError, match="pre-existing"):
+            run("configure-tracked-waveform", **arguments)
+        assert events == [("query", "SYSTem:ERRor?")]
+        assert state.error_queue == [remaining]
+    elif fault == "after":
+        with pytest.raises(WavegenError, match="-221"):
+            run("configure-tracked-waveform", **arguments)
+        assert events[0] == ("query", "SYSTem:ERRor?")
+        assert ("write", last_write) in events
+        assert {("write", "OUTPut1 OFF"), ("write", "OUTPut2 OFF")}.issubset(events)
+    else:
+        assert run("configure-tracked-waveform", **arguments)["readback_verified"]
+        assert events[-1] == ("query", "SYSTem:ERRor?")
+        assert sum(kind == "query" for kind, _ in events) == (1 if delay is None else 2)
+        if delay is not None:
+            assert events[0] == ("query", "SYSTem:ERRor?")
+            assert state.ch1.trigger_delay_s == state.ch2.trigger_delay_s == pytest.approx(delay, abs=1e-12)
+        assert state.ch1.trigger_source == state.ch2.trigger_source == "bus"
+    assert state.tracking == "ON"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert not {("write", "OUTPut1 ON"), ("write", "OUTPut2 ON")}.intersection(events)
+
+
+@pytest.mark.parametrize("field,delta", [
+    ("burst_count", 1),
+    ("trigger_delay_s", 4e-9),
+])
+@pytest.mark.parametrize("operation", ["configure-tracking", "output"])
+def test_tracking_rejects_discrete_burst_copy_error(joint, monkeypatch, field, delta, operation):
+    state, options, run = joint
+    visa.configure_sine(
+        frequency_hz=1000, amplitude_vpp=0.1,
+        burst=visa.CountedBurstConfig(count=100_000, trigger_source="bus", trigger_delay_s=0.1),
+        **options,
+    )
+    assert run("configure-tracking", mode="on")["readback_verified"]
+    if operation == "configure-tracking":
+        run("configure-tracking", mode="off")
+        arguments = {"mode": "on"}
+    else:
+        run("output", channel="all", enabled=True)
+        run("output", channel="all", enabled=False)
+        setattr(state.ch2, field, getattr(state.ch2, field) + delta)
+        arguments = {"channel": "all", "enabled": True}
+    writes = []
+    write = SimulatedResource.write
+
+    def corrupt_copy(self, command):
+        writes.append(command)
+        result = write(self, command)
+        if operation == "configure-tracking" and command == "SOURce1:TRACk ON":
+            setattr(state.ch2, field, getattr(state.ch2, field) + delta)
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", corrupt_copy)
+    with pytest.raises(WaveformVerificationError):
+        run(operation, **arguments)
+    if operation == "configure-tracking":
+        assert {"OUTPut1 OFF", "OUTPut2 OFF"}.issubset(writes)
+    else:
+        assert not writes
+    assert state.tracking == "ON"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
+@pytest.mark.parametrize("field,initial,ignored", [
+    ("frequency_mode", "SWEep", "SOURce1:FREQuency:MODE CW"),
+    ("voltage_unit", "VRMS", "SOURce1:VOLTage:UNIT VPP"),
+])
+def test_tracked_waveform_rejects_shared_wrong_mode_or_unit(joint, monkeypatch, field, initial, ignored):
+    state, _, run = joint
+    run("configure-tracking", mode="on")
+    arguments = {"waveform": "sine", "arguments": {
+        "frequency_hz": 1000, "amplitude_vpp": 0.1,
+    }}
+    # Both channels start from the same old setting. Pair equality alone
+    # cannot verify that the explicitly requested setting was applied.
+    for channel in (state.ch1, state.ch2):
+        setattr(channel, field, initial)
+    assert run("configure-tracked-waveform", **arguments)["readback_verified"]
+    for channel in (state.ch1, state.ch2):
+        setattr(channel, field, initial)
+    write = SimulatedResource.write
+
+    def ignore_setting(self, command):
+        if command != ignored:
+            return write(self, command)
+        return None
+
+    monkeypatch.setattr(SimulatedResource, "write", ignore_setting)
+    with pytest.raises(WaveformVerificationError):
+        run("configure-tracked-waveform", **arguments)
+    assert state.tracking == "ON"
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+

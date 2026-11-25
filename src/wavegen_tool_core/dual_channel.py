@@ -680,7 +680,12 @@ def _verify_tracking_settings(actual, expected, context):
     _equal(mode, wanted_mode, "Tracked advanced mode")
     _equal(advanced.keys(), wanted_advanced.keys(), "Tracked advanced settings")
     for field, value in wanted_advanced.items():
-        _equal(advanced[field], value, "Tracked " + field)
+        header = {"count": "SOURce1:BURSt:NCYCles", "trigger_delay_s": "TRIGger1:DELay"}.get(field)
+        if header is not None:
+            if not visa._configuration_readback_matches(header, str(value), str(advanced[field])):
+                raise WaveformVerificationError(f"Tracked {field} readback did not match.")
+        else:
+            _equal(advanced[field], value, "Tracked " + field)
 
 
 def _verify_tracking_pair(session, context, result, inverted):
@@ -963,6 +968,14 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
         expected_coupling = _read_frequency_coupling_setting(session)
     if expected_frequency:
         _check_coupled_frequencies(session, expected_frequency, context)
+    if action == "configure-tracked-waveform":
+        selected = plan["channel"]
+        original = tuple(command.replace(f"SOURce{selected}:", "SOURce1:").replace(
+            f"TRIGger{selected}:", "TRIGger1:"
+        ) for command in commands)
+        # Reuse the independent configuration's explicit-delay pre-write gate.
+        # The existing joint error check below still checks the queue after writes.
+        visa._check_trigger_delay_configuration(session, original, before_writes=True)
     for command in commands:
         if action == "configure-tracked-waveform" and ":FUNCtion:PULSe:TRANsition:" in command:
             header, _, value = command.partition(" ")
@@ -1047,7 +1060,6 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
                 _equal(actual["offset_v"], wave.voltage_v, f"CH{ch} tracked DC voltage")
         # Check other waveform-specific values with the existing generic
         # readback; Pulse's width and both edges were verified above.
-        selected = plan["channel"]
         fields = {}
         if plan["waveform"] != "pulse":
             for command in commands:
@@ -1055,15 +1067,17 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
                 if sep and header.startswith(f"SOURce{selected}:FUNCtion:") and value not in {"MINimum", "MAXimum"}:
                     if header.endswith((":DCYCle", ":SYMMetry", ":BANDwidth", ":BRATe", ":DATA", ":TRANsition:BOTH")):
                         fields[header] = value
-        original = tuple(command.replace(f"SOURce{selected}:", "SOURce1:").replace(
-            f"TRIGger{selected}:", "TRIGger1:"
-        ) for command in commands)
+        has_advanced = any(command.endswith(":STATe ON") for command in original)
         for ch in (1, 2):
+            if "SOURce1:VOLTage:UNIT VPP" in original:
+                _equal(result["channel_status"][str(ch)]["amplitude_unit"], "VPP", "Tracked voltage unit")
+            if "SOURce1:FREQuency:MODE CW" in original and not has_advanced:
+                _equal(settings[ch][1], "CW", "Tracked frequency mode")
             if plan["waveform"] != "pulse":
                 visa._verify_configuration_readback(session, context,
                     {key.replace(f"SOURce{selected}:", f"SOURce{ch}:"): value for key, value in fields.items()},
                     label="Tracked waveform")
-            if any(command.endswith(":STATe ON") for command in original):
+            if has_advanced:
                 visa._verify_advanced_mode_configuration(session, context, original, selected_channel=ch)
             for command in original:
                 if command.endswith(":STATe OFF"):
