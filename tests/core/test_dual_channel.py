@@ -1666,6 +1666,11 @@ def test_joint_modulation_validates_active_parameters_before_writes(
 @pytest.mark.parametrize("kind,carrier,operation", [
     ("fm", "PULS", "output"), ("pm", "PULS", "output"),
     ("fsk", "PULS", "output"), ("bpsk", "PULS", "output"),
+    ("fm", "DC", "output"), ("pm", "DC", "tracking"),
+    ("fsk", "DC", "output"), ("bpsk", "DC", "tracking"),
+    ("fm", "NOIS", "tracking"), ("pm", "NOIS", "output"),
+    ("fsk", "NOIS", "tracking"), ("bpsk", "NOIS", "output"),
+    ("fsk", "PRBS", "output"), ("bpsk", "PRBS", "tracking"),
     ("pwm", "SIN", "output"), ("pwm", "NOIS", "output"),
     ("pwm", "PRBS", "tracking"), ("pwm", "DC", "output"),
     ("am", "DC", "output"), ("sum", "DC", "tracking"),

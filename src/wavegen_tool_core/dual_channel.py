@@ -578,6 +578,15 @@ def _check_current_frequency_settings(session, context, ch):
     prefix = _source(ch)
     carrier = _function_name(_query(session, prefix + ":FUNCtion?"))
     if carrier in {"arbitrary", "dc", "noise", "prbs"}:
+        # Native PRBS supports FM/PM but not FSK/BPSK. DC and Noise
+        # support none of these modes. Keep native Arbitrary handling unchanged.
+        if carrier in {"dc", "noise", "prbs"}:
+            modes = ("FSKey", "BPSK")
+            if carrier != "prbs":
+                modes += ("FM", "PM")
+            for mode in modes:
+                if _state(session, f"{prefix}:{mode}:STATe?"):
+                    visa._validate_frequency_modulation_carrier(carrier, mode)
         if _state(session, prefix + ":PWM:STATe?"):
             raise WaveformParameterError("PWM requires a Pulse carrier.")
         _check_amplitude_modulation_rate(
