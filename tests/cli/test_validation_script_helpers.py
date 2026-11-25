@@ -619,7 +619,18 @@ def test_dual_channel_inventory_model_filter():
     assert len([case for case in data["dual"] if case["family"] == "dual-channel"]) == 13
     assert all(case["steps"][0]["sequence_intent"]["channels"] == [1, 2]
                for case in data["dual"] if case["family"] == "dual-channel")
-    assert any(case["name"] == "ch1/static-phase-sync" for case in data["single"])
+    phase = next(case for case in data["single"] if case["name"] == "ch1/static-phase-sync")
+    assert phase["family"] == "static" and phase["required"] and phase["observation"]
+    assert phase.get("dual_channel") is None
+    step, = phase["steps"]
+    assert step["arguments"][0] == "run-software-sequence"
+    intent = step["sequence_intent"]
+    assert intent["actions"] == [
+        "configure-sine", "phase-sync", "output", "wait", "output", "readback-advanced",
+    ]
+    assert intent["output_on"] is True and intent["wait_seconds"] == 3
+    assert {"index": 1, "path": ["phase_settings_preserved"], "value": True} in intent["joint_checks"]
+    assert {"index": 4, "path": ["output_state"], "value": "off"} in intent["joint_checks"]
 
 
 

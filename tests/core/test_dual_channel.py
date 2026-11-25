@@ -688,6 +688,131 @@ def test_joint_operation_validates_load_before_writes(action, arguments, load_re
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
 
 
+@pytest.mark.parametrize("action,arguments", [
+    ("output", {"channel": "all", "enabled": True}),
+    ("configure-combine", {"channel": 1, "source": "ch2"}),
+    ("configure-voltage-coupling", {"state": "on"}),
+    ("update-coupled-voltage", {"channel": 2, "amplitude_vpp": 0.2, "offset_v": 0.05}),
+    ("configure-tracking", {"mode": "on", "reference_channel": 2}),
+    ("dual-channel-status", {}),
+])
+@pytest.mark.parametrize("low,high,offset", [
+    (0, 0, 0),
+    (-0.05, 0.05, 5.0),
+])
+def test_joint_operation_rejects_inconsistent_voltage_readback(joint, monkeypatch, action, arguments, low, high, offset):
+    state, _, run = joint
+    coupled = action == "update-coupled-voltage"
+    if coupled:
+        run("configure-voltage-coupling", state="on")
+    query, write = SimulatedResource.query, SimulatedResource.write
+    readings = {
+        "SOURce2:VOLTage:LOW?": str(low),
+        "SOURce2:VOLTage:HIGH?": str(high),
+        "SOURce2:VOLTage:OFFSet?": str(offset),
+    }
+    writes = []
+
+    def faulty(self, command):
+        return readings[command] if command in readings else query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", faulty)
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WaveformVerificationError):
+        run(action, **arguments)
+    assert writes == []
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert state.ch1.combine_source == "NONE"
+    assert state.voltage_coupling is coupled and state.tracking == "OFF"
+    # Faulty voltage settings must not prevent explicit safe OFF.
+    assert run("output", channel="all", enabled=False)["output_states"] == {"1": "off", "2": "off"}
+    assert state.voltage_coupling is coupled
+
+
+@pytest.mark.parametrize("dc_channels", [(1,), (2,), (1, 2)])
+def test_voltage_coupling_dc_scope_rejects_before_writes(joint, monkeypatch, dc_channels):
+    state, options, run = joint
+    for ch in dc_channels:
+        visa.configure_dc(voltage_v=0.1, channel=ch, **options)
+    if len(dc_channels) == 2:
+        run("configure-voltage-coupling", state="on")
+        action = "update-coupled-voltage"
+        arguments = {"amplitude_vpp": 0.2, "offset_v": 0.05}
+    else:
+        action = "configure-voltage-coupling"
+        arguments = {"state": "on"}
+    write = SimulatedResource.write
+    writes = []
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WaveformParameterError):
+        run(action, **arguments)
+    assert writes == []
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert state.voltage_coupling is (len(dc_channels) == 2)
+    if len(dc_channels) == 2:
+        assert run("output", channel="all", enabled=True)["output_state"] == "on"
+        run("output", channel="all", enabled=False)
+        run("configure-voltage-coupling", state="off")
+        assert not state.voltage_coupling
+
+
+def test_other_channel_modulation_rejects_inconsistent_carrier_range(joint, monkeypatch):
+    state, options, _ = joint
+    query, write = SimulatedResource.query, SimulatedResource.write
+    writes = []
+
+    def faulty(self, command):
+        if command in {"SOURce1:VOLTage:LOW?", "SOURce1:VOLTage:HIGH?"}:
+            return "0"
+        return query(self, command)
+
+    def record(self, command):
+        writes.append(command)
+        return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "query", faulty)
+    monkeypatch.setattr(SimulatedResource, "write", record)
+    with pytest.raises(WaveformVerificationError) as caught:
+        visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1,
+                            am=visa.AMConfig(depth_percent=40, source="ch2"), **options)
+    assert "SOURce1:AM:STATe ON" in writes
+    assert "OUTPut1 OFF" in writes and "OUTPut2 OFF" in writes
+    assert not any(command in {"OUTPut1 ON", "OUTPut2 ON"} for command in writes)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    assert caught.value.output_state == "off"
+
+
+@pytest.mark.parametrize("load,amplitude,allowed", [
+    ("50", 0.001, True), ("50", 0.0005, False),
+    ("high-z", 0.002, True), ("high-z", 0.001, False),
+    ("1", 0.0001, True),
+])
+def test_group_on_validates_raw_amplitude_without_rejecting_dc(joint, load, amplitude, allowed):
+    state, options, run = joint
+    visa.configure_dc(voltage_v=0.1, channel=1, **options)
+    # Synthetic readback, including the non-nominal load which has no
+    # explicit minimum in the registered nominal-load specifications.
+    state.ch2.output_load = load
+    state.ch2.amplitude_vpp = amplitude
+    state.ch2.offset_v = 0.1
+    if allowed:
+        assert run("output", channel="all", enabled=True)["output_state"] == "on"
+        assert run("output", channel="all", enabled=False)["output_state"] == "off"
+    else:
+        with pytest.raises(WaveformVerificationError):
+            run("output", channel="all", enabled=True)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+
+
 @pytest.mark.parametrize("enabled", [True, False])
 def test_group_output_readback_failure_cleans_both_outputs(enabled):
     state = Simulated33521BState(model_id=MODEL)
@@ -736,7 +861,7 @@ def test_tracking_rejects_modulated_envelope_above_other_channel_limit(joint):
 @pytest.mark.parametrize("mode,reading,allowed", [
     ("am", -200, False), ("dssc", -100, False), ("sum", -200, False),
     ("am", 121, False), ("sum", 101, False),
-    ("am", 120, True), ("sum", 100, True),
+    ("am", 120, True), ("sum", 100, True), ("dssc", 0, True),
 ])
 def test_group_on_validates_modulation_readback(joint, monkeypatch, mode, reading, allowed):
     state, _, run = joint

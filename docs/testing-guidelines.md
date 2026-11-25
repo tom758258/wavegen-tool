@@ -134,8 +134,11 @@ A subset PASS is not full-scope Product Live admission evidence.
 `dual-channel` is applicable only to two-channel models. An explicit selection
 on a single target without two-channel capability fails closed; all-target
 Preflight skips it for that model. Single-channel phase synchronization
-belongs to `static`, and joint sequence cleanup has a representative
-`software-sequence` case. The dual-channel recipes share the existing inventory
+belongs to `static`: configure a primary sine and an internal Sum sine,
+synchronize their phases with output OFF, then observe the bounded summed
+signal and confirm CH1 OFF. The simulator verifies configuration, sequence
+ordering and readback, not physical phase alignment. Joint sequence cleanup
+has a representative `software-sequence` case. The dual-channel recipes share the existing inventory
 and software sequence path so simulation retains dependent channel state.
 Real Live observations require both channel connections, interactive approval
 and confirmed group OFF. They must not be executed without authorization.

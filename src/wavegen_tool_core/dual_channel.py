@@ -431,16 +431,41 @@ def _check_other_channel_frequency(session, context, ch):
         _check_coupled_frequencies(session, {ch: _numeric(session, prefix + ":FREQuency?")}, context)
 
 
-def _levels(session, ch):
+def _voltage_readback(session, ch):
     source = _source(ch)
     offset = _numeric(session, f"{source}:VOLTage:OFFSet?")
-    if _query(session, f"{source}:FUNCtion?") == "DC":
-        return offset, offset
+    if _function_name(_query(session, f"{source}:FUNCtion?")) == "dc":
+        return offset, offset, offset
     low = _numeric(session, f"{source}:VOLTage:LOW?")
     high = _numeric(session, f"{source}:VOLTage:HIGH?")
-    if high < low:
+    span = high - low
+    if not math.isfinite(span) or span <= 0:
         raise WaveformVerificationError("Invalid voltage range readback.")
+    # These are the documented minimum programmed amplitudes for the two
+    # nominal terminations. Do not assume an undocumented minimum for other loads.
+    load = visa._parse_status_load(session.query(f"OUTPut{ch}:LOAD?"))
+    minimum = {"50": 0.001, "high-z": 0.002}.get(load)
+    if minimum is not None and span < minimum and not math.isclose(
+        span, minimum, rel_tol=1e-5, abs_tol=1e-9
+    ):
+        raise WaveformVerificationError("Voltage range readback is below the minimum amplitude.")
+    _equal(low + span / 2, offset, "Voltage range offset")
+    return low, high, offset
+
+
+def _levels(session, ch):
+    low, high, _ = _voltage_readback(session, ch)
     return low, high
+
+
+def _check_voltage_coupling_scope(session, *, updating=False):
+    # DC has no effective AC amplitude. The joint amplitude/offset contract
+    # cannot confirm a mixed DC/non-DC pair or an amplitude update on DC.
+    dc = [_function_name(_query(session, f"SOURce{ch}:FUNCtion?")) == "dc" for ch in (1, 2)]
+    if updating and any(dc):
+        raise WaveformParameterError("Coupled amplitude update requires two non-DC waveforms.")
+    if any(dc) and not all(dc):
+        raise WaveformParameterError("Mixed DC/non-DC voltage coupling cannot verify equal amplitudes.")
 
 
 def _check_levels(session, ch, low, high, load=None):
@@ -492,12 +517,11 @@ def _check_combine(session, receiver, source):
     for ch in (receiver, source):
         if _query(session, f"SOURce{ch}:FUNCtion?") == "DC":
             raise WaveformParameterError("DC cannot be combined.")
-    # Validate both load readbacks before enabling Combine, including the
-    # source whose load is otherwise only read by the post-write status query.
-    visa._parse_status_load(session.query(f"OUTPut{source}:LOAD?"))
     low, high = _signal_levels(session, receiver)
-    other_low, other_high = _signal_levels(session, source)
-    offset = _numeric(session, f"SOURce{source}:VOLTage:OFFSet?")
+    # Use one validated source voltage snapshot, not a second offset query
+    # that could disagree with the range used to compute its envelope.
+    source_low, source_high, offset = _voltage_readback(session, source)
+    other_low, other_high = _signal_levels(session, source, (source_low, source_high))
     _check_levels(session, receiver, low + other_low - offset, high + other_high - offset)
 
 
@@ -515,14 +539,14 @@ def _status(session):
         prefix = _source(ch)
         function = _query(session, prefix + ":FUNCtion?")
         _function_name(function)
-        low, high = _levels(session, ch)
+        low, high, offset = _voltage_readback(session, ch)
         channels[str(ch)] = {
             "output_state": _outputs(session, (ch,))[str(ch)],
             "function": function,
             "frequency_hz": (None if function in {"DC", "NOIS", "NOISE", "PRBS", "ARB"}
                              else _numeric(session, prefix + ":FREQuency?")),
             "amplitude_vpp": high - low,
-            "offset_v": _numeric(session, prefix + ":VOLTage:OFFSet?"),
+            "offset_v": offset,
             "phase_deg": (None if function in {"DC", "NOIS", "NOISE", "PRBS", "ARB"}
                           else phase_factor * _numeric(session, prefix + ":PHASe?")),
             "load": visa._parse_status_load(session.query(f"OUTPut{ch}:LOAD?")),
@@ -813,6 +837,7 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
     elif action == "configure-voltage-coupling" and plan["state"] == "on":
         if tracked:
             raise WaveformParameterError("Disable tracking first.")
+        _check_voltage_coupling_scope(session)
         # Coupling can copy load and voltage settings; validate either starting setup
         # against both channels' programmed limits before allowing the native action.
         for ref in (1, 2):
@@ -829,6 +854,7 @@ def _apply(session, plan, arguments, context, mark_configuration_write, mark_out
     elif action == "update-coupled-voltage":
         if not voltage or tracked:
             raise WaveformParameterError("Voltage coupling must be active without tracking.")
+        _check_voltage_coupling_scope(session, updating=True)
         amp, offset = plan["amplitude_vpp"], plan["offset_v"]
         old_low, old_high = _levels(session, plan["channel"])
         old_half = (old_high - old_low) / 2

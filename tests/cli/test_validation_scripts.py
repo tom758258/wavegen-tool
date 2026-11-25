@@ -584,7 +584,7 @@ def test_full_plan_inventory_and_privacy(
             "tracking-on", "tracking-invert", "modulation-am", "modulation-fm",
             "modulation-pm", "modulation-pwm", "modulation-sum", "combine-ch1", "combine-ch2",
         )),
-    } if 2 in channels else set())
+    } if 2 in channels else {"ch1/static-phase-sync"})
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
     for private in (resource, private_token, str(REPO_ROOT), str(run)):
@@ -729,6 +729,7 @@ def test_full_preflight_static_direct_without_hardware(
     cases = {case["name"]: case["status"] for case in report["cases"]}
     for mode in ("dry-run", "simulate"):
         assert cases[f"keysight-33521b/ch1/static-sine/step1-{mode}"] == "PASS"
+        assert cases[f"keysight-33521b/ch1/static-phase-sync/step1-{mode}"] == "PASS"
     assert not any("/ch1/arbitrary-" in name for name in cases)
 
 

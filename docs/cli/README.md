@@ -1019,7 +1019,10 @@ the tool rejects active Arbitrary or List waveform settings and permits only an 
 on both channels, when Arbitrary is supported. No memory is cleared automatically. Inverted tracking
 preserves the DC offset. Coupled frequency changes require CW frequency mode
 and valid resulting modulation, duty cycle, pulse and Burst timing. Voltage coupling maintains
-amplitude, offset, range, load and units. Combine adds the source signal to
+amplitude, offset, range, load and units. Mixed DC/non-DC voltage coupling
+cannot verify equal amplitudes; coupled amplitude/offset updates require two
+non-DC waveforms. Two DC channels may use voltage coupling for their offset
+settings. Combine adds the source signal to
 the receiver; the source's DC offset is not added.
 
 For AM, FM, PM, PWM and Sum, use `--am-source`, `--fm-source`,

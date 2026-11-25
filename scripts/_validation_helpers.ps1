@@ -898,6 +898,20 @@ function Get-FullValidationInventory {
                 Add-JointCheck $statusIndices[0] @('channel_status',$receiver,'combine_source') "ch$(3 - [int]$receiver)"
             }
             $intent['joint_checks'] = @($checks.ToArray())
+        } elseif ($Family -eq 'static' -and $Kind -eq 'phase-sync') {
+            # A single-channel phase sync is a joint primary/modulation event.
+            # Reuse the existing sequence result checks without marking CH2.
+            $intent['joint_checks'] = @(
+                @{index=1;path=@('phase_settings_preserved');value=$true},
+                @{index=1;path=@('output_state');value='off'},
+                @{index=2;path=@('output_state');value='on'},
+                @{index=4;path=@('output_state');value='off'},
+                @{index=5;path=@('advanced_mode');value='SUM'},
+                @{index=5;path=@('settings','source');value='internal'},
+                @{index=5;path=@('settings','shape');value='sine'},
+                @{index=5;path=@('settings','internal_frequency_hz');value=1000},
+                @{index=5;path=@('settings','amplitude_percent');value=50}
+            )
         }
         $step | Add-Member -NotePropertyName sequence_intent -NotePropertyValue $intent
         $recipe = [pscustomobject]@{
@@ -909,7 +923,14 @@ function Get-FullValidationInventory {
     }
 
     if ($Channels.Count -eq 1 -and 'static' -in $Modes) {
-        Add-Recipe 'static-phase-sync' 'static' @((New-Step @('phase-sync') @{ output_state = 'off' }))
+        New-SequenceCase 1 'phase-sync' @(
+            @{action='configure-sine';arguments=@{channel=1;frequency_hz=1000;amplitude_vpp=0.1;offset_v=0;phase_deg=0;load='50';sum=@{source='internal';shape='sine';modulation_frequency_hz=1000;amplitude_percent=50}}},
+            @{action='phase-sync';arguments=@{}},
+            @{action='output';arguments=@{channel=1;enabled=$true}},
+            @{action='wait';arguments=@{seconds=3}},
+            @{action='output';arguments=@{channel=1;enabled=$false}},
+            @{action='readback-advanced';arguments=@{channel=1}}
+        ) @{} @{seconds=3;expected='Observe a stable 1 kHz sine of approximately 0.15 Vpp (0.1 Vpp carrier plus the in-phase 50% internal Sum) into 50 ohms, followed by output OFF.'} 'static'
     }
     if ($Channels.Count -eq 2 -and ('dual-channel' -in $Modes -or 'software-sequence' -in $Modes)) {
         # One sequence preserves simulator state across dependent operations.
@@ -981,7 +1002,7 @@ function Get-FullValidationInventory {
             }
         }
         if ('software-sequence' -in $Modes) {
-            New-SequenceCase 1 'dual-channel' @($base + @($phase,$on,$wait,$off,$status)) @{} @{seconds=3;expected='Both channels turn ON together and the sequence finishes with both outputs OFF.'} 'software-sequence' $true
+            New-SequenceCase 1 'dual-channel' @($base + @($phase,$on,$wait,$off,$status)) @{} @{seconds=3;expected='Both channels are ON during the observation and the sequence finishes with both outputs OFF.'} 'software-sequence' $true
         }
     }
     Add-Recipe 'status' 'inspection' @((New-Step @('status'))) $true

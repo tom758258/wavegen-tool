@@ -601,7 +601,7 @@ function Invoke-FullLiveCases {
                     }
                     Assert-FullErrorQueue -Name "$name-errors"
                 }
-                if ($observation -and $recipe.family -notin @('software-sequence', 'basic-workflows', 'dual-channel')) {
+                if ($observation -and $recipe.family -ne 'basic-workflows' -and $recipe.steps[0].arguments[0] -ne 'run-software-sequence') {
                     if ($externalInput) { Write-Host $observation.action }
                     Write-Host "Observe CH$channel for $($observation.seconds) seconds. Output will then turn off."
                     Start-Sleep -Seconds $observation.seconds
@@ -959,7 +959,7 @@ foreach ($caseName in $plannedCases) {
     Write-Host "  $caseName"
 }
 if ($Suite -eq 'full') {
-    foreach ($recipe in @($fullInventory | Where-Object { $_.family -in @('software-sequence', 'dual-channel') })) {
+    foreach ($recipe in @($fullInventory | Where-Object { $_.steps[0].arguments[0] -eq 'run-software-sequence' })) {
         $intent = $recipe.steps[0].sequence_intent
         Write-Host "  $($recipe.name) intent - Output ON: $($intent.output_on), waveform uploads: $($intent.upload_count)"
     }
