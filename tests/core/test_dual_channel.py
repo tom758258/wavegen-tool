@@ -1540,23 +1540,36 @@ def test_tracking_rejects_invalid_reference_frequency_before_copy(joint, monkeyp
     assert run("configure-tracking", mode="on", reference_channel=2)["readback_verified"]
 
 
-@pytest.mark.parametrize("mode", ["SWEEP", "LIST", "noise", "prbs"])
-def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypatch, mode):
+@pytest.mark.parametrize("mode,field,invalid", [
+    ("SWEEP", "sweep_stop_frequency_hz", 21e6),
+    ("SWEEP", "sweep_time_s", -1),
+    ("SWEEP", "sweep_hold_time_s", -1),
+    ("SWEEP", "sweep_return_time_s", -1),
+    ("SWEEP", "trigger_delay_s", 2e-9),
+    ("SWEEP_TIMER", "trigger_timer_s", 0.5),
+    ("LIST", "list_frequencies_hz", (1000, 21e6)),
+    ("LIST", "list_dwell_s", -1),
+    ("LIST_BUS", "list_frequencies_hz", (1000, 21e6)),
+    ("ramp", "ramp_symmetry_percent", 101),
+    ("noise", "noise_bandwidth_hz", 21e6),
+    ("prbs", "prbs_bit_rate_bps", 51e6),
+])
+def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypatch, mode, field, invalid):
     state, _, run = joint
     channel = state.ch2
-    if mode == "SWEEP":
+    if mode.startswith("SWEEP"):
         channel.frequency_mode = "SWEep"
-        field, invalid = "sweep_stop_frequency_hz", 21e6
-    elif mode == "LIST":
+        if mode == "SWEEP_TIMER":
+            channel.trigger_source = "timer"
+            channel.trigger_timer_s = 2
+    elif mode.startswith("LIST"):
         channel.frequency_mode = "LIST"
         channel.list_frequencies_hz = (1000, 2000)
-        field, invalid = "list_frequencies_hz", (1000, 21e6)
-    elif mode == "noise":
-        channel.active_function = "NOIS"
-        field, invalid = "noise_bandwidth_hz", 21e6
+        if mode == "LIST_BUS":
+            channel.trigger_source = "bus"
+            channel.list_dwell_s = -1  # Inactive dwell is not used by Bus.
     else:
-        channel.active_function = "PRBS"
-        field, invalid = "prbs_bit_rate_bps", 51e6
+        channel.active_function = {"ramp": "RAMP", "noise": "NOIS", "prbs": "PRBS"}[mode]
     run("output", channel="all", enabled=True)
     run("output", channel="all", enabled=False)
     setattr(channel, field, invalid)
@@ -1588,6 +1601,12 @@ def test_group_on_preserves_current_non_cw_and_nonperiodic_modes(joint, monkeypa
     ("tracking", "pm", "external", "pm_deviation_deg", 361),
     ("output", "pwm", "external", "pwm_deviation_s", 0.0002),
     ("tracking", "pwm", "external", "pwm_deviation_s", 0.0002),
+    ("output", "am", "internal", "am_internal_frequency_hz", 0),
+    ("tracking", "sum", "internal", "sum_internal_frequency_hz", 0),
+    ("update", "am", "internal", "am_internal_frequency_hz", 21e6),
+    ("activation", "sum", "internal", "sum_internal_frequency_hz", -1),
+    ("output", "am", "external", "am_depth_percent", -1),
+    ("output", "sum", "external", "sum_amplitude_percent", -1),
 ])
 def test_joint_modulation_validates_active_parameters_before_writes(
     joint, monkeypatch, operation, kind, source, field, invalid,
@@ -1599,6 +1618,8 @@ def test_joint_modulation_validates_active_parameters_before_writes(
         "fm": visa.FMConfig(10, 100),
         "pm": visa.PMConfig(10, 30),
         "pwm": visa.PWMConfig(10, 1e-6),
+        "am": visa.AMConfig(10, 40),
+        "sum": visa.SumConfig(10, 20),
     }[kind]
     if kind == "pwm":
         visa.configure_pulse(frequency_hz=1000, amplitude_vpp=0.1,
@@ -1612,7 +1633,7 @@ def test_joint_modulation_validates_active_parameters_before_writes(
     if source == "external":
         # An external source does not use the programmed internal rate.
         rate_field = "_rate_hz" if kind in {"fsk", "bpsk"} else "_internal_frequency_hz"
-        setattr(channel, kind + rate_field, 2e6)
+        setattr(channel, kind + rate_field, 0 if kind in {"am", "sum"} else 2e6)
     if operation == "update":
         run("configure-frequency-coupling", state="on", mode="ratio", ratio=1)
     action, arguments = {
@@ -1642,13 +1663,22 @@ def test_joint_modulation_validates_active_parameters_before_writes(
     run("output", channel="all", enabled=False)
 
 
-@pytest.mark.parametrize("kind", ["fm", "pm", "fsk", "bpsk", "pwm"])
-def test_joint_external_modulation_rejects_unsupported_carrier(joint, monkeypatch, kind):
+@pytest.mark.parametrize("kind,carrier,operation", [
+    ("fm", "PULS", "output"), ("pm", "PULS", "output"),
+    ("fsk", "PULS", "output"), ("bpsk", "PULS", "output"),
+    ("pwm", "SIN", "output"), ("pwm", "NOIS", "output"),
+    ("pwm", "PRBS", "tracking"), ("pwm", "DC", "output"),
+    ("am", "DC", "output"), ("sum", "DC", "tracking"),
+])
+def test_joint_external_modulation_rejects_unsupported_carrier(joint, monkeypatch, kind, carrier, operation):
     state, _, run = joint
     channel = state.ch2
     setattr(channel, kind + "_enabled", True)
     setattr(channel, kind + "_source", "external")
-    channel.active_function = "SIN" if kind == "pwm" else "PULS"
+    channel.active_function = carrier
+    arguments = ({"channel": "all", "enabled": True} if operation == "output"
+                 else {"mode": "on", "reference_channel": 2})
+    action = "output" if operation == "output" else "configure-tracking"
     writes = []
     write = SimulatedResource.write
 
@@ -1658,12 +1688,14 @@ def test_joint_external_modulation_rejects_unsupported_carrier(joint, monkeypatc
 
     monkeypatch.setattr(SimulatedResource, "write", record)
     with pytest.raises(WavegenError):
-        run("output", channel="all", enabled=True)
+        run(action, **arguments)
     assert not writes
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
     channel.active_function = "PULS" if kind == "pwm" else "SIN"
-    assert run("output", channel="all", enabled=True)["output_state"] == "on"
+    assert run(action, **arguments)["executed"]
     run("output", channel="all", enabled=False)
+    if operation == "tracking":
+        run("configure-tracking", mode="off")
     if kind in {"fm", "pm", "pwm"}:
         writes.clear()
         with pytest.raises(WavegenError):

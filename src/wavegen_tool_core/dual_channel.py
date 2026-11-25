@@ -339,6 +339,43 @@ def _coupled_modulation_shape(session, prefix, mode, source):
     return shape
 
 
+def _check_amplitude_modulation_rate(session, ch, carrier, caps):
+    prefix = _source(ch)
+    for mode in ("AM", "SUM"):
+        if not _state(session, f"{prefix}:{mode}:STATe?"):
+            continue
+        if carrier == "dc":
+            raise WaveformParameterError(f"{mode} does not support a DC carrier.")
+        if _modulation_source(session, ch, mode) != "INTERNAL":
+            continue
+        function = visa._canonical_readback_enum(
+            _query(session, f"{prefix}:{mode}:INTernal:FUNCtion?")
+        )
+        shape = visa._MODULATION_SHAPE_READBACK.get(function)
+        if shape is not None:
+            visa._normalize_modulation_shape_and_frequency(
+                shape, _numeric(session, f"{prefix}:{mode}:INTernal:FREQuency?"),
+                modulation=mode, capabilities=caps,
+            )
+        elif function not in {"NOISE", "PRBS", "ARB"}:
+            raise WaveformVerificationError("Unknown internal modulation function.")
+        # Native panel-only shapes remain outside the configuration API.
+        # Noise has no periodic modulation rate; PRBS and Arb have their
+        # own rate/sample-rate rules. Do not apply periodic limits to them.
+
+
+def _checked_trigger_delay(ch, delay, *, label):
+    if not 0 <= delay <= 1000:
+        raise WaveformVerificationError(f"Invalid {label} trigger delay readback.")
+    # Match the existing 1 ns readback tolerance and canonical 4 ns grid.
+    rounded = round(delay * 250_000_000) * 4 / 1e9
+    if not visa._configuration_readback_matches(
+        f"TRIGger{ch}:DELay", str(rounded), str(delay),
+    ):
+        raise WaveformVerificationError(f"Invalid {label} trigger delay readback.")
+    return rounded
+
+
 def _check_coupled_frequencies(session, values, context, *, current=False):
     """Validate periodic rates; current settings need not be in coupling's CW mode."""
     caps = visa._capabilities_for_identity(context.identity)
@@ -352,8 +389,24 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
             _, active, settings = visa._read_advanced_mode_session(session, context, ch)
             if active == "SWEEP":
                 points = (settings["start_frequency_hz"], settings["stop_frequency_hz"])
+                _, sweep_time, hold_time, return_time, _ = visa._prepare_sweep_timing(
+                    settings["spacing"], settings["sweep_time_s"],
+                    settings["hold_time_s"], settings["return_time_s"], waveform="Group output",
+                )
+                visa._prepare_sweep_trigger(
+                    settings["trigger_source"], settings.get("trigger_timer_s"),
+                    settings.get("trigger_slope"),
+                    _checked_trigger_delay(ch, settings["trigger_delay_s"], label="Sweep"),
+                    waveform="Group output", minimum_timer_s=sweep_time + hold_time + return_time,
+                )
             elif active == "LIST":
                 points = visa._normalize_frequency_list(settings["frequencies_hz"], waveform="Group output")
+                if settings["trigger_source"] == "immediate":
+                    visa._normalize_list_dwell(settings["dwell_s"], waveform="Group output")
+                elif settings["trigger_source"] == "timer":
+                    visa._prepare_trigger(
+                        "timer", settings["trigger_timer_s"], waveform="Group output",
+                    )
             else:
                 raise WaveformVerificationError("Unknown current frequency mode.")
             frequency = max(points)
@@ -365,6 +418,7 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
             if current:
                 frequency = _numeric(session, prefix + ":FREQuency?")
             _frequency_limit(session, ch, frequency, caps)
+        _check_amplitude_modulation_rate(session, ch, carrier, caps)
         duty_frequency = frequency
         if _state(session, prefix + ":FM:STATe?"):
             source = _modulation_source(session, ch, "FM")
@@ -440,6 +494,10 @@ def _check_coupled_frequencies(session, values, context, *, current=False):
                 frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:SQUare:DCYCle?"),
                 50, 0, capabilities=caps, duty_cycle_validation_frequency_hz=duty_frequency,
             )
+        if carrier == "ramp":
+            visa._prepare_ramp(
+                frequency, 0.1, 0, _numeric(session, prefix + ":FUNCtion:RAMP:SYMMetry?"), 50, 0,
+            )
         pwm_enabled = _state(session, prefix + ":PWM:STATe?")
         if pwm_enabled and carrier != "pulse":
             raise WaveformParameterError("PWM requires a Pulse carrier.")
@@ -501,16 +559,7 @@ def _check_burst_settings(session, context, ch, carrier, rate):
     else:
         if carrier == "noise":
             raise WaveformParameterError("Noise only supports gated Burst.")
-        delay = settings["trigger_delay_s"]
-        if not 0 <= delay <= 1000:
-            raise WaveformVerificationError("Invalid Burst trigger delay readback.")
-        # Match the existing 1 ns delay readback tolerance before validating
-        # the canonical programmed 4 ns grid value.
-        rounded_delay = round(delay * 250_000_000) * 4 / 1e9
-        if not visa._configuration_readback_matches(
-            f"TRIGger{ch}:DELay", str(rounded_delay), str(delay),
-        ):
-            raise WaveformVerificationError("Invalid Burst trigger delay readback.")
+        rounded_delay = _checked_trigger_delay(ch, settings["trigger_delay_s"], label="Burst")
         config = visa.CountedBurstConfig(
             count=settings["count"], trigger_source=settings["trigger_source"],
             period_s=settings.get("period_s"), trigger_timer_s=settings.get("trigger_timer_s"),
@@ -528,6 +577,12 @@ def _check_current_frequency_settings(session, context, ch):
     """
     prefix = _source(ch)
     carrier = _function_name(_query(session, prefix + ":FUNCtion?"))
+    if carrier in {"arbitrary", "dc", "noise", "prbs"}:
+        if _state(session, prefix + ":PWM:STATe?"):
+            raise WaveformParameterError("PWM requires a Pulse carrier.")
+        _check_amplitude_modulation_rate(
+            session, ch, carrier, visa._capabilities_for_identity(context.identity),
+        )
     if carrier == "arbitrary":
         return
     if carrier == "dc":
