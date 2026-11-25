@@ -346,7 +346,7 @@ def _check_coupled_frequencies(session, values, context):
             modulation_frequency = (
                 _numeric(session, prefix + ":PM:INTernal:FREQuency?")
                 if source == "INTERNAL" else visa._other_channel_pm_source_frequency(
-                    session, context, 3-ch, frequency_hz=values[3-ch]
+                    session, context, 3-ch, frequency_hz=values.get(3-ch)
                 )
             )
             if modulation_frequency <= 0 or frequency <= 20 * modulation_frequency:
@@ -392,6 +392,21 @@ def _check_coupled_frequencies(session, values, context):
                 visa._prepare_counted_burst(carrier, frequency, config)
             elif mode != "GATED":
                 raise WaveformVerificationError("Unknown Burst mode.")
+
+
+def _check_other_channel_frequency(session, context, ch):
+    """Validate the current carrier of frequency-sensitive other-channel modulation."""
+    prefix = _source(ch)
+    for mode in ("FM", "PM", "PWM"):
+        if not _state(session, f"{prefix}:{mode}:STATe?"):
+            continue
+        if _modulation_source(session, ch, mode) != f"CH{3-ch}":
+            continue
+        if mode == "PM":
+            visa._verify_other_channel_pm_frequency(session, context, ch)
+        else:
+            # Reuse the existing current/proposed frequency and timing checks.
+            _check_coupled_frequencies(session, {ch: _numeric(session, prefix + ":FREQuency?")}, context)
 
 
 def _levels(session, ch):
@@ -587,9 +602,8 @@ def _apply(session, plan, arguments, context):
                 _check_tracking_memory(session, context)
                 _verify_tracking_pair(session, context, status, tracking[0] in {"INV", "INVERTED"})
         for ch in (1, 2):
-            if not frequency and _state(session, f"SOURce{ch}:PM:STATe?"):
-                if _modulation_source(session, ch, "PM") == f"CH{3-ch}":
-                    visa._verify_other_channel_pm_frequency(session, context, ch)
+            if not frequency:
+                _check_other_channel_frequency(session, context, ch)
             _check_levels(session, ch, *_signal_levels(session, ch))
             if combined[ch-1] != "NONE":
                 _check_combine(session, ch, 3-ch)
@@ -628,6 +642,16 @@ def _apply(session, plan, arguments, context):
 
     frequency, voltage, tracking, combine = _topology(session)
     tracked = any(mode != "OFF" for mode in tracking)
+    # Explicit release operations must remain available to recover from a
+    # conflicting topology. All other topology writes must start from a
+    # consistent state, not just frequency changes and group ON.
+    releasing = (
+        (action in {"configure-frequency-coupling", "configure-voltage-coupling"} and plan["state"] == "off")
+        or (action == "configure-tracking" and plan["tracking"] == "off")
+        or (action == "configure-combine" and plan["source"] == "none")
+    )
+    if not releasing:
+        _check_topology(session, (frequency, voltage, tracking, combine))
     expected_frequency = {}
     tracking_reference = None
     if action == "configure-frequency-coupling" and plan["state"] == "on":
@@ -705,7 +729,6 @@ def _apply(session, plan, arguments, context):
         if not tracked or frequency or voltage or combine != ["NONE", "NONE"]:
             raise WaveformParameterError("Tracking must be active without conflicting coupling.")
         _check_tracking_memory(session, context)
-        _check_topology(session, (frequency, voltage, tracking, combine))
         wave = _tracked_plan(context.identity.canonical_model_id, arguments)
         load = wave.load
         if hasattr(wave, "amplitude_vpp"):
@@ -722,7 +745,6 @@ def _apply(session, plan, arguments, context):
                 _check_levels(session, ch, wave.voltage_v, wave.voltage_v, load=load)
 
     if expected_frequency:
-        _check_topology(session, (frequency, voltage, tracking, combine))
         _check_coupled_frequencies(session, expected_frequency, context)
     for command in commands:
         if action == "configure-tracked-waveform" and ":FUNCtion:PULSe:TRANsition:" in command:

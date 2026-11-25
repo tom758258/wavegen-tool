@@ -7054,7 +7054,9 @@ def configure_pulse(
             write_pulse_command(command, "off")
         _check_trigger_delay_configuration(session, advanced_commands, before_writes=False)
         if other:
-            _verify_other_channel_modulation(session, context, advanced_commands, selected_channel)
+            _verify_other_channel_modulation(
+                session, context, advanced_commands, selected_channel, carrier_commands=commands
+            )
         elif verify_readback:
             _verify_advanced_mode_configuration(
                 session,
@@ -9566,17 +9568,39 @@ def _other_channel_modulation_precheck(session, commands, channel, context):
     return True
 
 
-def _verify_other_channel_modulation(session, context, commands, selected_channel):
-    from .dual_channel import _error_free, _require_off
+def _verify_other_channel_modulation(
+    session, context, commands, selected_channel, *, carrier_commands=None
+):
+    from .dual_channel import (
+        _check_levels, _check_other_channel_frequency, _equal, _error_free,
+        _function_name, _query, _require_off, _signal_levels,
+    )
+
     _error_free(session)
     _verify_advanced_mode_configuration(session, context, commands, selected_channel=selected_channel)
-    if "SOURce1:PM:STATe ON" in commands:
-        _verify_waveform_configuration(
-            session, context, commands, ("SOURce1:FREQuency",), selected_channel
-        )
-        _verify_other_channel_pm_frequency(session, context, selected_channel)
     _require_off(session, (1, 2))
-    from .dual_channel import _signal_levels, _check_levels
+    # A successful modulation readback is not sufficient if a carrier write
+    # was ignored or clipped. Pulse already checks timing before enabling its
+    # advanced mode; use its separate, channelized carrier plan here too.
+    if carrier_commands is None:
+        carrier_commands = _channelize_commands(commands, selected_channel)
+    settings = dict(command.split(" ", 1) for command in carrier_commands if " " in command)
+    prefix = f"SOURce{selected_channel}:"
+    function = prefix + "FUNCtion"
+    _equal(_function_name(_query(session, function + "?")),
+           _function_name(settings[function].upper()), "Other-channel carrier function")
+    load = f"OUTPut{selected_channel}:LOAD"
+    expected_load = "high-z" if settings[load] == "INF" else _format_scpi_number(float(settings[load]))
+    _equal(_parse_status_load(_query(session, load + "?")), expected_load, "Other-channel carrier load")
+    fields = {
+        prefix + suffix: settings[prefix + suffix]
+        for suffix in ("FREQuency", "VOLTage:UNIT", "VOLTage", "VOLTage:OFFSet",
+                       "PHASe", "FUNCtion:SQUare:DCYCle", "FUNCtion:RAMP:SYMMetry",
+                       "FUNCtion:PULSe:WIDTh")
+        if prefix + suffix in settings
+    }
+    _verify_configuration_readback(session, context, fields, label="Other-channel carrier")
+    _check_other_channel_frequency(session, context, selected_channel)
     _check_levels(session, selected_channel, *_signal_levels(session, selected_channel))
 
 

@@ -157,6 +157,13 @@ def test_other_channel_modulation_dry_run_simulate_and_readback(joint, kind, con
     assert not any(f"{kind.upper()}:INTernal:" in cmd for cmd in plan.commands)
     configure(**args, **options)
     assert getattr(state.ch1, f"{kind}_source") == "ch2"
+    if kind == "pwm":
+        original_width = state.ch1.pulse_width_s
+        state.ch1.pulse_width_s = 0.5e-6
+        with pytest.raises(WaveformParameterError):
+            run("output", channel="all", enabled=True)
+        assert not state.ch1.output_enabled and not state.ch2.output_enabled
+        state.ch1.pulse_width_s = original_width
     run("output", channel="all", enabled=True)
     run("output", channel="all", enabled=False)
     visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.1, **options)
@@ -248,6 +255,12 @@ def test_group_on_rejects_inconsistent_topology(joint):
     with pytest.raises(WaveformVerificationError):
         run("output", channel="all", enabled=True)
     assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    with pytest.raises(WaveformVerificationError):
+        run("configure-voltage-coupling", state="on")
+    assert not state.voltage_coupling
+    # Explicit release must remain usable even after rejecting the conflict.
+    run("configure-combine", channel=1, source="none")
+    assert state.ch1.combine_source == "NONE"
 
 
 @pytest.mark.parametrize("channel", [1, 2])
@@ -290,6 +303,34 @@ def test_coupled_frequency_preserves_pm_frequency_ratio(joint, monkeypatch):
         run("update-coupled-frequency", channel=2, frequency_hz=1000)
     assert state.frequency_coupling
     assert state.ch1.frequency_hz == 10000 and state.ch2.frequency_hz == 100
+
+
+@pytest.mark.parametrize("kind,config,ignored", [
+    ("am", visa.AMConfig(depth_percent=40, source="ch2"), "SOURce1:VOLTage 0.1"),
+    ("fm", visa.FMConfig(deviation_hz=2000, source="ch2"), "SOURce1:FREQuency 10000"),
+    ("sum", visa.SumConfig(amplitude_percent=20, source="ch2"), "SOURce1:VOLTage 0.1"),
+])
+def test_other_channel_modulation_rejects_ignored_carrier_write(joint, monkeypatch, kind, config, ignored):
+    state, options, run = joint
+    visa.configure_sine(frequency_hz=1000, amplitude_vpp=0.2, **options)
+    visa.configure_sine(frequency_hz=100, amplitude_vpp=0.1, channel=2, **options)
+    write = SimulatedResource.write
+
+    def ignore_carrier(self, command):
+        if command != ignored:
+            return write(self, command)
+
+    monkeypatch.setattr(SimulatedResource, "write", ignore_carrier)
+    with pytest.raises(WaveformVerificationError):
+        visa.configure_sine(frequency_hz=10000, amplitude_vpp=0.1, **{kind: config}, **options)
+    assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    if kind == "fm":
+        assert state.ch1.frequency_hz == 1000
+        with pytest.raises(WaveformParameterError):
+            run("output", channel="all", enabled=True)
+        assert not state.ch1.output_enabled and not state.ch2.output_enabled
+    else:
+        assert state.ch1.amplitude_vpp == pytest.approx(0.2)
 
 
 @pytest.mark.parametrize("waveform, settings, ignored", [
