@@ -5164,4 +5164,7 @@ def test_tracked_waveform_preserves_exact_burst_json(field, token, accepted, mon
                    for command in payload["commands"])
     else:
         assert code == ExitCode.CLI_USAGE
-        assert payload["error"]["code"] == "waveform_parameter_error"
+        assert payload["success"] is False
+        assert payload["error"].startswith("waveform_parameter_error:")
+        increment = "0.1-degree increments" if field == "start_phase_deg" else "4 ns increments"
+        assert increment in payload["error"]
