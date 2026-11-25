@@ -32,8 +32,8 @@ WAIT = _step("wait", seconds=0)
 
 
 @pytest.fixture
-def fake_instrument(monkeypatch):
-    state = Simulated33521BState(model_id=MODEL)
+def fake_instrument(monkeypatch, request):
+    state = Simulated33521BState(model_id=getattr(request, "param", MODEL))
     writes = []
     queries = []
 
@@ -645,3 +645,104 @@ def test_software_sequence_cancellation_between_steps_cleans_up(fake_instrument,
     assert details["completed_step_executions"] == 1
     assert details["cleanup"]["confirmed_off_channels"] == [1]
     assert not state.ch1.output_enabled
+
+
+
+@pytest.mark.parametrize("failure", ["step", "cancel", "cleanup", "interrupt"])
+def test_dual_sequence_failure_or_cancel_preserves_topology_and_reports_off(
+    fake_instrument, monkeypatch, failure,
+):
+    from threading import Event
+
+    from wavegen_tool_core import software_sequence
+
+    state, _, _ = fake_instrument
+    event = Event()
+    original = software_sequence.run_dual_channel
+
+    def operation(action, arguments, **options):
+        result = original(action, arguments, **options)
+        if failure == "cancel" and options.get("resource") and action == "output" and arguments["enabled"]:
+            event.set()
+        return result
+
+    monkeypatch.setattr(software_sequence, "run_dual_channel", operation)
+    if failure in {"cleanup", "interrupt"}:
+        write = SimulatedResource.write
+
+        def fail_off(self, command):
+            if command == "OUTPut2 OFF" and state.ch2.output_enabled:
+                if failure == "interrupt":
+                    raise KeyboardInterrupt
+                raise OSError("injected cleanup failure")
+            return write(self, command)
+
+        monkeypatch.setattr(SimulatedResource, "write", fail_off)
+    last = (_step("configure-frequency-coupling", state="off") if failure == "step"
+            else _step("dual-channel-status"))
+    with pytest.raises(SoftwareSequenceError) as caught:
+        run_software_sequence(
+            _document(_step("configure-frequency-coupling", state="on", mode="ratio", ratio=2),
+                      _step("output", channel="all", enabled=True), last),
+            resource=state.resource_name, expected_model_id=MODEL,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION, cancel_event=event,
+        )
+    cleanup = caught.value.details["cleanup"]
+    assert cleanup["attempted_channels"] == [1, 2]
+    off_failed = failure in {"cleanup", "interrupt"}
+    assert cleanup["confirmed_off_channels"] == ([1] if off_failed else [1, 2])
+    assert bool(cleanup["errors"]) == off_failed
+    if failure == "interrupt":
+        assert caught.value.code == "interrupted"
+        assert any(error.get("cleanup_errors") for error in cleanup["errors"])
+    assert state.frequency_coupling and not state.ch1.output_enabled
+    assert state.ch2.output_enabled == off_failed
+
+
+
+@pytest.mark.parametrize(
+    ("fake_instrument", "step", "trigger_command", "affected_channels"),
+    [
+        (
+            MODEL,
+            _step("configure-frequency-coupling", state="on", mode="ratio", ratio=2),
+            "SOURce1:FREQuency:COUPle:STATe ON",
+            [1, 2],
+        ),
+        (
+            "keysight-33521b",
+            _step("phase-sync"),
+            "PHASe:SYNChronize",
+            [1],
+        ),
+    ],
+    indirect=["fake_instrument"],
+)
+def test_failed_joint_configuration_without_output_on_cleans_affected_channels(
+    fake_instrument, monkeypatch, step, trigger_command, affected_channels,
+):
+    state, writes, _ = fake_instrument
+    original_write = SimulatedResource.write
+
+    def unexpected_output(self, command):
+        result = original_write(self, command)
+        if command == trigger_command:
+            state.channels[affected_channels[-1]].output_enabled = True
+        return result
+
+    monkeypatch.setattr(SimulatedResource, "write", unexpected_output)
+    with pytest.raises(SoftwareSequenceError) as caught:
+        run_software_sequence(
+            _document(step),
+            resource=state.resource_name, expected_model_id=state.model_id,
+            support_policy_mode=SUPPORT_POLICY_MODE_VALIDATION,
+        )
+    cleanup = caught.value.details["cleanup"]
+    assert cleanup["attempted_channels"] == cleanup["confirmed_off_channels"] == affected_channels
+    assert not cleanup["errors"]
+    assert {command for command in writes if command in {"OUTPut1 OFF", "OUTPut2 OFF"}} == {
+        f"OUTPut{channel} OFF" for channel in affected_channels
+    }
+    assert all(not state.channels[channel].output_enabled for channel in affected_channels)
+    assert state.frequency_coupling == (len(affected_channels) == 2)
+    assert state.phase_sync_count == (1 if len(affected_channels) == 1 else 0)

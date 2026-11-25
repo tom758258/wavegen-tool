@@ -109,9 +109,19 @@ Supported commands are:
 - `run-waveform-sequence`
 - `run-frequency-step`
 - `apply-quick-output-preset`
+- `phase-sync`
+- `configure-frequency-coupling`
+- `configure-voltage-coupling`
+- `configure-tracking`
+- `configure-combine`
+- `update-coupled-frequency`
+- `update-coupled-voltage`
+- `configure-tracked-waveform`
+- `dual-channel-status`
 
 Dry-run accepts every `configure-*` command and the Arbitrary upload, list,
 and clear commands, plus Software Sequence and all Basic Workflow commands.
+Dry-run also accepts explicit dual-channel operations including group output.
 Submit `sync-output` and `trigger` in live or simulate mode.
 Trigger sends an instrument-wide Bus trigger and accepts an empty arguments object.
 
@@ -277,6 +287,38 @@ admission receives the Core unsupported-instrument error in the job result.
 `confirm_output`, when present, must also be a boolean. `confirm_output` is an
 admission safety field and is not passed to Core.
 
+### Dual-channel arguments
+
+These new operations are admitted only in `dry_run` and `simulate`; Worker
+Live rejects them. Dual-only commands require a registered two-channel model.
+`phase-sync` also accepts the single-channel model. Existing independent
+command arguments and live admission are unchanged.
+
+| Action | Arguments |
+| --- | --- |
+| `phase-sync`, `dual-channel-status` | Empty object |
+| `output` (joint) | `channel: "all"`, boolean `enabled` |
+| `configure-frequency-coupling` | `state: "on"`, `mode: "ratio"` and numeric `ratio`, or `mode: "offset"` and numeric `offset_hz`; optional integer `reference_channel` (default 1); for OFF supply only `state: "off"` |
+| `update-coupled-frequency` | Numeric `frequency_hz`, optional integer `channel` (default 1) |
+| `configure-voltage-coupling` | `state: "on"\|"off"` |
+| `update-coupled-voltage` | Numeric `amplitude_vpp`, `offset_v`, optional integer `channel` (default 1) |
+| `configure-tracking` | `mode: "on"\|"off"\|"invert"`, optional integer `reference_channel` (default 1) |
+| `configure-tracked-waveform` | Static `waveform` name and nested `arguments` using the corresponding existing waveform arguments |
+| `configure-combine` | Receiver integer `channel`, `source: "ch1"\|"ch2"\|"none"` (never itself) |
+
+For AM, FM, PM, PWM and Sum objects, optional `source` defaults to
+`"internal"`. With `"ch1"` or `"ch2"`, omit `modulation_frequency_hz` and
+`shape`, retain the required depth/deviation/amplitude, and use the other
+channel. This is not available in Worker Live. Both affected outputs must
+be OFF for joint configuration or coupled updates. Tracking activation also
+requires Sync OFF and verifies its reference-channel source and OFF state.
+Tracked Pulse readback uses the existing Pulse timing and phase checks on both
+channels. Tracking rejects active Arbitrary waveform settings and volatile Arbitrary catalogs containing anything other than the default built-in EXP_RISE entry on either channel. Coupled frequency changes require CW frequency mode and valid resulting modulation and pulse timing. Mixed DC/non-DC voltage coupling cannot verify equal amplitudes; coupled amplitude/offset updates require two non-DC waveforms. Two DC channels may use voltage coupling for offset settings. Group output results
+contain `output_states` keyed by string channel number; joint status and
+topology configuration return `channel_status`, `frequency_coupling` and
+`voltage_coupling`. A dry-run describes commands and intent, not measured
+instrument state.
+
 ### Software Sequences
 
 `run-software-sequence` takes `arguments.document` as a JSON object and optional
@@ -294,6 +336,7 @@ The allowed step actions are:
 - the four ordinary Sweep and four List Sweep configuration commands;
 - `configure-output`, `output`, `trigger`, `status`, `readback-advanced`,
   `read-errors`, and `wait`;
+- the explicit dual-channel actions and other-channel modulation documented above, within their model and execution-mode scope;
 - `upload-arbitrary`, `configure-arbitrary`, `configure-arbitrary-sequence`,
   and `list-arbitrary-memory`.
 
@@ -314,7 +357,7 @@ For a live software sequence, any write step, including an explicit OFF,
 requires Worker startup with `--allow-output-writes`. A step with
 `output.enabled: true` also requires outer `arguments.confirm_output: true`.
 Worker uses Product Live policy and rejects entire documents containing an
-Arbitrary step. Other model, feature, and output-state checks complete before
+Arbitrary step or a new dual-channel action or other-channel modulation. Other model, feature, and output-state checks complete before
 the sequence sends any setting writes. A stopped Worker drains the admitted
 sequence through its normal completion and output cleanup. Check the dry-run
 total wait before admitting a long-running job.

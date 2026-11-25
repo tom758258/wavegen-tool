@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
+from wavegen_tool_core.dual_channel import is_dual_action, run_dual_channel
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from http.client import HTTPConnection
@@ -542,6 +543,8 @@ class WorkerRuntime:
         if isinstance(expected_model_id, str):
             core_kwargs["expected_model_id"] = expected_model_id
         backend = self.config.backend
+        if is_dual_action(job.command, arguments):
+            return run_dual_channel(job.command, arguments, resource=resource, backend=backend, **core_kwargs)
         if job.command == SOFTWARE_SEQUENCE_ACTION:
             return run_software_sequence(
                 arguments["document"], resource=resource, backend=backend,
@@ -780,6 +783,8 @@ class WorkerRuntime:
         context: dict[str, object],
     ) -> object:
         model = context["planning_model_id"]
+        if is_dual_action(command, arguments):
+            return run_dual_channel(command, arguments, model=model)
         if command in ARBITRARY_COMMANDS:
             return run_arbitrary(command, arguments, model=model)
         if command == "configure-sync":
@@ -1270,11 +1275,16 @@ class _WorkerRequestHandler(BaseHTTPRequestHandler):
             payload = json.loads(body)
             if preserve_stepped_values and isinstance(payload, dict):
                 command = payload.get("command")
-                if isinstance(command, str) and command in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
+                if isinstance(command, str) and command in BASIC_WORKFLOW_COMMANDS | {
+                    SOFTWARE_SEQUENCE_ACTION, "configure-tracked-waveform",
+                }:
                     try:
                         return parse_software_sequence_json(body), None
                     except (ValueError, RecursionError, ArithmeticError):
-                        label = "software sequence" if command == SOFTWARE_SEQUENCE_ACTION else "workflow"
+                        label = {
+                            SOFTWARE_SEQUENCE_ACTION: "software sequence",
+                            "configure-tracked-waveform": "tracked waveform",
+                        }.get(command, "workflow")
                         return None, f"Request body must contain valid {label} JSON."
                 arguments = payload.get("arguments")
                 if isinstance(arguments, dict):

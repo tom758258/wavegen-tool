@@ -10,6 +10,7 @@ import sys
 from enum import IntEnum
 from typing import Any, Sequence
 
+from wavegen_tool_core.dual_channel import DUAL_CHANNEL_COMMANDS, run_dual_channel
 from wavegen_tool_core.basic_workflows import (
     BASIC_WORKFLOW_COMMANDS,
     QUICK_OUTPUT_PRESETS,
@@ -20,6 +21,7 @@ from wavegen_tool_core.software_sequence import (
     SOFTWARE_SEQUENCE_ACTION,
     SoftwareSequenceError,
     SoftwareSequenceInterrupted,
+    parse_software_sequence_json,
     read_software_sequence_file,
     run_software_sequence,
 )
@@ -210,13 +212,16 @@ _WAVEFORM_READBACK_ACTIONS = (
 _ADVANCED_OPTION_FIELDS = (
     "am_frequency",
     "am_shape",
+    "am_source",
     "am_depth",
     "am_type",
     "fm_frequency",
     "fm_shape",
+    "fm_source",
     "fm_deviation",
     "pm_frequency",
     "pm_shape",
+    "pm_source",
     "pm_deviation_deg",
     "fsk_hop_frequency",
     "fsk_rate",
@@ -224,9 +229,11 @@ _ADVANCED_OPTION_FIELDS = (
     "bpsk_rate",
     "pwm_frequency",
     "pwm_shape",
+    "pwm_source",
     "pwm_deviation_s",
     "sum_frequency",
     "sum_shape",
+    "sum_source",
     "sum_amplitude_percent",
     "burst_count",
     "burst_period_s",
@@ -337,17 +344,21 @@ def _add_am_arguments(parser: argparse.ArgumentParser) -> None:
         help="AM type (default: normal when AM is configured).",
     )
     _add_modulation_shape_argument(parser, "am")
+    parser.add_argument("--am-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _am_config_from_args(args: argparse.Namespace) -> AMConfig | None:
-    values = (args.am_frequency, args.am_depth, args.am_type, args.am_shape)
+    values = (args.am_frequency, args.am_depth, args.am_type, args.am_shape, args.am_source)
     if all(value is None for value in values):
         return None
+    if args.am_source in {"ch1", "ch2"} and (args.am_frequency is not None or args.am_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return AMConfig(
         modulation_frequency_hz=args.am_frequency,
         depth_percent=args.am_depth,
         am_type="normal" if args.am_type is None else args.am_type,
         shape=args.am_shape or "sine",
+        source=args.am_source or "internal",
     )
 
 
@@ -363,16 +374,20 @@ def _add_fm_arguments(parser: argparse.ArgumentParser) -> None:
         help="FM peak frequency deviation in Hz.",
     )
     _add_modulation_shape_argument(parser, "fm")
+    parser.add_argument("--fm-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _fm_config_from_args(args: argparse.Namespace) -> FMConfig | None:
-    values = (args.fm_frequency, args.fm_deviation, args.fm_shape)
+    values = (args.fm_frequency, args.fm_deviation, args.fm_shape, args.fm_source)
     if all(value is None for value in values):
         return None
+    if args.fm_source in {"ch1", "ch2"} and (args.fm_frequency is not None or args.fm_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return FMConfig(
         modulation_frequency_hz=args.fm_frequency,
         deviation_hz=args.fm_deviation,
         shape=args.fm_shape or "sine",
+        source=args.fm_source or "internal",
     )
 
 
@@ -388,16 +403,20 @@ def _add_pm_arguments(parser: argparse.ArgumentParser) -> None:
         help="PM peak phase deviation in degrees.",
     )
     _add_modulation_shape_argument(parser, "pm")
+    parser.add_argument("--pm-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _pm_config_from_args(args: argparse.Namespace) -> PMConfig | None:
-    values = (args.pm_frequency, args.pm_deviation_deg, args.pm_shape)
+    values = (args.pm_frequency, args.pm_deviation_deg, args.pm_shape, args.pm_source)
     if all(value is None for value in values):
         return None
+    if args.pm_source in {"ch1", "ch2"} and (args.pm_frequency is not None or args.pm_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return PMConfig(
         modulation_frequency_hz=args.pm_frequency,
         deviation_deg=args.pm_deviation_deg,
         shape=args.pm_shape or "sine",
+        source=args.pm_source or "internal",
     )
 
 
@@ -459,16 +478,20 @@ def _add_pwm_arguments(parser: argparse.ArgumentParser) -> None:
         help="PWM pulse-width deviation in seconds.",
     )
     _add_modulation_shape_argument(parser, "pwm")
+    parser.add_argument("--pwm-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _pwm_config_from_args(args: argparse.Namespace) -> PWMConfig | None:
-    values = (args.pwm_frequency, args.pwm_deviation_s, args.pwm_shape)
+    values = (args.pwm_frequency, args.pwm_deviation_s, args.pwm_shape, args.pwm_source)
     if all(value is None for value in values):
         return None
+    if args.pwm_source in {"ch1", "ch2"} and (args.pwm_frequency is not None or args.pwm_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return PWMConfig(
         modulation_frequency_hz=args.pwm_frequency,
         deviation_s=args.pwm_deviation_s,
         shape=args.pwm_shape or "sine",
+        source=args.pwm_source or "internal",
     )
 
 
@@ -604,16 +627,20 @@ def _add_sum_arguments(parser: argparse.ArgumentParser) -> None:
         help="Internal Sum amplitude relative to carrier amplitude (percent).",
     )
     _add_modulation_shape_argument(parser, "sum")
+    parser.add_argument("--sum-source", choices=("internal", "ch1", "ch2"), help="Modulation source (default: internal).")
 
 
 def _sum_config_from_args(args: argparse.Namespace) -> SumConfig | None:
-    values = (args.sum_frequency, args.sum_amplitude_percent, args.sum_shape)
+    values = (args.sum_frequency, args.sum_amplitude_percent, args.sum_shape, args.sum_source)
     if all(value is None for value in values):
         return None
+    if args.sum_source in {"ch1", "ch2"} and (args.sum_frequency is not None or args.sum_shape is not None):
+        raise WaveformParameterError("Omit internal frequency and shape for other-channel modulation.")
     return SumConfig(
         modulation_frequency_hz=args.sum_frequency,
         amplitude_percent=args.sum_amplitude_percent,
         shape=args.sum_shape or "sine",
+        source=args.sum_source or "internal",
     )
 
 
@@ -1963,7 +1990,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly set selected-channel output on or off.",
     )
     _add_simulate_argument(output_parser)
-    _add_channel_argument(output_parser)
+    output_parser.add_argument("--channel", type=lambda value: "all" if value == "all" else int(value),
+                               choices=(1, 2, "all"), default=1)
+    output_parser.add_argument("--dry-run", action="store_true", help="Preview group output without VISA I/O.")
     _add_validation_only_live_arguments(output_parser)
     output_parser.add_argument(
         "--resource",
@@ -1986,6 +2015,39 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit exactly one JSON object.",
     )
+
+    for command in sorted(DUAL_CHANNEL_COMMANDS):
+        dual = subparsers.add_parser(command, help=f"Explicit {command} operation.", allow_abbrev=False)
+        _add_simulate_argument(dual)
+        _add_validation_support_policy_argument(dual)
+        dual.add_argument("--resource")
+        dual.add_argument("--backend", default="system")
+        dual.add_argument("--model", choices=_REGISTERED_MODEL_IDS)
+        dual.add_argument("--dry-run", action="store_true")
+        dual.add_argument("--json", action="store_true", dest="json_output")
+        if command in {"configure-frequency-coupling", "configure-voltage-coupling"}:
+            dual.add_argument("--state", choices=("on", "off"), required=True)
+        if command == "configure-frequency-coupling":
+            dual.add_argument("--mode", choices=("ratio", "offset"), default=argparse.SUPPRESS)
+            dual.add_argument("--ratio", type=float, default=argparse.SUPPRESS)
+            dual.add_argument("--offset-hz", type=float, default=argparse.SUPPRESS)
+            dual.add_argument("--reference-channel", type=int, choices=(1, 2), default=argparse.SUPPRESS)
+        elif command == "configure-tracking":
+            dual.add_argument("--mode", choices=("off", "on", "invert"), required=True)
+            dual.add_argument("--reference-channel", type=int, choices=(1, 2), default=argparse.SUPPRESS)
+        elif command == "configure-combine":
+            dual.add_argument("--channel", type=int, choices=(1, 2), required=True)
+            dual.add_argument("--source", choices=("none", "ch1", "ch2"), required=True)
+        elif command == "update-coupled-frequency":
+            _add_channel_argument(dual)
+            dual.add_argument("--frequency-hz", type=float, required=True)
+        elif command == "update-coupled-voltage":
+            _add_channel_argument(dual)
+            dual.add_argument("--amplitude-vpp", type=float, required=True)
+            dual.add_argument("--offset-v", type=float, required=True)
+        elif command == "configure-tracked-waveform":
+            dual.add_argument("--waveform", choices=("sine", "square", "ramp", "triangle", "pulse", "dc", "noise", "prbs"), required=True)
+            dual.add_argument("--arguments-json", required=True, help="Existing waveform arguments as a JSON object.")
 
     list_parser = subparsers.add_parser(
         "list-resources",
@@ -2183,6 +2245,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_manifest(args)
     if args.command == "capabilities":
         return run_capabilities(args)
+    if args.command in DUAL_CHANNEL_COMMANDS or (args.command == "output" and args.channel == "all"):
+        return _run_dual_channel(args, parser)
+    if args.command == "output" and args.dry_run:
+        parser.error("--dry-run for output requires --channel all")
     waveform_commands = {
         "configure-sine",
         "configure-sine-sweep",
@@ -3889,6 +3955,44 @@ def _run_output_dry_run(args: argparse.Namespace) -> int:
     return int(ExitCode.SUCCESS)
 
 
+def _run_dual_channel(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.dry_run and args.simulate:
+        parser.error("--dry-run and --simulate cannot be used together")
+    if (args.dry_run or args.simulate) and args.resource is not None:
+        parser.error("--resource cannot be used with hardware-free execution")
+    if args.simulate and args.backend.strip().casefold() != "system":
+        parser.error("--simulate requires the system backend")
+    if args.validation_allow_pending_live_support:
+        if args.dry_run or args.simulate or args.model is None:
+            parser.error("Contributor validation requires an explicit model and live execution.")
+    elif not (args.dry_run or args.simulate) and args.model is not None:
+        parser.error("--model requires hardware-free execution or Contributor validation")
+    if not (args.dry_run or args.simulate):
+        if args.resource is None:
+            args.resource = os.environ.get("WAVEGEN_TOOL_RESOURCE")
+        if not args.resource or not args.resource.strip():
+            parser.error("the following arguments are required: --resource or WAVEGEN_TOOL_RESOURCE")
+
+    def operation():
+        model = args.model or CANONICAL_MODEL_ID
+        values = {key: value for key, value in vars(args).items()
+                  if key not in {"command", "model", "resource", "backend", "simulate",
+                                 "dry_run", "json_output", "validation_allow_pending_live_support"}}
+        if args.command == "output":
+            values = {"channel": "all", "enabled": args.state == "on"}
+        elif args.command == "configure-tracked-waveform":
+            try:
+                values["arguments"] = parse_software_sequence_json(values.pop("arguments_json"))
+            except (ValueError, TypeError, RecursionError, ArithmeticError) as exc:
+                raise WaveformParameterError("Tracked waveform arguments must be JSON.") from exc
+        if args.dry_run:
+            return run_dual_channel(args.command, values, model=model)
+        resource, factory = _simulated_target(model) if args.simulate else (args.resource, None)
+        return run_dual_channel(args.command, values, resource=resource, backend=args.backend,
+                               **_validation_live_injection(args), **_factory_injection(args.simulate, factory))
+    return _run_control(args, operation)
+
+
 def _run_output(args: argparse.Namespace) -> int:
     resource, factory = (
         _simulated_target(args.model or CANONICAL_MODEL_ID)
@@ -4315,8 +4419,10 @@ def _am_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "am_enabled": True,
-        "am_frequency_hz": am.modulation_frequency_hz,
-        "am_shape": am.shape,
+        **({"am_source": am.source} if am.source != "internal" else {
+            "am_frequency_hz": am.modulation_frequency_hz,
+            "am_shape": am.shape,
+        }),
         "am_depth_percent": am.depth_percent,
         "am_type": am.am_type,
     }
@@ -4328,8 +4434,10 @@ def _fm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "fm_enabled": True,
-        "fm_frequency_hz": fm.modulation_frequency_hz,
-        "fm_shape": fm.shape,
+        **({"fm_source": fm.source} if fm.source != "internal" else {
+            "fm_frequency_hz": fm.modulation_frequency_hz,
+            "fm_shape": fm.shape,
+        }),
         "fm_deviation_hz": fm.deviation_hz,
     }
 
@@ -4340,8 +4448,10 @@ def _pm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "pm_enabled": True,
-        "pm_frequency_hz": pm.modulation_frequency_hz,
-        "pm_shape": pm.shape,
+        **({"pm_source": pm.source} if pm.source != "internal" else {
+            "pm_frequency_hz": pm.modulation_frequency_hz,
+            "pm_shape": pm.shape,
+        }),
         "pm_deviation_deg": pm.deviation_deg,
     }
 
@@ -4374,8 +4484,10 @@ def _pwm_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "pwm_enabled": True,
-        "pwm_frequency_hz": pwm.modulation_frequency_hz,
-        "pwm_shape": pwm.shape,
+        **({"pwm_source": pwm.source} if pwm.source != "internal" else {
+            "pwm_frequency_hz": pwm.modulation_frequency_hz,
+            "pwm_shape": pwm.shape,
+        }),
         "pwm_deviation_s": pwm.deviation_s,
     }
 
@@ -4386,8 +4498,10 @@ def _sum_payload_fields(result: Any) -> dict[str, object]:
         return {}
     return {
         "sum_enabled": True,
-        "sum_frequency_hz": sum_config.modulation_frequency_hz,
-        "sum_shape": sum_config.shape,
+        **({"sum_source": sum_config.source} if sum_config.source != "internal" else {
+            "sum_frequency_hz": sum_config.modulation_frequency_hz,
+            "sum_shape": sum_config.shape,
+        }),
         "sum_amplitude_percent": sum_config.amplitude_percent,
     }
 
@@ -4417,6 +4531,13 @@ def _burst_payload_fields(result: Any) -> dict[str, object]:
 
 
 def _control_success_payload(action: str, result: Any) -> dict[str, object]:
+    if action in DUAL_CHANNEL_COMMANDS or (action == "output" and isinstance(result, dict)):
+        payload = dict(result, success=True, error=None)
+        if not result["executed"]:
+            payload["mode"] = "dry-run"
+        else:
+            payload["manufacturer"] = result["identity"]["manufacturer"]
+        return payload
     if action in ARBITRARY_COMMANDS | BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         payload = dict(result, success=True, action=action, error=None)
         if not result["executed"]:
@@ -5432,8 +5553,10 @@ def _human_am_lines(result: Any) -> tuple[str, ...]:
         return ()
     return (
         f"AM type: {am.am_type}",
-        f"AM modulation shape: {am.shape}",
-        f"AM modulation frequency (Hz): {am.modulation_frequency_hz}",
+        *((f"AM modulation source: {am.source.upper()}",) if am.source != "internal" else (
+            f"AM modulation shape: {am.shape}",
+            f"AM modulation frequency (Hz): {am.modulation_frequency_hz}",
+        )),
         f"AM depth (percent): {am.depth_percent}",
     )
 
@@ -5443,8 +5566,10 @@ def _human_fm_lines(result: Any) -> tuple[str, ...]:
     if fm is None:
         return ()
     return (
-        f"FM modulation shape: {fm.shape}",
-        f"FM modulation frequency (Hz): {fm.modulation_frequency_hz}",
+        *((f"FM modulation source: {fm.source.upper()}",) if fm.source != "internal" else (
+            f"FM modulation shape: {fm.shape}",
+            f"FM modulation frequency (Hz): {fm.modulation_frequency_hz}",
+        )),
         f"FM deviation (Hz): {fm.deviation_hz}",
     )
 
@@ -5454,8 +5579,10 @@ def _human_pm_lines(result: Any) -> tuple[str, ...]:
     if pm is None:
         return ()
     return (
-        f"PM modulation shape: {pm.shape}",
-        f"PM modulation frequency (Hz): {pm.modulation_frequency_hz}",
+        *((f"PM modulation source: {pm.source.upper()}",) if pm.source != "internal" else (
+            f"PM modulation shape: {pm.shape}",
+            f"PM modulation frequency (Hz): {pm.modulation_frequency_hz}",
+        )),
         f"PM deviation (degrees): {pm.deviation_deg}",
     )
 
@@ -5485,8 +5612,10 @@ def _human_pwm_lines(result: Any) -> tuple[str, ...]:
     if pwm is None:
         return ()
     return (
-        f"PWM modulation shape: {pwm.shape}",
-        f"PWM modulation frequency (Hz): {pwm.modulation_frequency_hz}",
+        *((f"PWM modulation source: {pwm.source.upper()}",) if pwm.source != "internal" else (
+            f"PWM modulation shape: {pwm.shape}",
+            f"PWM modulation frequency (Hz): {pwm.modulation_frequency_hz}",
+        )),
         f"PWM width deviation (seconds): {pwm.deviation_s}",
     )
 
@@ -5496,8 +5625,10 @@ def _human_sum_lines(result: Any) -> tuple[str, ...]:
     if sum_config is None:
         return ()
     return (
-        f"Sum modulation shape: {sum_config.shape}",
-        f"Sum modulation frequency (Hz): {sum_config.modulation_frequency_hz}",
+        *((f"Sum modulation source: {sum_config.source.upper()}",) if sum_config.source != "internal" else (
+            f"Sum modulation shape: {sum_config.shape}",
+            f"Sum modulation frequency (Hz): {sum_config.modulation_frequency_hz}",
+        )),
         f"Sum amplitude (percent): {sum_config.amplitude_percent}",
     )
 
@@ -5530,6 +5661,11 @@ def _human_burst_lines(result: Any) -> tuple[str, ...]:
 
 
 def _human_control_success(action: str, result: Any) -> str:
+    if action in DUAL_CHANNEL_COMMANDS or (action == "output" and isinstance(result, dict)):
+        heading = f"{action}: {'applied' if result['executed'] else 'planned'} for {result['model']}."
+        details = {key: value for key, value in result.items()
+                   if key not in {"resource", "identity", "backend", "transport", "commands", "executed", "action", "model"}}
+        return "\n".join([heading, json.dumps(details, indent=2), *result["commands"]])
     if action in BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}:
         label = "Software sequence" if action == SOFTWARE_SEQUENCE_ACTION else action
         lines = [

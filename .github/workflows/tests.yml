@@ -236,7 +236,7 @@ jobs:
           tests/core/test_identity.py tests/core/test_capabilities.py
           tests/core/test_transport.py tests/core/test_backends.py
           tests/core/test_simulator.py tests/core/test_visa.py tests/core/test_arbitrary.py
-          tests/core/test_software_sequence.py
+          tests/core/test_software_sequence.py tests/core/test_dual_channel.py
       - name: Core compatibility contracts (Windows)
         if: needs.detect-changes.outputs.core == 'true' && matrix.python-version != '3.13'
         run: >-

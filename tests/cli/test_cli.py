@@ -318,6 +318,10 @@ class FakeSession:
             return "0"
         if "TRACK?" in cmd_upper:
             return "OFF"
+        if cmd_upper.endswith(":COMBINE:FEED?"):
+            return "NONE"
+        if cmd_upper.endswith(":STATE?"):
+            return "0"
         return self.response
 
     def close(self):
@@ -4351,6 +4355,8 @@ def test_configure_sine_product_live_accepts_matching_33512b(
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
+        *[query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))],
     ]
     assert session.writes[0] == "OUTPut1 OFF"
     assert "OUTPut1 ON" not in session.writes
@@ -4424,6 +4430,8 @@ def test_configure_sine_validation_live_uses_detected_33512b_capability(
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
+        *[query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))],
     ]
     assert session.writes == []
 
@@ -5056,3 +5064,107 @@ def test_frequency_step_ctrl_c_during_final_off_reports_interruption(interrupt_a
     assert cleanup["confirmed_off_channels"] == ([1] if interrupt_at == "write" else [])
     error, = cleanup["errors"]
     assert error["channel"] == 1 and error["code"] == "visa_cleanup_error"
+
+
+@pytest.mark.parametrize(
+    ("environment_resource", "explicit_resource", "expected_resource"),
+    [
+        (USB_RESOURCE, None, USB_RESOURCE),
+        (USB_RESOURCE, TCPIP_RESOURCE, TCPIP_RESOURCE),
+        (None, USB_RESOURCE, USB_RESOURCE),
+        (USB_RESOURCE, "", None),
+        (USB_RESOURCE, " ", None),
+        (" ", None, None),
+        (None, None, None),
+    ],
+)
+def test_dual_channel_live_resource_precedence(
+    environment_resource, explicit_resource, expected_resource, monkeypatch, capsys
+):
+    monkeypatch.delenv("WAVEGEN_TOOL_RESOURCE", raising=False)
+    if environment_resource is not None:
+        monkeypatch.setenv("WAVEGEN_TOOL_RESOURCE", environment_resource)
+    manager = FakeManager()
+    calls = install_fake_manager(monkeypatch, manager)
+    dispatched = []
+
+    def fake_run(action, arguments, **kwargs):
+        dispatched.append(kwargs["resource"])
+        return {"executed": True, "identity": {"manufacturer": "Keysight Technologies"}}
+
+    monkeypatch.setattr(cli_module, "run_dual_channel", fake_run)
+    argv = [
+        "phase-sync", "--model", "keysight-33512b",
+        "--validation-allow-pending-live-support", "--json",
+    ]
+    if explicit_resource is not None:
+        argv.extend(["--resource", explicit_resource])
+    if expected_resource is None:
+        with pytest.raises(SystemExit) as error:
+            main(argv)
+        assert error.value.code == ExitCode.CLI_USAGE
+        assert dispatched == []
+        assert not capsys.readouterr().out
+    else:
+        assert main(argv) == ExitCode.SUCCESS
+        assert dispatched == [expected_resource]
+        assert json.loads(capsys.readouterr().out)["success"] is True
+    assert calls == []
+    assert manager.opened_resources == []
+
+
+def test_dual_channel_direct_cli_plans_and_simulates(capsys):
+    assert main(["phase-sync", "--dry-run", "--model", "keysight-33521b", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["channels"] == [1] and payload["commands"] == ["PHASe:SYNChronize"]
+    assert main(["output", "--channel", "all", "--state", "off", "--simulate",
+                 "--model", "keysight-33512b", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["output_states"] == {"1": "off", "2": "off"}
+    assert main(["configure-sine", "--channel", "2", "--frequency-hz", "10000",
+                 "--amplitude-vpp", "0.1", "--am-source", "ch1", "--am-depth", "40",
+                 "--dry-run", "--model", "keysight-33512b", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "SOURce2:AM:SOURce CH1" in payload["commands"]
+    assert payload["am_source"] == "ch1"
+    assert "am_shape" not in payload and "am_frequency_hz" not in payload
+    assert main(["configure-sine", "--channel", "2", "--frequency-hz", "10000",
+                 "--amplitude-vpp", "0.1", "--am-source", "ch1", "--am-depth", "40",
+                 "--dry-run", "--model", "keysight-33512b"]) == 0
+    output = capsys.readouterr().out
+    assert "AM modulation source: CH1" in output
+    assert "AM modulation frequency" not in output and "AM modulation shape" not in output
+
+
+@pytest.mark.parametrize(("field", "token", "accepted"), [
+    ("start_phase_deg", "45.1", True),
+    ("start_phase_deg", "45.10000000000000001", False),
+    ("trigger_delay_s", "0.000000004", True),
+    ("trigger_delay_s", "0.00000000400000000000000001", False),
+    ("trigger_delay_s", "0", True),
+    ("trigger_delay_s", "1e-400", False),
+])
+def test_tracked_waveform_preserves_exact_burst_json(field, token, accepted, monkeypatch, capsys):
+    monkeypatch.setattr(visa, "create_resource_manager", lambda _: pytest.fail("Dry-run opened VISA"))
+    arguments = (
+        '{"frequency_hz":1000,"amplitude_vpp":0.1,'
+        '"burst":{"mode":"counted","count":3,"trigger_source":"bus",'
+        f'"{field}":{token}' + '}}'
+    )
+    code = main([
+        "configure-tracked-waveform", "--waveform", "sine", "--arguments-json", arguments,
+        "--model", "keysight-33512b", "--dry-run", "--json",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    if accepted:
+        assert code == ExitCode.SUCCESS
+        assert payload["executed"] is False
+        header = "SOURce1:BURSt:PHASe " if field == "start_phase_deg" else "TRIGger1:DELay "
+        assert any(command.startswith(header) and float(command[len(header):]) == float(token)
+                   for command in payload["commands"])
+    else:
+        assert code == ExitCode.CLI_USAGE
+        assert payload["success"] is False
+        assert payload["error"].startswith("waveform_parameter_error:")
+        increment = "0.1-degree increments" if field == "start_phase_deg" else "4 ns increments"
+        assert increment in payload["error"]

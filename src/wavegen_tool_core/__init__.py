@@ -160,7 +160,11 @@ from wavegen_tool_core.software_sequence import run_software_sequence
 from wavegen_tool_core.basic_workflows import run_basic_workflow
 from wavegen_tool_core.visa import update_sine_amplitude
 
+from wavegen_tool_core.dual_channel import plan_dual_channel, run_dual_channel
+
 __all__ = [
+    "plan_dual_channel",
+    "run_dual_channel",
     "run_software_sequence",
     "run_basic_workflow",
     "update_sine_amplitude",

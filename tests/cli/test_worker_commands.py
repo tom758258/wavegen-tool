@@ -789,6 +789,9 @@ def test_worker_publishes_expected_domain_commands():
         "run-waveform-sequence",
         "run-frequency-step",
         "apply-quick-output-preset",
+        "phase-sync", "configure-frequency-coupling", "configure-voltage-coupling",
+        "configure-tracking", "configure-combine", "update-coupled-frequency",
+        "update-coupled-voltage", "configure-tracked-waveform", "dual-channel-status",
     }
 
 def test_worker_advanced_readback_is_readonly_and_has_no_dry_run():
@@ -1003,3 +1006,19 @@ def test_frequency_step_requires_explicit_live_output_confirmation():
     arguments["confirm_output"] = True
     validated = validate_worker_command_request(payload, worker_mode="live", allow_output_writes=True)
     assert validated.arguments == arguments
+
+
+def test_worker_dual_channel_scope_and_group_output():
+    arguments = {"channel": "all", "enabled": False}
+    request = validate_worker_command_request(
+        _payload("output", arguments, context={"mode": "dry_run", "planning_model_id": "keysight-33512b"}),
+        worker_mode="simulate", allow_output_writes=False,
+    )
+    assert request.arguments == arguments
+    for context, worker_mode in (
+        ({"mode": "dry_run", "planning_model_id": "keysight-33521b"}, "simulate"),
+        ({"mode": "live"}, "live"),
+    ):
+        with pytest.raises(WorkerRequestValidationError):
+            validate_worker_command_request(_payload("output", arguments, context=context),
+                                            worker_mode=worker_mode, allow_output_writes=True)

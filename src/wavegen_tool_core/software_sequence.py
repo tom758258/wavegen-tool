@@ -11,6 +11,7 @@ from decimal import Decimal
 from threading import TIMEOUT_MAX, Event
 
 from . import visa
+from .dual_channel import DUAL_CHANNEL_COMMANDS, DUAL_CHANNEL_WRITE_COMMANDS, is_dual_action, run_dual_channel, uses_other_channel_modulation
 from .action_arguments import (
     MODULATION_FIELDS,
     canonicalize_voltage_arguments,
@@ -72,7 +73,7 @@ _ARBITRARY_ACTIONS = _CREATE_ACTIONS | _PLAYBACK_ACTIONS | {"list-arbitrary-memo
 _CHANNEL_WRITE_ACTIONS = _CONFIGURE_ACTIONS | _CREATE_ACTIONS | _PLAYBACK_ACTIONS | {
     "output", _AMPLITUDE_UPDATE, _FREQUENCY_LIST_ONCE,
 }
-_ACTIONS = _CHANNEL_WRITE_ACTIONS | {
+_ACTIONS = _CHANNEL_WRITE_ACTIONS | DUAL_CHANNEL_COMMANDS | {
     "list-arbitrary-memory",
     "trigger",
     "wait",
@@ -97,6 +98,9 @@ _TEXT_FIELDS = {
     "spacing",
     "trigger_source",
     "trigger_slope",
+    "source",
+    "state",
+    "waveform",
 }
 _BOOL_FIELDS = {
     "enabled",
@@ -139,7 +143,7 @@ class SoftwareSequence:
 
     @property
     def writes(self) -> bool:
-        return any(step.action in _CHANNEL_WRITE_ACTIONS | {"trigger"} for step in self.steps)
+        return any(step.action in _CHANNEL_WRITE_ACTIONS | DUAL_CHANNEL_WRITE_COMMANDS | {"trigger"} for step in self.steps)
 
     @property
     def enables_output(self) -> bool:
@@ -201,7 +205,12 @@ def _validate_json_types(arguments: Mapping[str, object]) -> None:
         elif key in _BOOL_FIELDS | {"document"}:
             # The shared argument validator checks these fields.
             continue
-        elif key in {"channel", "max_reads", "count"}:
+        elif key == "arguments" and isinstance(value, Mapping):
+            _validate_json_types(value)
+        elif key == "channel" and value == "all":
+            # The action validator accepts this only for group output.
+            continue
+        elif key in {"channel", "reference_channel", "max_reads", "count"}:
             if type(value) is not int:
                 raise WaveformParameterError(f"{key} must be an integer.")
         elif key == "load" and isinstance(value, str):
@@ -284,6 +293,8 @@ def validate_software_sequence(
                     f"Software sequence step {index} arguments must be an object."
                 )
             arguments = dict(raw_arguments)
+            if product_live and (is_dual_action(action, arguments) or uses_other_channel_modulation(arguments)):
+                raise UnsupportedInstrumentError("Dual channel operations are outside Product Live feature scope.")
             if product_live and action in _ARBITRARY_ACTIONS:
                 raise UnsupportedInstrumentError(
                     "Arbitrary operations are outside Product Live feature scope."
@@ -376,6 +387,10 @@ def _waveform_arguments(step: _Step, *, readback: bool = False) -> dict[str, obj
 
 def _plan_step(step: _Step, model: str, *, product_live: bool) -> dict[str, object]:
     action = step.action
+    if is_dual_action(action, step.arguments):
+        if product_live:
+            raise UnsupportedInstrumentError("Dual channel operations are outside Product Live feature scope.")
+        return run_dual_channel(action, step.arguments, model=model)
     if action == _FREQUENCY_LIST_ONCE:
         return visa._plan_sine_list_sweep_once(model, step.arguments)
     if action == _AMPLITUDE_UPDATE:
@@ -429,6 +444,8 @@ def _execute_step(
 ) -> object:
     action = step.action
     args = step.arguments
+    if is_dual_action(action, args):
+        return run_dual_channel(action, args, resource=resource, backend=backend, **options)
     if action == "wait":
         _wait(args["seconds"], cancel_event)
         return args
@@ -488,13 +505,25 @@ def _check_output_off(session: visa.VisaSession, channel: int) -> None:
 
 
 def _cleanup(
-    resource: str, backend: str | None, options: dict, channels: set[int]
+    resource: str, backend: str | None, options: dict, channels: set[int], *, group: bool = False
 ) -> tuple[dict, bool]:
     cleanup = {"attempted_channels": sorted(channels), "confirmed_off_channels": [], "errors": []}
     interrupted = False
+    if group and channels:
+        try:
+            run_dual_channel("output", {"channel": "all", "enabled": False},
+                             resource=resource, backend=backend, **options)
+        except (Exception, KeyboardInterrupt) as exc:
+            interrupted = isinstance(exc, KeyboardInterrupt)
+            cause = exc if isinstance(exc, WavegenError) else VisaCleanupError(
+                "Group OFF did not complete."
+            ).attach_cleanup_errors(getattr(exc, "cleanup_errors", ()))
+            for channel in cleanup["attempted_channels"]:
+                cleanup["errors"].append({"channel": channel, **_error_summary(cause)})
     for channel in cleanup["attempted_channels"]:
         try:
-            visa.set_output(resource, "off", backend, channel=channel, **options)
+            if not group:
+                visa.set_output(resource, "off", backend, channel=channel, **options)
         except (Exception, KeyboardInterrupt) as exc:
             interrupted = interrupted or isinstance(exc, KeyboardInterrupt)
             cause = (
@@ -575,15 +604,21 @@ def run_software_sequence(
             raise SoftwareSequenceError(exc, counts) from exc
         model = options["expected_model_id"] = identity.canonical_model_id
     model_info, capabilities = visa._require_hardware_free_model(model, "software sequence")
-    channels = {step.arguments["channel"] for step in sequence.steps if "channel" in step.arguments}
+    all_channels = set(range(1, capabilities.channel_count + 1))
+    dual_steps = [step for step in sequence.steps if is_dual_action(step.action, step.arguments) or uses_other_channel_modulation(step.arguments)]
+    dual_writes = any(step.action != "dual-channel-status" for step in dual_steps)
+    channels = {step.arguments["channel"] for step in sequence.steps
+                if type(step.arguments.get("channel")) is int}
+    if dual_steps:
+        channels |= all_channels
     controlled_channels = {
         step.arguments["channel"]
         for step in sequence.steps
-        if step.action in _CHANNEL_WRITE_ACTIONS
+        if step.action in _CHANNEL_WRITE_ACTIONS and not is_dual_action(step.action, step.arguments)
     }
     guarded_channels = (
-        set(range(1, capabilities.channel_count + 1))
-        if any(step.action == "trigger" for step in sequence.steps)
+        all_channels
+        if dual_writes or any(step.action == "trigger" for step in sequence.steps)
         else controlled_channels
     )
     details = {
@@ -599,7 +634,7 @@ def run_software_sequence(
     for index, step in enumerate(sequence.steps, 1):
         try:
             _check_cancellation(cancel_event)
-            if "channel" in step.arguments:
+            if "channel" in step.arguments and not is_dual_action(step.action, step.arguments):
                 visa._validate_channel(
                     step.arguments["channel"], capabilities, model_info.canonical_model
                 )
@@ -618,8 +653,17 @@ def run_software_sequence(
     if guarded_channels:
 
         def preflight(session: visa.VisaSession, context: visa.IdentificationResult) -> None:
-            if controlled_channels:
-                visa._check_independent_channel_guard(session, capabilities, context)
+            if controlled_channels and not dual_writes:
+                # OFF-only sequences retain the pre-existing coupling/tracking
+                # guard, without the new dependency restriction on other writes.
+                check_dependencies = any(
+                    step.action in _CHANNEL_WRITE_ACTIONS and not (
+                        step.action == "output" and not step.arguments["enabled"]
+                    ) for step in sequence.steps
+                )
+                visa._check_independent_channel_guard(
+                    session, capabilities, context, check_cross_dependencies=check_dependencies,
+                )
             if capabilities.channel_count > 1 and any(
                 step.action in _PLAYBACK_ACTIONS for step in sequence.steps
             ):
@@ -634,6 +678,7 @@ def run_software_sequence(
             raise SoftwareSequenceError(exc, details) from exc
 
     attempted = set(controlled_channels) if _workflow_action is not None else set()
+    dual_write_attempted = False
     results = []
     failure = None
     loop, index, step = 1, 1, sequence.steps[0]
@@ -641,8 +686,14 @@ def run_software_sequence(
         for loop in range(1, sequence.loop_count + 1):
             for index, step in enumerate(sequence.steps, 1):
                 _check_cancellation(cancel_event)
+                if (is_dual_action(step.action, step.arguments) and step.action != "dual-channel-status"
+                        or uses_other_channel_modulation(step.arguments)):
+                    dual_write_attempted = True
                 if step.enables_output:
-                    attempted.add(step.arguments["channel"])
+                    if step.arguments["channel"] == "all":
+                        attempted.update(all_channels)
+                    else:
+                        attempted.add(step.arguments["channel"])
                 result = _execute_step(step, resource, backend, options, cancel_event)
                 if len(results) < _MAX_RESULTS:
                     results.append(
@@ -666,7 +717,14 @@ def run_software_sequence(
             cause = WavegenError("Unexpected software sequence step failure.")
         failure = (step.action, index, loop, cause)
     finally:
-        cleanup, cleanup_interrupted = _cleanup(resource, backend, options, attempted)
+        # Preflight confirmed both outputs OFF. A failed joint write can still
+        # leave an unexpected output state even without an explicit ON step.
+        if failure is not None and dual_write_attempted:
+            attempted.update(all_channels)
+        group = dual_writes and capabilities.channel_count == 2 and bool(attempted)
+        cleanup, cleanup_interrupted = _cleanup(
+            resource, backend, options, all_channels if group else attempted, group=group
+        )
         details["cleanup"] = cleanup
     details["results"] = results
     step_error = _step_failure(details, *failure) if failure is not None else None

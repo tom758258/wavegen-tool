@@ -417,6 +417,10 @@ def _preflight_diagnostics(artifact_root: Path) -> str:
 def test_full_plan_inventory_and_privacy(
     artifact_root, monkeypatch, fake_git, model, channels, connection, resource, private_token,
 ):
+    # This integration checks inventory, command execution, cleanup and evidence,
+    # not elapsed wall-clock time. Preserve declared waits and results, using a
+    # no-op sleep only in one-shot simulated software-sequence processes.
+    # Dedicated sequence/workflow timing and cancellation checks are unaffected.
     # Any unexpected attempt to construct VISA fails the subprocess and leaves a marker.
     guard = artifact_root / "guard"
     guard.mkdir()
@@ -426,7 +430,10 @@ def test_full_plan_inventory_and_privacy(
         "def forbidden(*args, **kwargs):\n"
         f"    Path({str(marker)!r}).touch()\n"
         "    raise AssertionError('VISA forbidden in PlanOnly')\n"
-        "pyvisa.ResourceManager = forbidden\n", encoding="utf-8",
+        "pyvisa.ResourceManager = forbidden\n"
+        "import sys, time\n"
+        "if 'run-software-sequence' in sys.argv and '--simulate' in sys.argv:\n"
+        "    time.sleep = lambda seconds: None\n", encoding="utf-8",
     )
     monkeypatch.setenv("PYTHONPATH", str(guard))
     result = _run_script(
@@ -499,6 +506,16 @@ def test_full_plan_inventory_and_privacy(
         }
         if model == "33512b":
             expected_parity |= {"arbitrary-upload-configure", "sequence-bus"}
+    if 2 in channels:
+        expected_primary |= {"software-sequence-dual-channel"} | {
+            f"dual-channel-{name}" for name in (
+                "phase-output", "bus-trigger", "frequency-ratio-offset", "voltage-coupling",
+                "tracking-on", "tracking-invert", "modulation-am", "modulation-fm",
+                "modulation-pm", "modulation-pwm", "modulation-sum", "combine-ch1", "combine-ch2",
+            )
+        }
+    else:
+        expected_primary.add("static-phase-sync")
     primary = [case for case in inventory if case["channel"] == 1]
     secondary = [case for case in inventory if case["channel"] == 2]
     assert {case["name"] for case in primary} == {f"ch1/{name}" for name in expected_primary}
@@ -560,7 +577,14 @@ def test_full_plan_inventory_and_privacy(
         "ch1/frequency-step-descending",
     } | ({
         "ch1/sequence-bus-functional", "ch1/sequence-external", "ch1/sequence-external-negative",
-    } if model != "33510b" else set())
+    } if model != "33510b" else set()) | ({
+        "ch1/software-sequence-dual-channel",
+        *(f"ch1/dual-channel-{name}" for name in (
+            "phase-output", "bus-trigger", "frequency-ratio-offset", "voltage-coupling",
+            "tracking-on", "tracking-invert", "modulation-am", "modulation-fm",
+            "modulation-pm", "modulation-pwm", "modulation-sum", "combine-ch1", "combine-ch2",
+        )),
+    } if 2 in channels else {"ch1/static-phase-sync"})
     assert observed.isdisjoint(case["name"] for case in report["cases"])
     text = "\n".join(path.read_text(encoding="utf-8") for path in (run / "shareable").rglob("*") if path.is_file())
     for private in (resource, private_token, str(REPO_ROOT), str(run)):
@@ -705,6 +729,7 @@ def test_full_preflight_static_direct_without_hardware(
     cases = {case["name"]: case["status"] for case in report["cases"]}
     for mode in ("dry-run", "simulate"):
         assert cases[f"keysight-33521b/ch1/static-sine/step1-{mode}"] == "PASS"
+        assert cases[f"keysight-33521b/ch1/static-phase-sync/step1-{mode}"] == "PASS"
     assert not any("/ch1/arbitrary-" in name for name in cases)
 
 

@@ -122,6 +122,20 @@ Sweep, or symmetry for Ramp Sweep. A mismatch or failed query uses the existing
 waveform verification error category (exit 29). Dry-run and default execution
 omit this field. Sweep commands can opt into both types of verification.
 
+### Dual-channel results
+
+New joint operations retain the existing execution-mode, action and success
+fields. `channels` lists the affected channel numbers; joint output uses
+`channel: "all"` and executed `output_states` keyed by string channel number.
+Configuration plans describe requested settings and ordered SCPI commands
+without fabricating readback. Executed topology results contain
+`channel_status`, frequency and voltage coupling state, and verified output
+OFF. Phase synchronization reports whether configured phase values were
+preserved, not measured physical phase alignment. Other-channel modulation
+adds the selected source to the relevant configuration result and omits
+internal frequency and shape values when inapplicable. Existing internal
+modulation behavior remains the default.
+
 ### Software Sequence Results
 
 `run-software-sequence --file <sequence.json>` returns one JSON object with the
@@ -168,6 +182,9 @@ The public Direct CLI machine surface includes:
 - sine, square, ramp, and triangle ordinary sweep and List Sweep commands;
 - `configure-output`, `output`, and `trigger`;
 - `configure-sync` and `sync-output`;
+- `phase-sync`, `configure-frequency-coupling`, `configure-voltage-coupling`,
+  `configure-tracking`, `configure-combine`, `update-coupled-frequency`,
+  `update-coupled-voltage`, `configure-tracked-waveform`, and `dual-channel-status`;
 - `upload-arbitrary`, `configure-arbitrary`, `configure-arbitrary-sequence`,
   `list-arbitrary-memory`, and `clear-arbitrary-memory`;
 - `run-software-sequence`, `run-timed-output`, `run-amplitude-ramp`,

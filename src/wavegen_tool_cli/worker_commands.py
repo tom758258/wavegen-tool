@@ -15,6 +15,7 @@ from wavegen_tool_core.action_arguments import (
     validate_action_arguments,
 )
 from wavegen_tool_core.errors import WavegenError, WaveformParameterError
+from wavegen_tool_core.dual_channel import is_dual_action, plan_dual_channel, uses_other_channel_modulation
 from wavegen_tool_core.basic_workflows import BASIC_WORKFLOW_COMMANDS, validate_basic_workflow
 from wavegen_tool_core.software_sequence import (
     SOFTWARE_SEQUENCE_ACTION,
@@ -87,7 +88,7 @@ _WORKER_MODES = frozenset({"live", "simulate"})
 _SEQUENCE_COMMANDS = BASIC_WORKFLOW_COMMANDS | {SOFTWARE_SEQUENCE_ACTION}
 SUPPORTED_WORKER_COMMANDS = ACTION_COMMANDS | _SEQUENCE_COMMANDS
 _DRY_RUN_COMMANDS = DRY_RUN_COMMANDS | _SEQUENCE_COMMANDS
-_LIVE_WRITE_COMMANDS = DRY_RUN_COMMANDS - {"list-arbitrary-memory"} | {"trigger"}
+_LIVE_WRITE_COMMANDS = DRY_RUN_COMMANDS - {"list-arbitrary-memory", "dual-channel-status"} | {"trigger"}
 
 
 def validate_worker_command_request(
@@ -151,7 +152,7 @@ def validate_worker_command_request(
         raise WorkerRequestValidationError(
             "unsupported_command", f"Unsupported Worker command: {command}."
         )
-    if request_mode == "dry_run" and command not in _DRY_RUN_COMMANDS:
+    if request_mode == "dry_run" and command not in _DRY_RUN_COMMANDS and not is_dual_action(command, arguments):
         raise WorkerRequestValidationError(
             "unsupported_command",
             "dry_run context only supports configure-*, Arbitrary, and software sequence commands.",
@@ -170,6 +171,15 @@ def validate_worker_command_request(
             request_mode, command, arguments, allow_output_writes=allow_output_writes
         )
 
+    if request_mode == "live" and (is_dual_action(command, arguments) or uses_other_channel_modulation(arguments)):
+        raise WorkerRequestValidationError("unsupported_command", "Dual channel operations are outside Product Live feature scope.")
+    if is_dual_action(command, arguments):
+        model_id = context.get("planning_model_id") or context.get("expected_model_id")
+        if model_id is not None:
+            try:
+                plan_dual_channel(command, arguments, model_id)
+            except WavegenError as exc:
+                raise WorkerRequestValidationError("invalid_arguments", str(exc)) from exc
     if command in CONFIGURE_COMMANDS:
         try:
             canonicalize_voltage_arguments(command, arguments)

@@ -161,6 +161,10 @@ class FakeSession:
             return "0"
         if "TRACK?" in cmd_upper:
             return "OFF"
+        if cmd_upper.endswith(":COMBINE:FEED?"):
+            return "NONE"
+        if cmd_upper.endswith(":STATE?"):
+            return "0"
         return self.response
 
     def close(self):
@@ -2093,6 +2097,8 @@ def test_configure_sine_validation_policy_accepts_matching_33512b():
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
+        *[query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))],
     ]
     assert session.writes[0] == "OUTPut1 OFF"
     assert "OUTPut1 ON" not in session.writes
@@ -2141,6 +2147,8 @@ def test_configure_sine_uses_detected_33512b_capability_before_writes():
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
+        *[query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))],
     ]
     assert session.writes == []
 
@@ -4991,6 +4999,8 @@ def test_output_validation_policy_accepts_matching_33512b(state):
         "SOURce1:VOLTage:COUPle:STATe?",
         "SOURce1:TRACk?",
         "SOURce2:TRACk?",
+        *([query for ch in (1, 2) for query in (f"SOURce{ch}:COMBine:FEED?",
+            *(f"SOURce{ch}:{mode}:STATe?" for mode in ("AM", "FM", "PM", "PWM", "SUM")))] if state == "on" else []),
     ]
     assert session.writes == [f"OUTPut1 {state.upper()}"]
     assert result.identity.canonical_model_id == "keysight-33512b"
@@ -5317,22 +5327,22 @@ def test_status_validation_policy_accepts_matching_33512b():
 
 
 @pytest.mark.parametrize(
-    ("frequency_response", "query_error"),
+    ("query", "response", "query_error"),
     [
-        ("not-a-number", None),
-        ("1000", TimeoutError("private status timeout")),
+        ("SOURce1:FREQuency?", "not-a-number", None),
+        ("SOURce1:FREQuency?", "1000", TimeoutError("private status timeout")),
+        ("OUTPut1:LOAD?", "-100", None),
+        ("OUTPut1:LOAD?", "0", None),
+        ("OUTPut1:LOAD?", "10001", None),
+        ("OUTPut1:LOAD?", "9e37", None),
     ],
 )
 def test_status_query_or_numeric_parse_failure_is_domain_error_and_closes(
-    frequency_response, query_error
+    query, response, query_error
 ):
     responses = dict(STATUS_RESPONSES)
-    responses["SOURce1:FREQuency?"] = frequency_response
-    query_errors = (
-        {"SOURce1:FREQuency?": query_error}
-        if query_error is not None
-        else {}
-    )
+    responses[query] = response
+    query_errors = {query: query_error} if query_error is not None else {}
     session = FakeSession(
         responses_by_command=responses,
         query_errors_by_command=query_errors,

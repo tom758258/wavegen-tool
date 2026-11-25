@@ -984,6 +984,92 @@ deliberate action; always issue `output --state off` when finished. For a Bus
 List Sweep or Bus Burst/Sweep, `trigger` is also a separate action and may
 affect **every armed channel**, not only Channel 1.
 
+## Dual-channel operations
+
+These operations are supported in dry-run and simulation for 33510B/33512B;
+`phase-sync` is also supported for 33521B. Contributor validation requires the
+existing explicit resource, expected model and contributor authorization.
+They do not extend Product Live or Worker Live support. A simulator process
+starts with fresh state; use a software sequence or persistent Worker for
+dependent operations.
+
+| Command | Arguments |
+| --- | --- |
+| `phase-sync` | No channel argument; resets the shared phase reference, preserves configured phase values |
+| `output` | `--channel all --state on\|off` |
+| `configure-frequency-coupling` | `--state on --mode ratio --ratio 2`, or `--mode offset --offset-hz 500`; optional `--reference-channel 1\|2`; `--state off` alone disables |
+| `update-coupled-frequency` | `--channel 1\|2 --frequency-hz 2000` |
+| `configure-voltage-coupling` | `--state on\|off` |
+| `update-coupled-voltage` | `--channel 1\|2 --amplitude-vpp 0.2 --offset-v 0.05` |
+| `configure-tracking` | `--mode on\|off\|invert`; optional `--reference-channel 1\|2` |
+| `configure-tracked-waveform` | `--waveform sine --arguments-json '{"channel":1,"frequency_hz":2000,"amplitude_vpp":0.2}'`; static waveform arguments |
+| `configure-combine` | `--channel 1 --source ch2\|none` or `--channel 2 --source ch1\|none` |
+| `dual-channel-status` | No channel argument; both channel states and coupling, tracking and Combine settings |
+
+Set both waveforms and their relative `--phase-deg` before `phase-sync`.
+The existing `trigger` sends one instrument-wide Bus trigger. Group ON is
+explicit and sequential at the command level; it does not guarantee simultaneous
+hardware output edges. Configuration and coupled updates require both main
+outputs confirmed OFF. Group OFF always attempts both outputs and verifies
+both; a partial ON failure attempts both OFF. An ON failure still fails the
+command; the error reports output OFF only if both outputs and cleanup were
+confirmed. Before group ON, Core checks current waveform rates and supported
+frequency-sensitive modulation/timing settings, in addition to the topology
+and voltage checks. Tracking activation also checks the reference waveform's
+current rate settings before copying. Keying checks validate the programmed
+FSK hop frequency and BPSK phase shift; the internal keying rate is checked
+only when the internal source is selected. For an existing external FM, PM
+or PWM source, joint ON and Tracking reference checks validate the programmed
+deviation, not the external input signal. Coupled frequency changes still
+reject these external modulation sources. Active Burst checks validate the
+applicable programmed start phase, delay, trigger slope or gate polarity
+alongside count and timing; angle readback uses the current degree/radian
+unit. These checks do not change trigger configuration.
+Conflicting settings are
+rejected rather than implicitly released. Joint configuration readback checks
+the requested topology change and preserves other coupling, tracking and
+Combine states, including the active frequency coupling relation when it is
+not being changed. Non-release configuration also checks any active voltage
+coupling relation. Explicit release remains available from a conflicting
+topology. Native tracking copies reference
+channel settings (including frequency list settings and loaded Arbitrary
+memory) and assigns the Sync source to the reference channel. Tracking
+activation verifies that source and that Sync remains OFF. Tracked Pulse
+readback uses the existing Pulse timing and phase checks on both channels.
+To avoid unsupported memory changes,
+the tool rejects active Arbitrary waveform settings and permits only an empty catalog or the default built-in EXP_RISE entry
+on both channels, when Arbitrary is supported. No memory is cleared automatically. Inverted tracking
+preserves the DC offset. Coupled frequency changes require CW frequency mode
+and valid resulting modulation, duty cycle, pulse and Burst timing. Voltage coupling maintains
+amplitude, offset, range, load and units. Mixed DC/non-DC voltage coupling
+cannot verify equal amplitudes; coupled amplitude/offset updates require two
+non-DC waveforms. Two DC channels may use voltage coupling for their offset
+settings. Combine adds the source signal to
+the receiver; the source's DC offset is not added.
+
+For AM, FM, PM, PWM and Sum, use `--am-source`, `--fm-source`,
+`--pm-source`, `--pwm-source` or `--sum-source` with `ch1` or `ch2`.
+Select the other channel, supply the usual depth/deviation/amplitude,
+and omit the internal modulation frequency and shape. Internal modulation
+remains the default. Configure the source before the receiver. Both outputs
+must be OFF before configuring this route. Other-channel PM checks the source
+frequency range and the actual programmed carrier frequency; sources whose
+frequency range cannot be confirmed are rejected. Reconfigure the receiving waveform
+with both outputs OFF to release the route. FSK and BPSK are unchanged.
+
+```powershell
+wavegen-tool configure-frequency-coupling --model keysight-33512b --dry-run --state on --mode ratio --ratio 2 --json
+wavegen-tool configure-sine --model keysight-33512b --dry-run --channel 2 --frequency-hz 10000 --amplitude-vpp 0.1 --am-source ch1 --am-depth 40 --json
+wavegen-tool output --model keysight-33512b --simulate --channel all --state off --json
+```
+
+Sequence and Worker arguments are defined in the
+[Worker contract](../contracts/wavegen-worker-contract.md#dual-channel-arguments).
+Sequence cleanup turns affected outputs OFF and leaves topology configured.
+Release topology explicitly before returning to independent configuration or
+output-on writes. Selected-channel OFF retains the original coupling/tracking
+guard without the additional Combine/other-channel modulation guard.
+
 ## Optional Advanced Mode Readback
 
 Supported Advanced Mode Direct CLI configurations accept `--verify-readback`. When enabled,
@@ -1205,7 +1291,7 @@ identity and final error-queue cases remain mandatory regardless of selection.
 
 | Mode | Coverage |
 | --- | --- |
-| `static` | Sine, Square, Ramp, Triangle and Pulse with nonzero phase, DC, Noise, all six PRBS patterns and a non-default PRBS edge time |
+| `static` | Sine, Square, Ramp, Triangle and Pulse with nonzero phase, DC, Noise, all six PRBS patterns and a non-default PRBS edge time; 33521B phase synchronization |
 | `modulation` | AM/DSSC, FM, PM, FSK, BPSK, PWM and Sum, with representative carriers and non-sine internal shapes where supported |
 | `burst` | Counted and Gated Burst, representative carriers and trigger sources, explicit zero and nonzero trigger delay, Counted 90° and Gated 45.1° start phase |
 | `sweep` | Linear and logarithmic Sine, Square, Ramp and Triangle sweeps, representative triggers, explicit zero and nonzero delay, Square duty cycle and Ramp symmetry |
@@ -1213,7 +1299,8 @@ identity and final error-queue cases remain mandatory regardless of selection.
 | `output` | Output setup including a 1000 Ω load, controlled ON/OFF, and representative Sync source, mode and polarity settings |
 | `arbitrary` | Synthetic CSV upload, memory inspection, playback, confirmed volatile Clear, all supported built-in waveforms and SINC reuse |
 | `sequence` | Native Bus and both External trigger edges, representative CH2 Bus sequence on supported models, and once, repeat, onceWaitTrig and repeatTilTrig |
-| `software-sequence` | Ordered software-controlled actions, supported arbitrary operations and confirmed output cleanup |
+| `software-sequence` | Ordered software-controlled actions, supported arbitrary operations and confirmed output cleanup, including joint output on dual-channel models |
+| `dual-channel` | Dual-channel phase, group output and Bus trigger, frequency/voltage coupling, tracking, other-channel modulation and Combine on 33510B/33512B |
 | `basic-workflows` | Timed output, both directions of Amplitude Ramp and Frequency Step, Output Cycle, Waveform Sequence, Sine/Square/Triangle Quick Output Presets and simulated Worker cancellation and stop |
 
 The Full Static and Sweep recipes use `--verify-waveform-readback` to compare

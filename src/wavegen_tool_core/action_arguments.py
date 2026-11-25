@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .arbitrary import ARBITRARY_COMMANDS
 from .errors import WaveformParameterError
+from .dual_channel import DUAL_CHANNEL_COMMANDS, is_dual_action, plan_dual_channel
 from .visa import (
     AMConfig,
     BPSKConfig,
@@ -53,6 +54,7 @@ CONFIGURE_COMMANDS = (
 ACTION_COMMANDS = (
     CONFIGURE_COMMANDS
     | ARBITRARY_COMMANDS
+    | DUAL_CHANNEL_COMMANDS
     | {
         "identify",
         "status",
@@ -63,8 +65,8 @@ ACTION_COMMANDS = (
         "trigger",
     }
 )
-DRY_RUN_COMMANDS = CONFIGURE_COMMANDS | ARBITRARY_COMMANDS
-_CHANNEL_COMMANDS = (DRY_RUN_COMMANDS - {"configure-sync"}) | {
+DRY_RUN_COMMANDS = CONFIGURE_COMMANDS | ARBITRARY_COMMANDS | DUAL_CHANNEL_COMMANDS
+_CHANNEL_COMMANDS = ((CONFIGURE_COMMANDS | ARBITRARY_COMMANDS) - {"configure-sync"}) | {
     "status",
     "readback-advanced",
     "output",
@@ -372,6 +374,14 @@ def validate_action_arguments(
     command: str, arguments: dict[str, object], *, require_absolute_path: bool = False
 ) -> None:
     """Validate and supply defaults for structured instrument command arguments."""
+    if is_dual_action(command, arguments):
+        try:
+            # This validates request shape; callers subsequently validate the actual
+            # registered planning model or detected hardware identity.
+            plan_dual_channel(command, arguments, "keysight-33512b")
+        except WaveformParameterError as exc:
+            raise ActionArgumentError(str(exc)) from exc
+        return
     allowed_fields = _ARGUMENT_FIELDS[command]
     if command in _CHANNEL_COMMANDS:
         allowed_fields = allowed_fields | {"channel"}
@@ -526,6 +536,14 @@ def configuration_options(
                 else:
                     raise TypeError
             else:
+                if field in {"am", "fm", "pm", "pwm", "sum"}:
+                    source = values.get("source", "internal")
+                    if source in ("ch1", "ch2") and ("shape" in values or "modulation_frequency_hz" in values):
+                        raise ActionArgumentError("Omit internal frequency and shape for other-channel modulation.")
+                    required = {"am": "depth_percent", "fm": "deviation_hz", "pm": "deviation_deg",
+                                "pwm": "deviation_s", "sum": "amplitude_percent"}[field]
+                    if required not in values or (source == "internal" and "modulation_frequency_hz" not in values):
+                        raise ActionArgumentError(f"Missing modulation parameters for {field}.")
                 options[field] = _MODULATION_CONFIGS[field](**values)
         except TypeError as exc:
             raise ActionArgumentError(f"Invalid {field} object for {command}.") from exc

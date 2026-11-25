@@ -602,3 +602,52 @@ def test_full_mode_subsets_and_sequence_fixtures(artifact_root: Path) -> None:
     assert external["trigger_slope"] == "positive"
     assert negative == {**external, "trigger_slope": "negative"}
     assert bus["steps"][0]["waveform"] != external["steps"][0]["waveform"]
+
+
+def test_dual_channel_inventory_model_filter():
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$m = @(Resolve-SelectedValidationModes -Suite full); "
+        + "$dual = @(Get-FullValidationInventory -Channels @(1,2) -Modes dual-channel); "
+        + "$single = @(Get-FullValidationInventory -Channels @(1) -Modes static); "
+        + "$filtered = @(Get-ApplicableValidationModes -Modes $m -Capabilities @{channel_count=1;max_arbitrary_sample_rate_hz=250000000}); "
+        + "@{ modes=$m; dual=$dual; single=$single; filtered=$filtered } | ConvertTo-Json -Depth 12 -Compress"
+    )
+    data = json.loads(result.stdout)
+    assert len(data["modes"]) == 11 and data["modes"][-1] == "dual-channel"
+    assert "dual-channel" not in data["filtered"]
+    assert len([case for case in data["dual"] if case["family"] == "dual-channel"]) == 13
+    assert all(case["steps"][0]["sequence_intent"]["channels"] == [1, 2]
+               for case in data["dual"] if case["family"] == "dual-channel")
+    phase = next(case for case in data["single"] if case["name"] == "ch1/static-phase-sync")
+    assert phase["family"] == "static" and phase["required"] and phase["observation"]
+    assert phase.get("dual_channel") is None
+    step, = phase["steps"]
+    assert step["arguments"][0] == "run-software-sequence"
+    intent = step["sequence_intent"]
+    assert intent["actions"] == [
+        "configure-sine", "phase-sync", "output", "wait", "output", "readback-advanced",
+    ]
+    assert intent["output_on"] is True and intent["wait_seconds"] == 3
+    assert {"index": 1, "path": ["phase_settings_preserved"], "value": True} in intent["joint_checks"]
+    assert {"index": 4, "path": ["output_state"], "value": "off"} in intent["joint_checks"]
+
+
+
+def test_joint_sequence_assertion_rejects_mismatched_nested_result():
+    result = _run_powershell(
+        _dot_source(HELPERS_PATH)
+        + "$intent = [ordered]@{actions=@('dual-channel-status');output_on=$false;"
+        + "upload_count=0;wait_seconds=0;channels=@(1,2);joint_checks=@("
+        + "@{index=0;path=@('channel_status','2','frequency_hz');value=2000})}; "
+        + "$payload = '{\"step_count\":1,\"loop_count\":1,\"execution_units\":1,"
+        + "\"total_wait_seconds\":0,\"channels\":[1,2],\"executed\":true,"
+        + "\"status\":\"completed\",\"completed_loops\":1,\"completed_step_executions\":1,"
+        + "\"results\":[{\"action\":\"dual-channel-status\",\"channel_status\":{\"2\":{\"frequency_hz\":2000}}}],"
+        + "\"cleanup\":{\"errors\":[],\"attempted_channels\":[],\"confirmed_off_channels\":[]}}' | ConvertFrom-Json; "
+        + "Assert-SoftwareSequenceResult -Payload $payload -Intent $intent -Channel 1; "
+        + "$payload.results[0].channel_status.'2'.frequency_hz = 1000; "
+        + "try { Assert-SoftwareSequenceResult -Payload $payload -Intent $intent -Channel 1 } "
+        + "catch { Write-Output 'rejected'; exit 0 }; exit 1"
+    )
+    assert result.stdout.strip() == "rejected"

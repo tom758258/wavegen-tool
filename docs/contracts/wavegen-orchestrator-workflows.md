@@ -175,6 +175,17 @@ Production orchestrators must continuously drain Worker stdout, parse each
 line as JSON, correlate `run_id` and `worker_job_id`, and bound all waits. The
 short example omits that stream-processing code.
 
+## Dual-channel simulation and planning
+
+Submit the explicit joint commands and other-channel modulation using the
+[Worker contract](wavegen-worker-contract.md#dual-channel-arguments).
+Configure both channels while OFF, then explicitly request joint output
+when needed. Use a persistent simulated Worker or a software sequence for
+dependent operations. Software sequence cleanup confirms affected outputs OFF
+without releasing topology. Query `dual-channel-status` for both channels,
+and release coupling, tracking or Combine explicitly before independent writes.
+Do not submit these new operations to Worker Live.
+
 ## Results and Shutdown
 
 Wavegen Worker results are retained in memory and emitted in terminal events;
