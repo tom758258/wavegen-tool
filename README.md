@@ -1,3 +1,5 @@
+[繁體中文](README.zh-TW.md)
+
 # Wavegen Tool
 
 Wavegen Tool is a safety-focused Python toolkit for identifying and controlling
